@@ -21,7 +21,7 @@ export default function App() {
       {/* Header */}
       <header className="bg-slate-800 text-white shadow-md">
         <div className="mx-auto max-w-6xl px-4 py-4">
-          <h1 className="text-xl font-bold tracking-wide">מערכת שבצק</h1>
+          <h1 className="text-xl font-bold tracking-wide">מערכת שבצק - פלוגת הגמר גע"ש</h1>
         </div>
       </header>
 
