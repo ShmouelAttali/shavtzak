@@ -8,9 +8,39 @@ interface Props {
   showName?: boolean;
 }
 
-function formatDateHeader(dateStr: string) {
+function parseSheetDate(dateStr: string): Date {
+  const [d, m, y] = dateStr.split('/');
+  return new Date(2000 + parseInt(y), parseInt(m) - 1, parseInt(d));
+}
+
+function formatGregorian(dateStr: string) {
   const [d, m] = dateStr.split('/');
   return `${d}/${m}`;
+}
+
+function toHebrewNumeral(n: number): string {
+  const ONES = ['', 'א', 'ב', 'ג', 'ד', 'ה', 'ו', 'ז', 'ח', 'ט'];
+  const TENS = ['', 'י', 'כ', 'ל'];
+  if (n === 15) return 'ט"ו';
+  if (n === 16) return 'ט"ז';
+  const tens = Math.floor(n / 10);
+  const ones = n % 10;
+  const letters = TENS[tens] + ONES[ones];
+  if (letters.length === 1) return letters + "'";
+  return letters[0] + '"' + letters[1];
+}
+
+function formatHebrew(dateStr: string): string {
+  try {
+    const date = parseSheetDate(dateStr);
+    const dayNum = parseInt(
+      new Intl.DateTimeFormat('en-u-ca-hebrew', { day: 'numeric' }).format(date)
+    );
+    const monthName = new Intl.DateTimeFormat('he-IL-u-ca-hebrew', { month: 'long' }).format(date);
+    return `${toHebrewNumeral(dayNum)} ב${monthName}`;
+  } catch {
+    return '';
+  }
 }
 
 function isWeekend(dayName: string) {
@@ -21,13 +51,12 @@ export function ScheduleGrid({ soldiers, dates, dayNames, showName = true }: Pro
   if (!soldiers.length || !dates.length) return null;
 
   return (
-    <div className="overflow-x-auto rounded-lg border border-gray-200 shadow-sm">
+    <div className="overflow-auto rounded-lg border border-gray-200 shadow-sm max-h-[70vh]">
       <table className="border-collapse text-sm" style={{ direction: 'rtl' }}>
         <thead>
-          {/* Day names row */}
-          <tr className="bg-gray-50">
+          <tr>
             {showName && (
-              <th className="sticky right-0 z-10 bg-gray-50 px-3 py-2 text-right font-medium text-gray-600 border-b border-l border-gray-200 min-w-[130px]">
+              <th className="sticky right-0 top-0 z-20 bg-gray-50 px-3 py-2 text-right font-medium text-gray-600 border-b border-l border-gray-200 min-w-[130px]">
                 שם
               </th>
             )}
@@ -37,12 +66,13 @@ export function ScheduleGrid({ soldiers, dates, dayNames, showName = true }: Pro
               return (
                 <th
                   key={date}
-                  className={`px-1 py-2 text-center font-normal text-xs border-b border-l border-gray-200 min-w-[72px] ${
-                    weekend ? 'bg-blue-50 text-blue-700' : 'text-gray-500'
+                  className={`sticky top-0 z-10 px-1 py-2 text-center font-normal text-xs border-b border-l border-gray-200 min-w-[80px] ${
+                    weekend ? 'bg-blue-50 text-blue-700' : 'bg-gray-50 text-gray-500'
                   }`}
                 >
-                  <div className="font-medium">{formatDateHeader(date)}</div>
-                  <div className="text-[10px] opacity-70">{day.replace('יום ', '')}</div>
+                  <div className="font-semibold">{formatGregorian(date)}</div>
+                  <div className="text-[10px] opacity-80">{formatHebrew(date)}</div>
+                  <div className="text-[10px] opacity-60">{day.replace('יום ', '')}</div>
                 </th>
               );
             })}
