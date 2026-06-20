@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import type { TabId } from './types';
+import { SignIn, SignedIn, SignedOut, UserButton, useUser, useClerk } from '@clerk/clerk-react';
+import type { TabId, SheetData } from './types';
 import { useSoldiers } from './hooks/useSoldiers';
 import { PersonalSchedule } from './components/PersonalSchedule';
 import { UnitSchedule } from './components/UnitSchedule';
@@ -12,16 +13,18 @@ const TABS: { id: TabId; label: string }[] = [
   { id: 'shavtzak', label: 'שבצק' },
 ];
 
-export default function App() {
+function AppContent({ data }: { data: SheetData }) {
   const [activeTab, setActiveTab] = useState<TabId>('personal');
-  const { data, loading, error } = useSoldiers();
 
   return (
     <div className="min-h-screen bg-gray-50" dir="rtl">
       {/* Header */}
       <header className="bg-slate-800 text-white shadow-md">
-        <div className="mx-auto max-w-6xl px-4 py-4">
+        <div className="mx-auto max-w-6xl px-4 py-4 flex items-center justify-between">
           <h1 className="text-xl font-bold tracking-wide">מערכת שבצק - פלוגת הגמר גע"ש</h1>
+          <div dir="ltr">
+            <UserButton afterSignOutUrl="/" />
+          </div>
         </div>
       </header>
 
@@ -48,29 +51,73 @@ export default function App() {
 
       {/* Content */}
       <main className="mx-auto max-w-6xl px-4 py-6">
-        {loading && (
-          <div className="flex items-center justify-center py-24">
-            <div className="h-8 w-8 animate-spin rounded-full border-4 border-blue-500 border-t-transparent" />
-            <span className="mr-3 text-gray-600">טוען נתונים...</span>
-          </div>
-        )}
-
-        {error && (
-          <div className="rounded-xl bg-red-50 p-6 text-center text-red-700">
-            <p className="font-semibold">שגיאה בטעינת נתונים</p>
-            <p className="mt-1 text-sm opacity-80">{error}</p>
-          </div>
-        )}
-
-        {!loading && !error && data && (
-          <>
-            {activeTab === 'personal' && <PersonalSchedule data={data} />}
-            {activeTab === 'unit' && <UnitSchedule data={data} />}
-            {activeTab === 'company' && <ComingSoon title="סיכום פלוגתי" />}
-            {activeTab === 'shavtzak' && <ComingSoon title="שבצק" />}
-          </>
-        )}
+        {activeTab === 'personal' && <PersonalSchedule data={data} />}
+        {activeTab === 'unit' && <UnitSchedule data={data} />}
+        {activeTab === 'company' && <ComingSoon title="סיכום פלוגתי" />}
+        {activeTab === 'shavtzak' && <ComingSoon title="שבצק" />}
       </main>
     </div>
+  );
+}
+
+function AccessDenied() {
+  const { signOut } = useClerk();
+  const { user } = useUser();
+  return (
+    <div className="min-h-screen bg-gray-50 flex flex-col items-center justify-center" dir="rtl">
+      <div className="rounded-xl bg-white p-10 shadow-md text-center max-w-sm">
+        <div className="text-4xl mb-4">🚫</div>
+        <h2 className="text-xl font-bold text-gray-800">אין גישה</h2>
+        <p className="mt-2 text-gray-500 text-sm">
+          החשבון <span className="font-medium">{user?.primaryEmailAddress?.emailAddress}</span> אינו מורשה לגשת למערכת.
+        </p>
+        <button
+          onClick={() => signOut()}
+          className="mt-6 rounded-lg bg-slate-800 px-5 py-2 text-sm font-medium text-white hover:bg-slate-700"
+        >
+          התנתק
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function AuthGate() {
+  const { user } = useUser();
+  const { data, loading } = useSoldiers();
+
+  if (loading || !data) return (
+    <div className="min-h-screen flex items-center justify-center">
+      <div className="h-8 w-8 animate-spin rounded-full border-4 border-blue-500 border-t-transparent" />
+    </div>
+  );
+
+  // If no emails configured in the sheet — allow everyone
+  if (data.allowedEmails.length === 0) return <AppContent data={data} />;
+
+  const email = user?.primaryEmailAddress?.emailAddress?.toLowerCase() ?? '';
+  if (data.allowedEmails.includes(email)) return <AppContent data={data} />;
+
+  return <AccessDenied />;
+}
+
+export default function App() {
+  return (
+    <>
+      <SignedIn>
+        <AuthGate />
+      </SignedIn>
+      <SignedOut>
+        <div className="min-h-screen bg-gray-50 flex flex-col items-center justify-center" dir="rtl">
+          <div className="mb-8 text-center">
+            <h1 className="text-2xl font-bold text-slate-800">מערכת שבצק - פלוגת הגמר גע"ש</h1>
+            <p className="mt-2 text-gray-500">יש להתחבר כדי להמשיך</p>
+          </div>
+          <div dir="ltr">
+            <SignIn routing="hash" />
+          </div>
+        </div>
+      </SignedOut>
+    </>
   );
 }

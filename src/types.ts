@@ -15,6 +15,7 @@ export interface SheetData {
   soldiers: Soldier[];
   dates: string[]; // ordered list of date strings
   dayNames: Record<string, string>; // date -> Hebrew day name
+  allowedEmails: string[]; // from the 'email' column in the sheet
 }
 
 export type TabId = 'personal' | 'unit' | 'company' | 'shavtzak';

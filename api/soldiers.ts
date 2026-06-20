@@ -28,6 +28,7 @@ interface ParsedSheet {
   soldiers: Soldier[];
   dates: string[];
   dayNames: Record<string, string>;
+  allowedEmails: string[];
 }
 
 interface Soldier {
@@ -126,8 +127,10 @@ function parseSheet(rows: string[][]): ParsedSheet {
   const unitCol      = fallback(colOf(['מחלקה']), 5);
   const notesCol     = fallback(colOf(['הערות']), 6);
   const vacationCol  = fallback(colOf(['סיכימה']), 8);
+  const emailCol     = colOf(['email', 'אימייל', 'מייל']);
 
   const soldiers: Soldier[] = [];
+  const allowedEmails: string[] = [];
 
   for (let r = dataStart; r < rows.length; r++) {
     const row = rows[r];
@@ -146,6 +149,9 @@ function parseSheet(rows: string[][]): ParsedSheet {
     const notes = notesCol >= 0 ? (row[notesCol] || '').trim() : '';
     const vacationRaw = vacationCol >= 0 ? (row[vacationCol] || '').trim() : '';
     const vacationCount = parseInt(vacationRaw, 10) || 0;
+    const email = emailCol >= 0 ? (row[emailCol] || '').trim().toLowerCase() : '';
+
+    if (email) allowedEmails.push(email);
 
     const schedule: Record<string, string> = {};
     for (const [col, date] of Object.entries(dateColIndex)) {
@@ -168,7 +174,7 @@ function parseSheet(rows: string[][]): ParsedSheet {
     });
   }
 
-  return { soldiers, dates, dayNames };
+  return { soldiers, dates, dayNames, allowedEmails };
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
