@@ -3,5 +3,5 @@
 @tailwind utilities;
 
 * {
-  font-family: system-ui, -apple-system, 'Segoe UI', Arial, sans-serif;
+  font-family: 'Heebo', system-ui, -apple-system, Arial, sans-serif;
 }

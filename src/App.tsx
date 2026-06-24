@@ -5,9 +5,10 @@ import { useSoldiers } from './hooks/useSoldiers';
 import { PersonalSchedule } from './components/PersonalSchedule';
 import { UnitSchedule } from './components/UnitSchedule';
 import { ComingSoon } from './components/ComingSoon';
+import { Shavtzak } from './components/Shavtzak';
 
 const TABS: { id: TabId; label: string }[] = [
-  { id: 'personal', label: 'לוז יציאות אישי' },
+  { id: 'personal', label: 'לוז אישי' },
   { id: 'unit', label: 'לוז יציאות מחלקתי' },
   { id: 'company', label: 'סיכום פלוגתי' },
   { id: 'shavtzak', label: 'שבצק' },
@@ -54,7 +55,7 @@ function AppContent({ data }: { data: SheetData }) {
         {activeTab === 'personal' && <PersonalSchedule data={data} />}
         {activeTab === 'unit' && <UnitSchedule data={data} />}
         {activeTab === 'company' && <ComingSoon title="סיכום פלוגתי" />}
-        {activeTab === 'shavtzak' && <ComingSoon title="שבצק" />}
+        {activeTab === 'shavtzak' && <Shavtzak soldiers={data.soldiers} />}
       </main>
     </div>
   );
