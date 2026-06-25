@@ -3,6 +3,7 @@ import type { SheetData } from '../types';
 import { ScheduleGrid } from './ScheduleGrid';
 import { useShavtzak } from '../hooks/useShavtzak';
 import { getStationBadgeColors } from '../utils/stationColors';
+import type { ShavtzakData } from '../../api/shavtzak';
 
 interface Mission {
   station: string;
