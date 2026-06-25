@@ -238,9 +238,9 @@ function sortByOrder(groups: StationGroup[], order: string[]): StationGroup[] {
 // ── Group card ─────────────────────────────────────────────────────────────
 function GroupCard({ group }: { group: StationGroup }) {
   const c = getColors(group.name);
-  const totalSoldiers = group.subTypes.reduce(
-    (acc, s) => acc + s.times.reduce((a, t) => a + t.soldiers.length, 0), 0
-  );
+  const totalSoldiers = new Set(
+    group.subTypes.flatMap(s => s.times.flatMap(t => t.soldiers))
+  ).size;
   const multiType = group.subTypes.length > 1;
   const yomiOnly  = isYomiOnly(group.subTypes);
 

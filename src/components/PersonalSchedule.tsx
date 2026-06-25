@@ -176,11 +176,6 @@ export function PersonalSchedule({ data }: Props) {
           {/* Daily missions from שבצק */}
           <MissionsRow soldierName={selectedSoldier.fullName} shavtzak={shavtzak} />
 
-          {selectedSoldier.notes && (
-            <p className="rounded-lg bg-white/70 px-3 py-2 text-sm text-gray-600">
-              {selectedSoldier.notes}
-            </p>
-          )}
         </div>
       )}
 
