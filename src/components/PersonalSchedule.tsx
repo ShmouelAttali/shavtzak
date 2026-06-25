@@ -1,9 +1,8 @@
 import { useMemo, useState } from 'react';
 import type { SheetData } from '../types';
 import { ScheduleGrid } from './ScheduleGrid';
-import { useShavtzak, todayShavtzakStr } from '../hooks/useShavtzak';
+import { useShavtzak } from '../hooks/useShavtzak';
 import { getStationBadgeColors } from '../utils/stationColors';
-import type { ShavtzakData } from '../../api/shavtzak';
 
 interface Mission {
   station: string;
@@ -36,6 +35,12 @@ function toDateStr(d: Date) {
   return `${dd}/${mm}/${yy}`;
 }
 
+// "25/06/26" (schedule grid) → "25/06/2026" (שבצק byDate key)
+function schedDateToShavtzakKey(d: string): string {
+  const [dd, mm, yy] = d.split('/');
+  return `${dd}/${mm}/20${yy}`;
+}
+
 function parseSheetDate(dateStr: string): Date {
   const [d, m, y] = dateStr.split('/');
   return new Date(2000 + parseInt(y), parseInt(m) - 1, parseInt(d));
@@ -53,7 +58,6 @@ function fromInputDate(s: string) {
 export function PersonalSchedule({ data }: Props) {
   const { soldiers, dates, dayNames } = data;
   const { data: shavtzakAll } = useShavtzak();
-  const shavtzak = shavtzakAll?.byDate[todayShavtzakStr()] ?? null;
 
   const today = new Date();
   const twoWeeksAhead = new Date();
@@ -166,18 +170,23 @@ export function PersonalSchedule({ data }: Props) {
 
       {/* Soldier info card */}
       {selectedSoldier && (
-        <div className="rounded-xl border border-blue-100 bg-blue-50 p-4 space-y-3">
+        <div className="rounded-xl border border-blue-100 bg-blue-50 p-4">
           <div className="grid grid-cols-2 gap-x-6 gap-y-2 sm:grid-cols-4">
             <InfoField label="שם מלא" value={selectedSoldier.fullName} />
             <InfoField label="מספר טלפון" value={selectedSoldier.phone} />
             <InfoField label="מחלקה" value={`מחלקה ${selectedSoldier.unit}`} />
             <InfoField label="תפקיד" value={selectedSoldier.role} />
           </div>
-
-          {/* Daily missions from שבצק */}
-          <MissionsRow soldierName={selectedSoldier.fullName} shavtzak={shavtzak} />
-
         </div>
+      )}
+
+      {/* Per-day missions */}
+      {selectedSoldier && filteredDates.length > 0 && shavtzakAll && (
+        <MissionsTimeline
+          soldierName={selectedSoldier.fullName}
+          filteredDates={filteredDates}
+          shavtzakAll={shavtzakAll}
+        />
       )}
 
       {/* Schedule */}
@@ -206,40 +215,53 @@ export function PersonalSchedule({ data }: Props) {
   );
 }
 
-function MissionsRow({ soldierName, shavtzak }: { soldierName: string; shavtzak: ShavtzakData | null }) {
-  if (!shavtzak) return null;
+function MissionsTimeline({
+  soldierName,
+  filteredDates,
+  shavtzakAll,
+}: {
+  soldierName: string;
+  filteredDates: string[];
+  shavtzakAll: import('../../api/shavtzak').ShavtzakAllData;
+}) {
+  const days = filteredDates
+    .map(d => ({ label: d, shavtzak: shavtzakAll.byDate[schedDateToShavtzakKey(d)] ?? null }))
+    .filter(({ shavtzak }) => shavtzak && findMissions(soldierName, shavtzak).length > 0);
 
-  const missions = findMissions(soldierName, shavtzak);
+  if (days.length === 0) return (
+    <div className="rounded-xl border border-gray-200 bg-white px-4 py-3 text-sm text-gray-400 text-center">
+      אין שבצק בטווח התאריכים שנבחר
+    </div>
+  );
 
   return (
-    <div className="border-t border-blue-100 pt-3">
-      <dt className="text-xs font-medium text-gray-500 mb-2">
-        שבצק יומי{shavtzak.date ? ` — ${shavtzak.date}` : ''}
-      </dt>
-      {missions.length === 0 ? (
-        <span className="text-sm text-gray-400 italic">אין שבצק היום</span>
-      ) : (
-        <div className="flex flex-wrap gap-2">
-          {missions.map((m, i) => {
-            const c = getStationBadgeColors(m.station);
-            const timePart = m.time && m.time !== 'יומי' ? ` • ${m.time}` : '';
-            const label = m.subType && m.subType !== m.station
-              ? `${m.station} / ${m.subType}${timePart}`
-              : `${m.station}${timePart}`;
-            return (
-              <span
-                key={i}
-                className={`inline-flex items-center rounded-full border px-3 py-1 text-sm font-semibold ${c.bg} ${c.text} ${c.border}`}
-              >
-                {label}
-              </span>
-            );
-          })}
-        </div>
-      )}
+    <div className="rounded-xl border border-gray-200 bg-white divide-y divide-gray-100">
+      {days.map(({ label, shavtzak }) => {
+        const missions = findMissions(soldierName, shavtzak!);
+        return (
+          <div key={label} className="flex items-start gap-3 px-4 py-3 flex-wrap">
+            <span className="text-sm font-semibold text-gray-500 whitespace-nowrap pt-0.5 min-w-[6rem]">{label}</span>
+            <div className="flex flex-wrap gap-2">
+              {missions.map((m, i) => {
+                const c = getStationBadgeColors(m.station);
+                const timePart = m.time && m.time !== 'יומי' ? ` • ${m.time}` : '';
+                const badge = m.subType && m.subType !== m.station
+                  ? `${m.station} / ${m.subType}${timePart}`
+                  : `${m.station}${timePart}`;
+                return (
+                  <span key={i} className={`inline-flex items-center rounded-full border px-3 py-0.5 text-sm font-semibold ${c.bg} ${c.text} ${c.border}`}>
+                    {badge}
+                  </span>
+                );
+              })}
+            </div>
+          </div>
+        );
+      })}
     </div>
   );
 }
+
 
 function InfoField({ label, value }: { label: string; value: string }) {
   return (
