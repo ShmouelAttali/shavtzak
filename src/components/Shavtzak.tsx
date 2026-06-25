@@ -263,7 +263,7 @@ function GroupCard({ group }: { group: StationGroup }) {
 
 // ── Main ───────────────────────────────────────────────────────────────────
 export function Shavtzak({ soldiers }: { soldiers: Soldier[] }) {
-  const { data, loading, error } = useShavtzak();
+  const { data, loading, error, reload } = useShavtzak();
 
   const lookup = useMemo(() => {
     const map = new Map<string, SoldierInfo>();
@@ -297,15 +297,28 @@ export function Shavtzak({ soldiers }: { soldiers: Soldier[] }) {
   const mediumGroups = data.groups.filter(g => getTier(g) === 'medium');
   const wideGroups   = data.groups.filter(g => getTier(g) === 'wide');
 
+  const totalDistinct = new Set(
+    data.groups.flatMap(g => g.subTypes.flatMap(s => s.times.flatMap(t => t.soldiers)))
+  ).size;
+
   return (
     <SoldierCtx.Provider value={lookup}>
       <div className="space-y-3">
-        {data.date && (
-          <div className="flex items-center gap-3">
+        <div className="flex items-center gap-3">
+          {data.date && (
             <span className="rounded-lg bg-slate-800 px-4 py-2 text-sm font-bold text-white">{data.date}</span>
-            <span className="text-gray-500 text-sm">שבצק יומי</span>
-          </div>
-        )}
+          )}
+          <span className="text-gray-500 text-sm">שבצק יומי</span>
+          <span className="rounded-lg bg-blue-600 px-3 py-2 text-sm font-bold text-white">{totalDistinct} חיילים</span>
+          <button
+            onClick={reload}
+            disabled={loading}
+            className="mr-auto rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50 flex items-center gap-1.5"
+          >
+            <span className={loading ? 'animate-spin inline-block' : ''}>↺</span>
+            טען מחדש
+          </button>
+        </div>
         {/* Small: compact stations 2 per row */}
         {smallGroups.length > 0 && (
           <div className="grid grid-cols-2 gap-3 items-start">
