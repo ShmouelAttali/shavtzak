@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import type { SheetData } from '../types';
 import { ScheduleGrid } from './ScheduleGrid';
-import { useShavtzak } from '../hooks/useShavtzak';
+import { useShavtzak, todayShavtzakStr } from '../hooks/useShavtzak';
 import { getStationBadgeColors } from '../utils/stationColors';
 import type { ShavtzakData } from '../../api/shavtzak';
 
@@ -52,7 +52,8 @@ function fromInputDate(s: string) {
 
 export function PersonalSchedule({ data }: Props) {
   const { soldiers, dates, dayNames } = data;
-  const { data: shavtzak } = useShavtzak();
+  const { data: shavtzakAll } = useShavtzak();
+  const shavtzak = shavtzakAll?.byDate[todayShavtzakStr()] ?? null;
 
   const today = new Date();
   const twoWeeksAhead = new Date();

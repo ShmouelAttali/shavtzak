@@ -1,11 +1,12 @@
-import { createContext, useContext, useMemo } from 'react';
-import { useShavtzak } from '../hooks/useShavtzak';
-import type { StationGroup, SubType } from '../../api/shavtzak';
+import { createContext, useContext, useEffect, useMemo, useState } from 'react';
+import { useShavtzak, todayShavtzakStr } from '../hooks/useShavtzak';
+import type { ShavtzakData, StationGroup, SubType } from '../../api/shavtzak';
 import type { Soldier } from '../types';
 
 // ── Soldier lookup context ─────────────────────────────────────────────────
-interface SoldierInfo { unit: string; role: string }
-const SoldierCtx = createContext<Map<string, SoldierInfo>>(new Map());
+interface SoldierInfo { unit: string; role: string; phone: string }
+const SoldierCtx    = createContext<Map<string, SoldierInfo>>(new Map());
+const NameClickCtx  = createContext<(name: string, info: SoldierInfo | undefined) => void>(() => {});
 
 const BOLD_ROLES = new Set(['מ"מ', 'מ"פ', 'סמ"פ', 'מ"כ']);
 const UNIT_COLOR: Record<string, string> = {
@@ -17,14 +18,57 @@ const UNIT_COLOR: Record<string, string> = {
 };
 
 function SoldierName({ name }: { name: string }) {
-  const lookup = useContext(SoldierCtx);
-  const info   = lookup.get(name);
-  const bold   = info ? BOLD_ROLES.has(info.role) : false;
-  const color  = info ? (UNIT_COLOR[info.unit] ?? 'text-gray-800') : 'text-gray-800';
+  const lookup   = useContext(SoldierCtx);
+  const onCLick  = useContext(NameClickCtx);
+  const info     = lookup.get(name);
+  const bold     = info ? BOLD_ROLES.has(info.role) : false;
+  const color    = info ? (UNIT_COLOR[info.unit] ?? 'text-gray-800') : 'text-gray-800';
   return (
-    <span className={`text-sm whitespace-nowrap leading-snug ${color} ${bold ? 'font-bold' : 'font-medium'}`}>
+    <span
+      onClick={() => onCLick(name, info)}
+      className={`text-sm whitespace-nowrap leading-snug select-none cursor-pointer active:opacity-70 ${color} ${bold ? 'font-bold' : 'font-medium'}`}
+    >
       {name}
     </span>
+  );
+}
+
+// ── Soldier popup ──────────────────────────────────────────────────────────
+interface PopupState { name: string; phone: string }
+
+function SoldierPopup({ info, onClose }: { info: PopupState; onClose: () => void }) {
+  const clean = info.phone.replace(/\D/g, '');
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/40 px-4 pb-6 sm:pb-0"
+      onClick={onClose}
+    >
+      <div
+        className="w-full max-w-xs bg-white rounded-2xl shadow-2xl p-6 space-y-4"
+        onClick={e => e.stopPropagation()}
+      >
+        <div className="text-center">
+          <p className="text-lg font-bold text-gray-800">{info.name}</p>
+        </div>
+        {clean ? (
+          <a
+            href={`tel:${clean}`}
+            className="flex items-center justify-center gap-3 w-full rounded-xl bg-green-500 hover:bg-green-600 active:bg-green-700 text-white px-4 py-3 text-base font-semibold transition-colors"
+          >
+            <span>📞</span>
+            {info.phone}
+          </a>
+        ) : (
+          <p className="text-center text-gray-400 text-sm">אין מספר טלפון</p>
+        )}
+        <button
+          onClick={onClose}
+          className="w-full rounded-xl border border-gray-200 py-2 text-sm text-gray-500 hover:bg-gray-50"
+        >
+          סגור
+        </button>
+      </div>
+    </div>
   );
 }
 
@@ -134,7 +178,7 @@ function TransposedTable({ sub, bg, rowAlt, colHeader }: {
           <tr>
             {sub.times.map(slot => (
               <th key={slot.time}
-                className={`py-2 px-4 text-center text-sm font-semibold text-gray-700 border-b-2 border-gray-200 ${colHeader}`}>
+                className={`py-2 px-2 sm:px-4 text-center text-sm font-semibold text-gray-700 border-b-2 border-gray-200 ${colHeader}`}>
                 {slot.time || 'יומי'}
               </th>
             ))}
@@ -144,7 +188,7 @@ function TransposedTable({ sub, bg, rowAlt, colHeader }: {
           {Array.from({ length: maxRows }).map((_, rowIdx) => (
             <tr key={rowIdx} className={rowIdx % 2 === 1 ? rowAlt : ''}>
               {sub.times.map(slot => (
-                <td key={slot.time} className="py-2 px-4 text-center border-b border-gray-100">
+                <td key={slot.time} className="py-1.5 px-2 sm:px-4 text-center border-b border-gray-100">
                   {slot.soldiers[rowIdx] ? <SoldierName name={slot.soldiers[rowIdx]} /> : ''}
                 </td>
               ))}
@@ -171,7 +215,7 @@ function MultiTypeTable({ subTypes, bg, rowAlt, colHeader }: {
       <table className="w-full border-collapse" dir="rtl">
         <thead>
           <tr>
-            <th className={`py-2 px-4 text-right text-sm font-semibold text-gray-500 border-b-2 border-gray-200 ${colHeader} whitespace-nowrap w-16`}>
+            <th className={`py-2 px-2 sm:px-4 text-right text-sm font-semibold text-gray-500 border-b-2 border-gray-200 ${colHeader} whitespace-nowrap w-12 sm:w-16`}>
               שעה
             </th>
             {subTypes.map(sub => (
@@ -261,17 +305,59 @@ function GroupCard({ group }: { group: StationGroup }) {
   );
 }
 
+// ── Groups renderer (shared by date view) ─────────────────────────────────
+function GroupsView({ dayData }: { dayData: ShavtzakData }) {
+  const smallGroups  = sortByOrder(dayData.groups.filter(g => getTier(g) === 'small'), SMALL_ORDER);
+  const mediumGroups = dayData.groups.filter(g => getTier(g) === 'medium');
+  const wideGroups   = dayData.groups.filter(g => getTier(g) === 'wide');
+
+  return (
+    <div className="space-y-3">
+      {smallGroups.length > 0 && (
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 items-start">
+          {smallGroups.map(g => <GroupCard key={g.name} group={g} />)}
+        </div>
+      )}
+      {wideGroups.map(g => <GroupCard key={g.name} group={g} />)}
+      {mediumGroups.length > 0 && (
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 items-start">
+          {mediumGroups.map(g => <GroupCard key={g.name} group={g} />)}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Main ───────────────────────────────────────────────────────────────────
 export function Shavtzak({ soldiers }: { soldiers: Soldier[] }) {
   const { data, loading, error, reload } = useShavtzak();
 
+  const [selectedDate, setSelectedDate] = useState<string>('');
+  const [popup, setPopup] = useState<PopupState | null>(null);
+
+  // Once data arrives, default to today (or nearest past date)
+  useEffect(() => {
+    if (!data?.dates.length) return;
+    const today = todayShavtzakStr();
+    if (data.dates.includes(today)) {
+      setSelectedDate(today);
+    } else {
+      const past = data.dates.filter(d => d <= today);
+      setSelectedDate(past.length ? past[past.length - 1] : data.dates[0]);
+    }
+  }, [data]);
+
   const lookup = useMemo(() => {
     const map = new Map<string, SoldierInfo>();
     for (const s of soldiers) {
-      if (s.fullName) map.set(s.fullName, { unit: s.unit, role: s.role });
+      if (s.fullName) map.set(s.fullName, { unit: s.unit, role: s.role, phone: s.phone });
     }
     return map;
   }, [soldiers]);
+
+  const handleNameClick = (name: string, info: SoldierInfo | undefined) => {
+    setPopup({ name, phone: info?.phone ?? '' });
+  };
 
   if (loading) return (
     <div className="flex items-center justify-center py-24">
@@ -287,53 +373,94 @@ export function Shavtzak({ soldiers }: { soldiers: Soldier[] }) {
     </div>
   );
 
-  if (!data?.groups.length) return (
+  if (!data?.dates.length) return (
     <div className="rounded-xl border-2 border-dashed border-gray-200 py-16 text-center text-gray-400">
       <p className="text-lg">לא נמצאו נתוני שבצק</p>
     </div>
   );
 
-  const smallGroups  = sortByOrder(data.groups.filter(g => getTier(g) === 'small'),  SMALL_ORDER);
-  const mediumGroups = data.groups.filter(g => getTier(g) === 'medium');
-  const wideGroups   = data.groups.filter(g => getTier(g) === 'wide');
+  const idx     = data.dates.indexOf(selectedDate);
+  const canPrev = idx > 0;
+  const canNext = idx < data.dates.length - 1;
+  const dayData = data.byDate[selectedDate] ?? null;
 
-  const totalDistinct = new Set(
-    data.groups.flatMap(g => g.subTypes.flatMap(s => s.times.flatMap(t => t.soldiers)))
-  ).size;
+  const totalDistinct = dayData
+    ? new Set(dayData.groups.flatMap(g => g.subTypes.flatMap(s => s.times.flatMap(t => t.soldiers)))).size
+    : 0;
+
+  // "DD/MM/YYYY" ↔ "YYYY-MM-DD" for <input type="date">
+  const toInputVal  = (d: string) => { const [dd,mm,yyyy] = d.split('/'); return `${yyyy}-${mm}-${dd}`; };
+  const fromInputVal = (s: string) => { const [yyyy,mm,dd] = s.split('-'); return `${dd}/${mm}/${yyyy}`; };
+
+  function handlePickerChange(inputVal: string) {
+    if (!inputVal) return;
+    const picked = fromInputVal(inputVal);
+    if (data.dates.includes(picked)) {
+      setSelectedDate(picked);
+      return;
+    }
+    // Snap to nearest available date
+    const sorted = [...data.dates].sort((a, b) => {
+      const diff = (d: string) => Math.abs(new Date(toInputVal(d)).getTime() - new Date(inputVal).getTime());
+      return diff(a) - diff(b);
+    });
+    if (sorted[0]) setSelectedDate(sorted[0]);
+  }
 
   return (
     <SoldierCtx.Provider value={lookup}>
+    <NameClickCtx.Provider value={handleNameClick}>
       <div className="space-y-3">
-        <div className="flex items-center gap-3">
-          {data.date && (
-            <span className="rounded-lg bg-slate-800 px-4 py-2 text-sm font-bold text-white">{data.date}</span>
-          )}
-          <span className="text-gray-500 text-sm">שבצק יומי</span>
-          <span className="rounded-lg bg-blue-600 px-3 py-2 text-sm font-bold text-white">{totalDistinct} חיילים</span>
+        {/* Header bar */}
+        <div className="flex items-center gap-2 flex-wrap" dir="ltr">
+          <button
+            onClick={() => canPrev && setSelectedDate(data.dates[idx - 1])}
+            disabled={!canPrev}
+            className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-gray-700 hover:bg-gray-50 disabled:opacity-30 font-bold text-lg leading-none"
+            title="יום קודם"
+          >‹</button>
+
+          <input
+            type="date"
+            value={selectedDate ? toInputVal(selectedDate) : ''}
+            min={data.dates[0] ? toInputVal(data.dates[0]) : undefined}
+            max={data.dates[data.dates.length - 1] ? toInputVal(data.dates[data.dates.length - 1]) : undefined}
+            onChange={e => handlePickerChange(e.target.value)}
+            className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm font-semibold text-slate-800 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+          />
+
+          <button
+            onClick={() => canNext && setSelectedDate(data.dates[idx + 1])}
+            disabled={!canNext}
+            className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-gray-700 hover:bg-gray-50 disabled:opacity-30 font-bold text-lg leading-none"
+            title="יום הבא"
+          >›</button>
+
+          <span className="rounded-lg bg-blue-600 px-3 py-2 text-sm font-bold text-white">
+            {totalDistinct} חיילים
+          </span>
+
           <button
             onClick={reload}
             disabled={loading}
-            className="mr-auto rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50 flex items-center gap-1.5"
+            className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50 flex items-center gap-1.5 ml-auto"
           >
             <span className={loading ? 'animate-spin inline-block' : ''}>↺</span>
             טען מחדש
           </button>
         </div>
-        {/* Small: compact stations 2 per row */}
-        {smallGroups.length > 0 && (
-          <div className="grid grid-cols-2 gap-3 items-start">
-            {smallGroups.map(group => <GroupCard key={group.name} group={group} />)}
-          </div>
-        )}
-        {/* Wide: complex timed tables, full width */}
-        {wideGroups.map(group => <GroupCard key={group.name} group={group} />)}
-        {/* Medium: יומי multi-sub groups, 2 per row */}
-        {mediumGroups.length > 0 && (
-          <div className="grid grid-cols-2 gap-3 items-start">
-            {mediumGroups.map(group => <GroupCard key={group.name} group={group} />)}
+
+        {/* Day content */}
+        {dayData ? (
+          <GroupsView dayData={dayData} />
+        ) : (
+          <div className="rounded-xl border-2 border-dashed border-gray-200 py-16 text-center text-gray-400">
+            <p className="text-lg">אין נתונים לתאריך זה</p>
           </div>
         )}
       </div>
+      {popup && <SoldierPopup info={popup} onClose={() => setPopup(null)} />}
+    </NameClickCtx.Provider>
     </SoldierCtx.Provider>
   );
 }
