@@ -393,7 +393,7 @@ export function Shavtzak({ soldiers }: { soldiers: Soldier[] }) {
   const fromInputVal = (s: string) => { const [yyyy,mm,dd] = s.split('-'); return `${dd}/${mm}/${yyyy}`; };
 
   function handlePickerChange(inputVal: string) {
-    if (!inputVal) return;
+    if (!inputVal || !data) return;
     const picked = fromInputVal(inputVal);
     if (data.dates.includes(picked)) {
       setSelectedDate(picked);
