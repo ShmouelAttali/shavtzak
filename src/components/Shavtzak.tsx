@@ -38,6 +38,8 @@ interface PopupState { name: string; phone: string }
 
 function SoldierPopup({ info, onClose }: { info: PopupState; onClose: () => void }) {
   const clean = info.phone.replace(/\D/g, '');
+  // Israeli numbers: 05X-XXXXXXX → 97X5XXXXXXX
+  const waNum = clean.startsWith('0') ? '972' + clean.slice(1) : clean;
   return (
     <div
       className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/40 px-4 pb-6 sm:pb-0"
@@ -51,13 +53,27 @@ function SoldierPopup({ info, onClose }: { info: PopupState; onClose: () => void
           <p className="text-lg font-bold text-gray-800">{info.name}</p>
         </div>
         {clean ? (
-          <a
-            href={`tel:${clean}`}
-            className="flex items-center justify-center gap-3 w-full rounded-xl bg-green-500 hover:bg-green-600 active:bg-green-700 text-white px-4 py-3 text-base font-semibold transition-colors"
-          >
-            <span>📞</span>
-            {info.phone}
-          </a>
+          <>
+          <p className="text-center text-gray-500 text-sm font-medium">{info.phone}</p>
+          <div className="flex gap-3">
+            <a
+              href={`tel:${clean}`}
+              className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-green-500 hover:bg-green-600 active:bg-green-700 text-white px-4 py-3 text-base font-semibold transition-colors"
+            >
+              <span>📞</span>
+              התקשר
+            </a>
+            <a
+              href={`https://wa.me/${waNum}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-[#25D366] hover:bg-[#1ebe5d] active:bg-[#17a84f] text-white px-4 py-3 text-base font-semibold transition-colors"
+            >
+              <span>💬</span>
+              וואטסאפ
+            </a>
+          </div>
+          </>
         ) : (
           <p className="text-center text-gray-400 text-sm">אין מספר טלפון</p>
         )}
