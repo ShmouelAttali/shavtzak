@@ -148,11 +148,11 @@ function parseShavtzakAll(rows: string[][]): ShavtzakAllData {
 // ── Handler ────────────────────────────────────────────────────────────────
 export default async function handler(_req: VercelRequest, res: VercelResponse) {
   res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Cache-Control', 's-maxage=60, stale-while-revalidate=300');
+  res.setHeader('Cache-Control', 'no-store');
 
   try {
     const token = await getAccessToken();
-    const range = encodeURIComponent(`${SHEET_NAME}!A1:F5000`);
+    const range = encodeURIComponent(`${SHEET_NAME}!A:F`);
     const url = `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/${range}`;
     const response = await fetch(url, {
       headers: { Authorization: `Bearer ${token}` },

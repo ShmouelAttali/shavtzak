@@ -359,7 +359,7 @@ export function Shavtzak({ soldiers }: { soldiers: Soldier[] }) {
     setPopup({ name, phone: info?.phone ?? '' });
   };
 
-  if (loading) return (
+  if (loading && !data) return (
     <div className="flex items-center justify-center py-24">
       <div className="h-8 w-8 animate-spin rounded-full border-4 border-blue-500 border-t-transparent" />
       <span className="mr-3 text-gray-600">טוען שבצק...</span>
