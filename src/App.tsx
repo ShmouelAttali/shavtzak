@@ -23,7 +23,16 @@ function AppContent({ data }: { data: SheetData }) {
       <header className="bg-slate-800 text-white shadow-md">
         <div className="mx-auto max-w-6xl px-4 py-4 flex items-center justify-between">
           <h1 className="text-xl font-bold tracking-wide">מערכת שבצק - פלוגת הגמר גע"ש</h1>
-          <div dir="ltr">
+          <div className="flex items-center gap-4" dir="ltr">
+            <a
+              href="https://s25qjhg6wm.zite.so"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="rounded-lg bg-blue-500 hover:bg-blue-400 px-3 py-1.5 text-sm font-semibold text-white transition-colors whitespace-nowrap"
+              dir="rtl"
+            >
+              הגש בקשה ליציאה
+            </a>
             <UserButton afterSignOutUrl="/" />
           </div>
         </div>
