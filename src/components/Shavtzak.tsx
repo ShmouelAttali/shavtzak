@@ -142,7 +142,7 @@ function getColors(name: string): Colors {
 }
 
 // ── Layout 1: יומי-only ────────────────────────────────────────────────────
-function YomiGrid({ subTypes, bg }: { subTypes: SubType[]; bg: string }) {
+function YomiGrid({ subTypes, bg, groupName = '' }: { subTypes: SubType[]; bg: string; groupName?: string }) {
   if (subTypes.length > 1) {
     return (
       <div className={`${bg} flex`} dir="rtl">
@@ -169,10 +169,18 @@ function YomiGrid({ subTypes, bg }: { subTypes: SubType[]; bg: string }) {
     );
   }
 
-  const soldiers = subTypes[0]?.times[0]?.soldiers ?? [];
+  const first = subTypes[0];
+  const soldiers = first?.times[0]?.soldiers ?? [];
+  const sug = first?.sug ?? '';
+  const showSug = sug && sug !== groupName;
   const cols = soldiers.length <= 6 ? 2 : soldiers.length <= 12 ? 3 : 4;
   return (
     <div className={`p-3 ${bg}`}>
+      {showSug && (
+        <div className="text-xs font-semibold text-gray-500 mb-1.5 pb-1 border-b border-gray-200 text-center">
+          {sug}
+        </div>
+      )}
       <div className="grid gap-x-6 gap-y-0.5" style={{ gridTemplateColumns: `repeat(${cols}, auto)` }}>
         {soldiers.map((name, i) => (
           <SoldierName key={i} name={name} />
@@ -183,14 +191,24 @@ function YomiGrid({ subTypes, bg }: { subTypes: SubType[]; bg: string }) {
 }
 
 // ── Layout 2: single sub-type, timed → times as columns ───────────────────
-function TransposedTable({ sub, bg, rowAlt, colHeader }: {
-  sub: SubType; bg: string; rowAlt: string; colHeader: string;
+function TransposedTable({ sub, bg, rowAlt, colHeader, groupName = '' }: {
+  sub: SubType; bg: string; rowAlt: string; colHeader: string; groupName?: string;
 }) {
   const maxRows = Math.max(...sub.times.map(t => t.soldiers.length), 0);
   return (
     <div className={`overflow-x-auto ${bg}`}>
       <table className="w-full border-collapse" dir="rtl">
         <thead>
+          {sub.sug && sub.sug !== groupName && (
+            <tr>
+              <td
+                colSpan={sub.times.length}
+                className={`py-1 px-2 text-center text-xs font-semibold text-gray-500 border-b border-gray-200 ${colHeader}`}
+              >
+                {sub.sug}
+              </td>
+            </tr>
+          )}
           <tr>
             {sub.times.map(slot => (
               <th key={slot.time}
@@ -311,11 +329,11 @@ function GroupCard({ group }: { group: StationGroup }) {
         <span className="font-normal opacity-80 text-sm">{totalSoldiers} חיילים</span>
       </div>
       {yomiOnly ? (
-        <YomiGrid subTypes={group.subTypes} bg={c.bg} />
+        <YomiGrid subTypes={group.subTypes} bg={c.bg} groupName={group.name} />
       ) : multiType ? (
         <MultiTypeTable subTypes={group.subTypes} bg={c.bg} rowAlt={c.rowAlt} colHeader={c.colHeader} />
       ) : (
-        <TransposedTable sub={group.subTypes[0]} bg={c.bg} rowAlt={c.rowAlt} colHeader={c.colHeader} />
+        <TransposedTable sub={group.subTypes[0]} bg={c.bg} rowAlt={c.rowAlt} colHeader={c.colHeader} groupName={group.name} />
       )}
     </div>
   );
