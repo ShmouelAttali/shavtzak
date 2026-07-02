@@ -11,6 +11,12 @@ interface Mission {
   time: string;
 }
 
+function missionTimeVal(t: string): number {
+  if (!t || t === 'יומי') return 9999;
+  const h = parseInt(t.split(':')[0] ?? '0');
+  return h < 6 ? h + 24 : h;
+}
+
 function findMissions(soldierName: string, shavtzak: ShavtzakData): Mission[] {
   const missions: Mission[] = [];
   for (const group of shavtzak.groups) {
@@ -22,7 +28,7 @@ function findMissions(soldierName: string, shavtzak: ShavtzakData): Mission[] {
       }
     }
   }
-  return missions;
+  return missions.sort((a, b) => missionTimeVal(a.time) - missionTimeVal(b.time));
 }
 
 interface Props {
