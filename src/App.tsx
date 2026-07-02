@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { SignIn, SignedIn, SignedOut, UserButton, useUser, useClerk } from '@clerk/clerk-react';
 import type { TabId, SheetData } from './types';
 import { useSoldiers } from './hooks/useSoldiers';
+import { useShavtzak } from './hooks/useShavtzak';
 import { PersonalSchedule } from './components/PersonalSchedule';
 import { UnitSchedule } from './components/UnitSchedule';
 import { ComingSoon } from './components/ComingSoon';
@@ -16,6 +17,7 @@ const TABS: { id: TabId; label: string }[] = [
 
 function AppContent({ data }: { data: SheetData }) {
   const [activeTab, setActiveTab] = useState<TabId>('personal');
+  const { data: shavtzakAll, loading: shavtzakLoading, error: shavtzakError, reload: reloadShavtzak } = useShavtzak();
 
   return (
     <div className="min-h-screen bg-gray-50" dir="rtl">
@@ -23,7 +25,16 @@ function AppContent({ data }: { data: SheetData }) {
       <header className="bg-slate-800 text-white shadow-md">
         <div className="mx-auto max-w-6xl px-4 py-4 flex items-center justify-between">
           <h1 className="text-xl font-bold tracking-wide">מערכת שבצק - פלוגת הגמר גע"ש</h1>
-          <div className="flex items-center gap-4" dir="ltr">
+          <div className="flex items-center gap-3" dir="ltr">
+            <button
+              onClick={reloadShavtzak}
+              disabled={shavtzakLoading}
+              title="טען מחדש"
+              className="rounded-lg border border-white/30 bg-white/10 hover:bg-white/20 px-3 py-1.5 text-sm font-medium text-white transition-colors disabled:opacity-50 flex items-center gap-1.5"
+            >
+              <span className={shavtzakLoading ? 'animate-spin inline-block' : ''}>↺</span>
+              טען מחדש
+            </button>
             <a
               href="https://s25qjhg6wm.zite.so"
               target="_blank"
@@ -61,10 +72,10 @@ function AppContent({ data }: { data: SheetData }) {
 
       {/* Content */}
       <main className="mx-auto max-w-6xl px-4 py-6">
-        {activeTab === 'personal' && <PersonalSchedule data={data} />}
+        {activeTab === 'personal' && <PersonalSchedule data={data} shavtzakAll={shavtzakAll} />}
         {activeTab === 'unit' && <UnitSchedule data={data} />}
         {activeTab === 'company' && <ComingSoon title="סיכום פלוגתי" />}
-        {activeTab === 'shavtzak' && <Shavtzak soldiers={data.soldiers} />}
+        {activeTab === 'shavtzak' && <Shavtzak soldiers={data.soldiers} shavtzakAll={shavtzakAll} loading={shavtzakLoading} error={shavtzakError} />}
       </main>
     </div>
   );

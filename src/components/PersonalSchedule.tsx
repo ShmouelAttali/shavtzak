@@ -1,9 +1,8 @@
 import { useMemo, useState } from 'react';
 import type { SheetData } from '../types';
 import { ScheduleGrid } from './ScheduleGrid';
-import { useShavtzak } from '../hooks/useShavtzak';
 import { getStationBadgeColors } from '../utils/stationColors';
-import type { ShavtzakData } from '../../api/shavtzak';
+import type { ShavtzakAllData, ShavtzakData } from '../../api/shavtzak';
 
 interface Mission {
   station: string;
@@ -33,6 +32,7 @@ function findMissions(soldierName: string, shavtzak: ShavtzakData): Mission[] {
 
 interface Props {
   data: SheetData;
+  shavtzakAll: ShavtzakAllData | null;
 }
 
 function toDateStr(d: Date) {
@@ -62,9 +62,8 @@ function fromInputDate(s: string) {
   return new Date(y, m - 1, d);
 }
 
-export function PersonalSchedule({ data }: Props) {
+export function PersonalSchedule({ data, shavtzakAll }: Props) {
   const { soldiers, dates, dayNames } = data;
-  const { data: shavtzakAll } = useShavtzak();
 
   const today = new Date();
   const twoWeeksAhead = new Date();

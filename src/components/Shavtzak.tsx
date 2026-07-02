@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useMemo, useState } from 'react';
-import { useShavtzak, todayShavtzakStr } from '../hooks/useShavtzak';
-import type { ShavtzakData, StationGroup, SubType } from '../../api/shavtzak';
+import { todayShavtzakStr } from '../hooks/useShavtzak';
+import type { ShavtzakAllData, ShavtzakData, StationGroup, SubType } from '../../api/shavtzak';
 import type { Soldier } from '../types';
 
 // ── Soldier lookup context ─────────────────────────────────────────────────
@@ -363,9 +363,12 @@ function GroupsView({ dayData }: { dayData: ShavtzakData }) {
 }
 
 // ── Main ───────────────────────────────────────────────────────────────────
-export function Shavtzak({ soldiers }: { soldiers: Soldier[] }) {
-  const { data, loading, error, reload } = useShavtzak();
-
+export function Shavtzak({ soldiers, shavtzakAll: data, loading, error }: {
+  soldiers: Soldier[];
+  shavtzakAll: ShavtzakAllData | null;
+  loading: boolean;
+  error: string | null;
+}) {
   const [selectedDate, setSelectedDate] = useState<string>('');
   const [popup, setPopup] = useState<PopupState | null>(null);
 
@@ -474,14 +477,12 @@ export function Shavtzak({ soldiers }: { soldiers: Soldier[] }) {
             {totalDistinct} חיילים
           </span>
 
-          <button
-            onClick={reload}
-            disabled={loading}
-            className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50 flex items-center gap-1.5 ml-auto"
-          >
-            <span className={loading ? 'animate-spin inline-block' : ''}>↺</span>
-            טען מחדש
-          </button>
+          {loading && (
+            <span className="ml-auto text-sm text-gray-400 flex items-center gap-1.5">
+              <span className="animate-spin inline-block">↺</span>
+              טוען...
+            </span>
+          )}
         </div>
 
         {/* Day content */}
