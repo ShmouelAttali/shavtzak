@@ -3,6 +3,7 @@ export interface Soldier {
   firstName: string;
   lastName: string;
   fullName: string;
+  email: string;
   phone: string;
   role: string;
   unit: string;

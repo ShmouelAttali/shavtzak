@@ -36,6 +36,7 @@ interface Soldier {
   firstName: string;
   lastName: string;
   fullName: string;
+  email: string;
   phone: string;
   role: string;
   unit: string;
@@ -165,6 +166,7 @@ function parseSheet(rows: string[][]): ParsedSheet {
       firstName,
       lastName,
       fullName: `${firstName} ${lastName}`.trim(),
+      email,
       phone,
       role,
       unit,

@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 import type { SheetData } from '../types';
 import { ScheduleGrid } from './ScheduleGrid';
 import { getStationBadgeColors } from '../utils/stationColors';
+import { todayShavtzakStr } from '../hooks/useShavtzak';
 import type { ShavtzakAllData, ShavtzakData } from '../../api/shavtzak';
 
 interface Mission {
@@ -186,6 +187,11 @@ export function PersonalSchedule({ data, shavtzakAll }: Props) {
         </div>
       )}
 
+      {/* Next shift */}
+      {selectedSoldier && shavtzakAll && (
+        <NextShiftCard soldierName={selectedSoldier.fullName} shavtzakAll={shavtzakAll} />
+      )}
+
       {/* Per-day missions */}
       {selectedSoldier && filteredDates.length > 0 && shavtzakAll && (
         <MissionsTimeline
@@ -217,6 +223,68 @@ export function PersonalSchedule({ data, shavtzakAll }: Props) {
 
       {/* Legend */}
       <Legend />
+    </div>
+  );
+}
+
+function dateToNum(d: string): number {
+  const [dd, mm, yyyy] = d.split('/').map(Number);
+  return (yyyy ?? 0) * 10000 + (mm ?? 0) * 100 + (dd ?? 0);
+}
+
+function dateLabel(d: string): string {
+  const todayNum = dateToNum(todayShavtzakStr());
+  const num = dateToNum(d);
+  if (num === todayNum) return 'היום';
+  if (num === todayNum + 1) return 'מחר';
+  const [dd, mm] = d.split('/');
+  return `${dd}/${mm}`;
+}
+
+function NextShiftCard({
+  soldierName,
+  shavtzakAll,
+}: {
+  soldierName: string;
+  shavtzakAll: ShavtzakAllData;
+}) {
+  const todayNum = dateToNum(todayShavtzakStr());
+  const h = new Date().getHours();
+  const nowVal = h < 6 ? h + 24 : h;
+
+  let result: { date: string; mission: Mission } | null = null;
+  for (const date of shavtzakAll.dates) {
+    const dateNum = dateToNum(date);
+    if (dateNum < todayNum) continue;
+    const dayData = shavtzakAll.byDate[date];
+    if (!dayData) continue;
+    let missions = findMissions(soldierName, dayData);
+    if (dateNum === todayNum) {
+      missions = missions.filter(m => missionTimeVal(m.time) > nowVal);
+    }
+    if (missions.length > 0) { result = { date, mission: missions[0] }; break; }
+  }
+
+  if (!result) return null;
+  const { date, mission } = result;
+  const c = getStationBadgeColors(mission.station);
+  const label = dateLabel(date);
+  const subLabel = mission.subType && mission.subType !== mission.station ? mission.subType : null;
+
+  return (
+    <div className="rounded-xl border-2 border-blue-200 bg-blue-50 px-4 py-3 flex items-center justify-between gap-3 flex-wrap">
+      <div>
+        <div className="text-xs font-semibold text-blue-400 mb-1">המשמרת הבאה</div>
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className={`inline-flex items-center rounded-full border px-3 py-0.5 text-sm font-semibold ${c.bg} ${c.text} ${c.border}`}>
+            {mission.station}{subLabel ? ` / ${subLabel}` : ''}
+          </span>
+        </div>
+      </div>
+      <div className="text-right">
+        <div className="text-lg font-bold text-blue-700">{mission.time !== 'יומי' ? mission.time : 'יומי'}</div>
+        <div className="text-sm text-blue-500">{label}</div>
+      </div>
     </div>
   );
 }

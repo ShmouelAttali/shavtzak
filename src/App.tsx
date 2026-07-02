@@ -1,22 +1,36 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { SignIn, SignedIn, SignedOut, UserButton, useUser, useClerk } from '@clerk/clerk-react';
 import type { TabId, SheetData } from './types';
 import { useSoldiers } from './hooks/useSoldiers';
 import { useShavtzak } from './hooks/useShavtzak';
 import { PersonalSchedule } from './components/PersonalSchedule';
 import { UnitSchedule } from './components/UnitSchedule';
-import { ComingSoon } from './components/ComingSoon';
+import { CompanySummary } from './components/CompanySummary';
 import { Shavtzak } from './components/Shavtzak';
 
-const TABS: { id: TabId; label: string }[] = [
-  { id: 'personal', label: 'לוז אישי' },
-  { id: 'unit', label: 'לוז יציאות מחלקתי' },
-  { id: 'company', label: 'סיכום פלוגתי' },
-  { id: 'shavtzak', label: 'שבצק' },
+const COMPANY_ROLES = new Set(['מ"פ', 'סמ"פ', 'מ"מ', 'סמל', 'מ"כ']);
+
+const TABS: { id: TabId; label: string; restricted?: true }[] = [
+  { id: 'personal',  label: 'לוז אישי' },
+  { id: 'unit',      label: 'לוז יציאות מחלקתי' },
+  { id: 'company',   label: 'סיכום פלוגתי', restricted: true },
+  { id: 'shavtzak',  label: 'שבצק' },
 ];
 
 function AppContent({ data }: { data: SheetData }) {
   const [activeTab, setActiveTab] = useState<TabId>('personal');
+  const { user } = useUser();
+
+  const myEmail = user?.primaryEmailAddress?.emailAddress?.toLowerCase() ?? '';
+  const mySoldier = data.soldiers.find(s => s.email.toLowerCase() === myEmail) ?? null;
+  const myRole = mySoldier?.role ?? '';
+  const mySoldierName = mySoldier?.fullName ?? '';
+  const canSeeCompany = COMPANY_ROLES.has(myRole);
+
+  // If the company tab becomes inaccessible, fall back to personal
+  useEffect(() => {
+    if (activeTab === 'company' && !canSeeCompany) setActiveTab('personal');
+  }, [activeTab, canSeeCompany]);
   const { data: shavtzakAll, loading: shavtzakLoading, error: shavtzakError, reload: reloadShavtzak } = useShavtzak();
 
   return (
@@ -53,7 +67,7 @@ function AppContent({ data }: { data: SheetData }) {
       <div className="sticky top-0 z-20 bg-white shadow-sm">
         <div className="mx-auto max-w-6xl">
           <nav className="flex overflow-x-auto" aria-label="Tabs">
-            {TABS.map((tab) => (
+            {TABS.filter(tab => !tab.restricted || canSeeCompany).map((tab) => (
               <button
                 key={tab.id}
                 onClick={() => setActiveTab(tab.id)}
@@ -74,8 +88,8 @@ function AppContent({ data }: { data: SheetData }) {
       <main className="mx-auto max-w-6xl px-4 py-6">
         {activeTab === 'personal' && <PersonalSchedule data={data} shavtzakAll={shavtzakAll} />}
         {activeTab === 'unit' && <UnitSchedule data={data} />}
-        {activeTab === 'company' && <ComingSoon title="סיכום פלוגתי" />}
-        {activeTab === 'shavtzak' && <Shavtzak soldiers={data.soldiers} shavtzakAll={shavtzakAll} loading={shavtzakLoading} error={shavtzakError} />}
+        {activeTab === 'company' && <CompanySummary data={data} />}
+        {activeTab === 'shavtzak' && <Shavtzak soldiers={data.soldiers} shavtzakAll={shavtzakAll} loading={shavtzakLoading} error={shavtzakError} mySoldierName={mySoldierName} />}
       </main>
     </div>
   );
