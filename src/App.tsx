@@ -17,8 +17,29 @@ const TABS: { id: TabId; label: string; restricted?: true }[] = [
   { id: 'shavtzak',  label: 'שבצק' },
 ];
 
+const APP_VERSION = '1.0.0';
+
+function AboutPopup({ onClose }: { onClose: () => void }) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4" onClick={onClose}>
+      <div className="bg-white rounded-2xl shadow-2xl p-8 text-center space-y-3 max-w-xs w-full" onClick={e => e.stopPropagation()} dir="rtl">
+        <div className="text-2xl font-bold text-slate-800">מערכת שבצק</div>
+        <div className="text-sm text-gray-500">פלוגת הגמר גע"ש</div>
+        <div className="border-t border-gray-100 pt-3 space-y-1">
+          <div className="text-sm text-gray-600">גרסה <span className="font-semibold text-slate-700">{APP_VERSION}</span></div>
+          <div className="text-sm text-gray-600">פותח על ידי <span className="font-semibold text-slate-700">שמואל אטלי</span></div>
+        </div>
+        <button onClick={onClose} className="mt-2 w-full rounded-xl border border-gray-200 py-2 text-sm text-gray-500 hover:bg-gray-50">
+          סגור
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function AppContent({ data }: { data: SheetData }) {
   const [activeTab, setActiveTab] = useState<TabId>('personal');
+  const [showAbout, setShowAbout] = useState(false);
   const { user } = useUser();
 
   const myEmail = user?.primaryEmailAddress?.emailAddress?.toLowerCase() ?? '';
@@ -38,7 +59,10 @@ function AppContent({ data }: { data: SheetData }) {
       {/* Header */}
       <header className="bg-slate-800 text-white shadow-md">
         <div className="mx-auto max-w-6xl px-4 py-4 flex items-center justify-between">
-          <h1 className="text-xl font-bold tracking-wide">מערכת שבצק - פלוגת הגמר גע"ש</h1>
+          <h1
+            className="text-xl font-bold tracking-wide cursor-pointer select-none hover:opacity-80 transition-opacity"
+            onClick={() => setShowAbout(true)}
+          >מערכת שבצק - פלוגת הגמר גע"ש</h1>
           <div className="flex items-center gap-3" dir="ltr">
             <button
               onClick={reloadShavtzak}
@@ -83,6 +107,8 @@ function AppContent({ data }: { data: SheetData }) {
           </nav>
         </div>
       </div>
+
+      {showAbout && <AboutPopup onClose={() => setShowAbout(false)} />}
 
       {/* Content */}
       <main className="mx-auto max-w-6xl px-4 py-6">
