@@ -1,5 +1,6 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type { SheetData } from '../types';
+import type { ShavtzakAllData } from '../../api/shavtzak';
 import { useExits } from '../hooks/useExits';
 import { SoldierPopup } from './SoldierPopup';
 import type { PopupState } from './SoldierPopup';
@@ -107,8 +108,76 @@ function Collapsible({ label, count, colorClass, children }: {
   );
 }
 
+// ── Shavtzak helpers ─────────────────────────────────────────────────────
+function schedToShavtzakKey(d: string): string {
+  const [dd, mm, yy] = d.split('/');
+  return `${dd}/${mm}/20${yy}`;
+}
+
+// Converts "HH:MM" to a comparable number; hours 0-5 → 24-29 to handle overnight ordering
+function timeToVal(t: string): number {
+  const h = parseInt(t.split(':')[0] ?? '0', 10);
+  return h < 6 ? h + 24 : h;
+}
+
+// Returns true if currentVal falls within an explicit range like "16:00-22:00" or "22:00-06:00"
+function isRangeActive(timeStr: string, currentVal: number): boolean {
+  const parts = timeStr.split('-');
+  if (parts.length < 2 || !parts[0] || !parts[1]) return false;
+  const start = timeToVal(parts[0].trim());
+  const end   = timeToVal(parts[1].trim());
+  if (start < end) return currentVal >= start && currentVal < end;
+  // Wraps midnight: active when currentVal >= start OR currentVal < end
+  return currentVal >= start || currentVal < end;
+}
+
+// Returns set of soldier names currently on an active shift at currentVal
+function getCurrentlyOnDuty(shavtzakAll: ShavtzakAllData, shavtzakKey: string, currentVal: number): Set<string> {
+  const names = new Set<string>();
+  const dayData = shavtzakAll.byDate[shavtzakKey];
+  if (!dayData) return names;
+
+  for (const group of dayData.groups) {
+    for (const sub of group.subTypes) {
+      // Collect sorted start-time values for boundary inference
+      const startOnlyVals = sub.times
+        .filter(t => t.time && !t.time.includes('-') && t.time !== 'יומי')
+        .map(t => timeToVal(t.time))
+        .filter((v, i, arr) => arr.indexOf(v) === i)
+        .sort((a, b) => a - b);
+
+      for (const slot of sub.times) {
+        if (!slot.time || slot.time === 'יומי') {
+          // Daily assignment — always on duty
+          slot.soldiers.forEach(n => names.add(n));
+          continue;
+        }
+
+        let isActive = false;
+
+        if (slot.time.includes('-')) {
+          isActive = isRangeActive(slot.time, currentVal);
+        } else {
+          const myVal = timeToVal(slot.time);
+          const myIdx = startOnlyVals.indexOf(myVal);
+          if (myIdx !== -1) {
+            const endVal = myIdx < startOnlyVals.length - 1
+              ? startOnlyVals[myIdx + 1]!
+              : startOnlyVals[0]! + 24; // last slot wraps to first slot of next day
+            isActive = currentVal >= myVal && currentVal < endVal;
+          }
+        }
+
+        if (isActive) slot.soldiers.forEach(n => names.add(n));
+      }
+    }
+  }
+
+  return names;
+}
+
 // ── Main ──────────────────────────────────────────────────────────────────
-export function CompanySummary({ data }: { data: SheetData }) {
+export function CompanySummary({ data, shavtzakAll }: { data: SheetData; shavtzakAll: ShavtzakAllData | null }) {
   const { soldiers, dates, dayNames } = data;
   const { exits, loading: exitsLoading, saving, addExit, removeExit } = useExits();
 
@@ -119,6 +188,17 @@ export function CompanySummary({ data }: { data: SheetData }) {
     return past.length ? past[past.length - 1] : dates[0] ?? '';
   });
   const [popup, setPopup] = useState<PopupState | null>(null);
+
+  // Current hour — updates automatically when the hour changes (checked every minute)
+  const [currentHour, setCurrentHour] = useState(() => new Date().getHours());
+  useEffect(() => {
+    const id = setInterval(() => {
+      const h = new Date().getHours();
+      setCurrentHour(prev => prev !== h ? h : prev);
+    }, 60_000);
+    return () => clearInterval(id);
+  }, []);
+  const currentVal = currentHour < 6 ? currentHour + 24 : currentHour;
 
   // Add-exit form state
   const [showAddForm, setShowAddForm] = useState(false);
@@ -186,6 +266,13 @@ export function CompanySummary({ data }: { data: SheetData }) {
       .sort((a, b) => a.soldier.unit.localeCompare(b.soldier.unit, 'he')),
     [active]
   );
+
+  // Soldiers on base not currently in any active shift (re-evaluates when hour changes)
+  const freeOnBase = useMemo(() => {
+    if (!shavtzakAll) return [];
+    const onDuty = getCurrentlyOnDuty(shavtzakAll, schedToShavtzakKey(selectedDate), currentVal);
+    return presentList.filter(({ soldier }) => !onDuty.has(soldier.fullName));
+  }, [presentList, shavtzakAll, selectedDate, currentVal]);
 
   // Changes from previous date (all soldiers including לא מגוייס)
   const changes = useMemo(() => {
@@ -282,6 +369,32 @@ export function CompanySummary({ data }: { data: SheetData }) {
             );
           })}
         </div>
+      </div>
+
+      {/* Free on base — soldiers present but not currently on active shift */}
+      <div className="rounded-xl border-2 border-dashed border-slate-300 bg-slate-50 px-4 py-3">
+        <div className="flex items-center gap-2 mb-3 flex-wrap">
+          <span className="text-sm font-semibold text-slate-700">בבסיס ללא שיבוץ כרגע</span>
+          <span className="rounded-full bg-slate-200 text-slate-700 px-2 py-0.5 text-xs font-bold">{freeOnBase.length}</span>
+          <span className="text-xs text-slate-400 mr-1">
+            (נכון ל-{String(currentHour).padStart(2, '0')}:00)
+          </span>
+        </div>
+        {freeOnBase.length === 0 ? (
+          <p className="text-xs text-slate-400">כל החיילים בבסיס נמצאים כעת בשיבוץ</p>
+        ) : (
+          <div className="flex flex-wrap gap-2">
+            {freeOnBase.map(({ soldier }) => (
+              <span
+                key={soldier.id}
+                className="inline-flex items-center gap-1.5 rounded-full bg-white border border-slate-200 shadow-sm px-3 py-1 text-sm font-medium text-slate-700"
+              >
+                {soldier.fullName}
+                <span className="text-xs text-slate-400">{soldier.unit}</span>
+              </span>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* Short exits */}

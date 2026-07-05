@@ -17,7 +17,7 @@ const TABS: { id: TabId; label: string; restricted?: true }[] = [
   { id: 'shavtzak',  label: 'שבצק' },
 ];
 
-const APP_VERSION = '1.0.0';
+const APP_VERSION = '1.0.1';
 
 function AboutPopup({ onClose }: { onClose: () => void }) {
   return (
@@ -114,7 +114,7 @@ function AppContent({ data }: { data: SheetData }) {
       <main className="mx-auto max-w-6xl px-4 py-6">
         {activeTab === 'personal' && <PersonalSchedule data={data} shavtzakAll={shavtzakAll} />}
         {activeTab === 'unit' && <UnitSchedule data={data} />}
-        {activeTab === 'company' && <CompanySummary data={data} />}
+        {activeTab === 'company' && <CompanySummary data={data} shavtzakAll={shavtzakAll} />}
         {activeTab === 'shavtzak' && <Shavtzak soldiers={data.soldiers} shavtzakAll={shavtzakAll} loading={shavtzakLoading} error={shavtzakError} mySoldierName={mySoldierName} />}
       </main>
     </div>
