@@ -189,16 +189,27 @@ export function CompanySummary({ data, shavtzakAll }: { data: SheetData; shavtza
   });
   const [popup, setPopup] = useState<PopupState | null>(null);
 
-  // Current hour — updates automatically when the hour changes (checked every minute)
+  // The hour the user is currently browsing (defaults to current hour)
   const [currentHour, setCurrentHour] = useState(() => new Date().getHours());
+  const [viewHour, setViewHour] = useState(() => new Date().getHours());
+
+  // Auto-tick: once per minute, update currentHour; if viewHour was tracking live, advance it too
   useEffect(() => {
     const id = setInterval(() => {
       const h = new Date().getHours();
-      setCurrentHour(prev => prev !== h ? h : prev);
+      setCurrentHour(prev => {
+        if (prev !== h) {
+          setViewHour(v => (v === prev ? h : v));
+          return h;
+        }
+        return prev;
+      });
     }, 60_000);
     return () => clearInterval(id);
   }, []);
-  const currentVal = currentHour < 6 ? currentHour + 24 : currentHour;
+
+  const isLive = viewHour === currentHour;
+  const viewVal = viewHour < 6 ? viewHour + 24 : viewHour;
 
   // Add-exit form state
   const [showAddForm, setShowAddForm] = useState(false);
@@ -267,12 +278,12 @@ export function CompanySummary({ data, shavtzakAll }: { data: SheetData; shavtza
     [active]
   );
 
-  // Soldiers on base not currently in any active shift (re-evaluates when hour changes)
+  // Soldiers on base not on an active shift at the viewed hour
   const freeOnBase = useMemo(() => {
     if (!shavtzakAll) return [];
-    const onDuty = getCurrentlyOnDuty(shavtzakAll, schedToShavtzakKey(selectedDate), currentVal);
+    const onDuty = getCurrentlyOnDuty(shavtzakAll, schedToShavtzakKey(selectedDate), viewVal);
     return presentList.filter(({ soldier }) => !onDuty.has(soldier.fullName));
-  }, [presentList, shavtzakAll, selectedDate, currentVal]);
+  }, [presentList, shavtzakAll, selectedDate, viewVal]);
 
   // Changes from previous date (all soldiers including לא מגוייס)
   const changes = useMemo(() => {
@@ -371,17 +382,39 @@ export function CompanySummary({ data, shavtzakAll }: { data: SheetData; shavtza
         </div>
       </div>
 
-      {/* Free on base — soldiers present but not currently on active shift */}
+      {/* Free on base — browse by hour */}
       <div className="rounded-xl border-2 border-dashed border-slate-300 bg-slate-50 px-4 py-3">
-        <div className="flex items-center gap-2 mb-3 flex-wrap">
-          <span className="text-sm font-semibold text-slate-700">בבסיס ללא שיבוץ כרגע</span>
-          <span className="rounded-full bg-slate-200 text-slate-700 px-2 py-0.5 text-xs font-bold">{freeOnBase.length}</span>
-          <span className="text-xs text-slate-400 mr-1">
-            (נכון ל-{String(currentHour).padStart(2, '0')}:00)
-          </span>
+        <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+          <div className="flex items-center gap-2">
+            <span className="text-sm font-semibold text-slate-700">בבסיס ללא שיבוץ</span>
+            <span className="rounded-full bg-slate-200 text-slate-700 px-2 py-0.5 text-xs font-bold">{freeOnBase.length}</span>
+          </div>
+          <div className="flex items-center gap-1.5" dir="ltr">
+            <button
+              onClick={() => setViewHour(h => (h + 23) % 24)}
+              className="rounded-lg border border-slate-300 bg-white hover:bg-slate-100 w-7 h-7 flex items-center justify-center text-slate-600 font-bold text-sm leading-none"
+            >‹</button>
+            <span className="w-14 text-center text-sm font-semibold text-slate-800 tabular-nums">
+              {String(viewHour).padStart(2, '0')}:00
+            </span>
+            <button
+              onClick={() => setViewHour(h => (h + 1) % 24)}
+              className="rounded-lg border border-slate-300 bg-white hover:bg-slate-100 w-7 h-7 flex items-center justify-center text-slate-600 font-bold text-sm leading-none"
+            >›</button>
+            {isLive ? (
+              <span className="rounded-full bg-green-100 text-green-700 px-2 py-0.5 text-xs font-semibold">כרגע</span>
+            ) : (
+              <button
+                onClick={() => setViewHour(currentHour)}
+                className="rounded-full bg-blue-50 border border-blue-200 text-blue-600 px-2.5 py-0.5 text-xs font-semibold hover:bg-blue-100 transition-colors"
+              >
+                חזור לכרגע
+              </button>
+            )}
+          </div>
         </div>
         {freeOnBase.length === 0 ? (
-          <p className="text-xs text-slate-400">כל החיילים בבסיס נמצאים כעת בשיבוץ</p>
+          <p className="text-xs text-slate-400">כל החיילים בבסיס נמצאים בשיבוץ בשעה זו</p>
         ) : (
           <div className="flex flex-wrap gap-2">
             {freeOnBase.map(({ soldier }) => (
