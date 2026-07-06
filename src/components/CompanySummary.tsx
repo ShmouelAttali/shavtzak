@@ -188,6 +188,8 @@ export function CompanySummary({ data, shavtzakAll }: { data: SheetData; shavtza
     return past.length ? past[past.length - 1] : dates[0] ?? '';
   });
   const [popup, setPopup] = useState<PopupState | null>(null);
+  const [includeMaflag, setIncludeMaflag] = useState(false);
+  const [includeHamal, setIncludeHamal]   = useState(false);
 
   // The hour the user is currently browsing (defaults to current hour)
   const [currentHour, setCurrentHour] = useState(() => new Date().getHours());
@@ -223,24 +225,35 @@ export function CompanySummary({ data, shavtzakAll }: { data: SheetData; shavtza
     return m;
   }, [soldiers]);
 
+  // Soldiers visible in the summary (respects מפלג/חמל checkboxes)
+  const visibleSoldiers = useMemo(() =>
+    soldiers.filter(s => {
+      const u = s.unit.replace(/"/g, '');
+      if (!includeMaflag && u.includes('מפלג')) return false;
+      if (!includeHamal  && u.includes('חמל'))  return false;
+      return true;
+    }),
+    [soldiers, includeMaflag, includeHamal]
+  );
+
   const idx     = dates.indexOf(selectedDate);
   const canPrev = idx > 0;
   const canNext = idx < dates.length - 1;
   const prevDate = idx > 0 ? dates[idx - 1] : null;
 
   const units = useMemo(() => {
-    const set = new Set(soldiers.map(s => s.unit).filter(Boolean));
+    const set = new Set(visibleSoldiers.map(s => s.unit).filter(Boolean));
     return Array.from(set).sort((a, b) => a.localeCompare(b, 'he'));
-  }, [soldiers]);
+  }, [visibleSoldiers]);
 
   // All soldiers classified for selected date
   const classified = useMemo(() =>
-    soldiers.map(s => ({
+    visibleSoldiers.map(s => ({
       soldier: s,
       status: classifyStatus(s.schedule[selectedDate] ?? ''),
       raw: s.schedule[selectedDate] ?? '',
     })),
-    [soldiers, selectedDate]
+    [visibleSoldiers, selectedDate]
   );
 
   // Exclude לא מגוייס from all regular counts/lists
@@ -285,17 +298,17 @@ export function CompanySummary({ data, shavtzakAll }: { data: SheetData; shavtza
     return presentList.filter(({ soldier }) => !onDuty.has(soldier.fullName));
   }, [presentList, shavtzakAll, selectedDate, viewVal]);
 
-  // Changes from previous date (all soldiers including לא מגוייס)
+  // Changes from previous date (all visible soldiers including לא מגוייס)
   const changes = useMemo(() => {
     if (!prevDate) return [];
-    return soldiers
+    return visibleSoldiers
       .map(s => ({
         soldier: s,
         today: classifyStatus(s.schedule[selectedDate] ?? ''),
         prev: classifyStatus(s.schedule[prevDate] ?? ''),
       }))
       .filter(r => r.today !== r.prev);
-  }, [soldiers, selectedDate, prevDate]);
+  }, [visibleSoldiers, selectedDate, prevDate]);
 
   // Group changes by today's status
   const changesByStatus = useMemo(() => {
@@ -312,13 +325,13 @@ export function CompanySummary({ data, shavtzakAll }: { data: SheetData; shavtza
   const weekStrip = useMemo(() =>
     dates.slice(Math.max(0, idx), Math.max(0, idx) + 10).map(date => ({
       date,
-      present: soldiers.filter(s =>
+      present: visibleSoldiers.filter(s =>
         PRESENT_KEYS.has(classifyStatus(s.schedule[date] ?? '')) &&
         classifyStatus(s.schedule[date] ?? '') !== 'לא מגוייס'
       ).length,
-      total: soldiers.filter(s => classifyStatus(s.schedule[date] ?? '') !== 'לא מגוייס').length,
+      total: visibleSoldiers.filter(s => classifyStatus(s.schedule[date] ?? '') !== 'לא מגוייס').length,
     })),
-    [dates, idx, soldiers]
+    [dates, idx, visibleSoldiers]
   );
 
   async function handleAddExit() {
@@ -361,6 +374,29 @@ export function CompanySummary({ data, shavtzakAll }: { data: SheetData; shavtza
         <button onClick={() => canNext && setSelectedDate(dates[idx + 1])} disabled={!canNext}
           className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-gray-700 hover:bg-gray-50 disabled:opacity-30 font-bold text-lg leading-none">›</button>
         <span className="text-sm text-gray-500 mr-1">{dayNames[selectedDate] ?? ''}</span>
+      </div>
+
+      {/* Unit-type filter */}
+      <div className="flex items-center gap-4 text-sm text-gray-600">
+        <span className="font-medium text-gray-500 text-xs">הצגה:</span>
+        <label className="flex items-center gap-1.5 cursor-pointer select-none">
+          <input
+            type="checkbox"
+            checked={includeMaflag}
+            onChange={e => setIncludeMaflag(e.target.checked)}
+            className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+          />
+          <span>כולל מפלג</span>
+        </label>
+        <label className="flex items-center gap-1.5 cursor-pointer select-none">
+          <input
+            type="checkbox"
+            checked={includeHamal}
+            onChange={e => setIncludeHamal(e.target.checked)}
+            className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+          />
+          <span>כולל חמל</span>
+        </label>
       </div>
 
       {/* Effective strength banner */}
