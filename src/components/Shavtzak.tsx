@@ -58,6 +58,23 @@ function isYomiOnly(subTypes: SubType[]): boolean {
   );
 }
 
+// True when most (sug × time) cells are empty — a "pool of missions" where each
+// mission is staffed at its own times, rather than a dense shift table. A wide
+// grid wastes space on dashes here; a per-mission card list is more compact.
+function isSparseMultiType(subTypes: SubType[]): boolean {
+  if (subTypes.length < 3) return false;
+  const times = allUniqueTimes(subTypes);
+  if (times.length === 0) return false;
+  let filled = 0;
+  for (const sub of subTypes) {
+    for (const time of times) {
+      const slot = sub.times.find(t => t.time === time);
+      if (slot && slot.soldiers.length > 0) filled++;
+    }
+  }
+  return filled / (subTypes.length * times.length) <= 0.4;
+}
+
 // ── Color palette ──────────────────────────────────────────────────────────
 type Colors = { border: string; header: string; bg: string; rowAlt: string; colHeader: string };
 const PALETTE: [string, Colors][] = [
@@ -236,6 +253,42 @@ function MultiTypeTable({ subTypes, bg, rowAlt, colHeader }: {
   );
 }
 
+// ── Layout 4: sparse multi sub-type "mission pool" → one card per mission ──
+function MissionCards({ subTypes, colHeader }: {
+  subTypes: SubType[]; colHeader: string;
+}) {
+  const missions = subTypes
+    .map(sub => ({
+      sug: sub.sug,
+      entries: [...sub.times]
+        .filter(t => t.soldiers.length > 0)
+        .sort((a, b) => timeToVal(a.time) - timeToVal(b.time)),
+    }))
+    .filter(m => m.entries.length > 0);
+
+  return (
+    <div className="flex flex-wrap gap-3 p-3">
+      {missions.map(mission => (
+        <div key={mission.sug} className="flex-1 min-w-[170px] rounded-lg border border-gray-200 overflow-hidden">
+          <div className={`px-3 py-1.5 text-xs font-bold text-gray-600 border-b border-gray-200 ${colHeader}`}>
+            {mission.sug}
+          </div>
+          <div className="divide-y divide-gray-100">
+            {mission.entries.map(entry => (
+              <div key={entry.time} className="px-3 py-1.5">
+                <div className="text-[11px] font-semibold text-gray-400 mb-0.5">{entry.time || 'יומי'}</div>
+                <div className="flex flex-wrap gap-x-2 gap-y-0.5">
+                  {entry.soldiers.map((name, i) => <SoldierName key={i} name={name} />)}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 // ── Layout tiers ──────────────────────────────────────────────────────────
 // small  → half-width box (2 per row): compact stations
 // medium → half-width box (2 per row): יומי multi-sub groups (e.g. מגן, נוספים)
@@ -273,6 +326,7 @@ function GroupCard({ group }: { group: StationGroup }) {
   ).size;
   const multiType = group.subTypes.length > 1;
   const yomiOnly  = isYomiOnly(group.subTypes);
+  const sparse    = multiType && !yomiOnly && isSparseMultiType(group.subTypes);
 
   return (
     <div className={`rounded-xl border-2 overflow-hidden ${c.border}`}>
@@ -282,6 +336,8 @@ function GroupCard({ group }: { group: StationGroup }) {
       </div>
       {yomiOnly ? (
         <YomiGrid subTypes={group.subTypes} bg={c.bg} groupName={group.name} />
+      ) : sparse ? (
+        <MissionCards subTypes={group.subTypes} colHeader={c.colHeader} />
       ) : multiType ? (
         <MultiTypeTable subTypes={group.subTypes} bg={c.bg} rowAlt={c.rowAlt} colHeader={c.colHeader} />
       ) : (
