@@ -238,13 +238,19 @@ language sql stable as $$
     count(*) filter (where b.period && night_range(b.day)
                        and lower(b.period) < w.t_end
                        and b.mission_class <> 'readiness')             as night_count_total,
-    coalesce(sum(hours(b.period * tsrange(w.t_start, w.t_end)))
-             filter (where b.mission_class <> 'readiness'), 0)         as mission_hours_7d,
-    coalesce(sum(hours(b.period * tsrange(w.t_start, w.t_end))
+    -- counted hours: a single assignment contributes at most 8h (R4 — daily
+    -- 06:00-22:00 missions count as one 8h duty, matching the generator's cap).
+    -- NB: the && filter is essential — hours(empty_range) is NULL and
+    -- least(NULL, 8) = 8, so unfiltered out-of-window rows would add 8h each.
+    coalesce(sum(least(hours(b.period * tsrange(w.t_start, w.t_end)), 8))
+             filter (where b.mission_class <> 'readiness'
+                       and b.period && tsrange(w.t_start, w.t_end)), 0) as mission_hours_7d,
+    coalesce(sum(least(hours(b.period * tsrange(w.t_start, w.t_end)), 8)
              * case when b.mission_class = 'readiness'
                     then coalesce((select (value->>0)::numeric from config
                                     where key = 'readiness_hour_weight'), 0.25)
-                    else 1 end), 0)                                    as weighted_hours_7d,
+                    else 1 end)
+             filter (where b.period && tsrange(w.t_start, w.t_end)), 0) as weighted_hours_7d,
     coalesce(sum(hours(b.period * tsrange(w.t_start, w.t_end)))
              filter (where b.mission_class = 'readiness'), 0)          as readiness_hours_7d,
     coalesce(sum(hours(b.period))

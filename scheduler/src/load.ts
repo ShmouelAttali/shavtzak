@@ -1,0 +1,153 @@
+import { query } from './db.js';
+import { Context, Soldier, Position, Slot, Fairness, ChainRule } from './model.js';
+import { toMin, parseRange, dayStart, dayEnd, addDays, slotStart, overlaps, Minutes } from './time.js';
+
+const strip = (s: string) => (s ?? '').replace(/[״"'׳`]/g, '').trim();
+
+function roleFlags(role: string) {
+  const r = strip(role);
+  const has = (...kw: string[]) => kw.some((k) => r.includes(k));
+  const isSenior = has('ממ', 'מ״מ', 'סמל') || /(^|\s)מ מ(\s|$)/.test(r);
+  const isStaticCmd = has('מכ', 'מח');
+  return { isCommander: isSenior || isStaticCmd, isSeniorCommander: isSenior };
+}
+
+export async function loadContext(day: string): Promise<Context> {
+  await query(`insert into schedule_days (day) values ($1) on conflict do nothing`, [day]);
+
+  const positions = new Map<number, Position>();
+  const positionByName = new Map<string, number>();
+  for (const p of await query(`select id, name, mission_class, is_scheduled, blocks_day from positions`)) {
+    positions.set(p.id, {
+      id: p.id, name: p.name, missionClass: p.mission_class,
+      isScheduled: p.is_scheduled, blocksDay: p.blocks_day,
+    });
+    positionByName.set(p.name, p.id);
+  }
+
+  const soldiers = new Map<number, Soldier>();
+  const rows = await query(`
+    select s.id, s.full_name, s.platoon, coalesce(s.role,'') role,
+           coalesce(s.rifle_level,0) rifle,
+           coalesce(array_agg(q.qualification) filter (where q.qualification is not null), '{}') quals
+    from soldiers s
+    left join soldier_qualifications q on q.soldier_id = s.id
+    where s.is_schedulable
+    group by s.id`);
+  for (const r of rows) {
+    const flags = roleFlags(r.role);
+    const quals: string[] = r.quals;
+    soldiers.set(r.id, {
+      id: r.id, name: r.full_name, platoon: r.platoon, role: r.role, rifle: r.rifle,
+      quals, ...flags,
+      isDudDriver: quals.some((q) => strip(q).includes('נהג דוד')),
+      isTigerDriver: quals.some((q) => strip(q).includes('נהג טיגריס')),
+    });
+  }
+
+  const fairness = new Map<number, Fairness>();
+  for (const f of await query(`select * from soldier_fairness($1)`, [day])) {
+    fairness.set(f.soldier_id, {
+      nightCount7d: Number(f.night_count_7d),
+      nightCountTotal: Number(f.night_count_total),
+      missionHours7d: Number(f.mission_hours_7d),
+      weightedHours7d: Number(f.weighted_hours_7d),
+      readinessHours7d: Number(f.readiness_hours_7d),
+      trackerHoursTotal: Number(f.tracker_hours_total),
+      positionCounts: f.position_counts ?? {},
+    });
+  }
+
+  const slots: Slot[] = (await query(`
+    select ds.position_id, ds.sub_position_id, sp.name sub_name, ds.period::text, ds.seats, ds.commander_first_seat
+    from day_slots ds left join sub_positions sp on sp.id = ds.sub_position_id
+    where ds.day = $1`, [day])).map((s) => ({
+      positionId: s.position_id, subPositionId: s.sub_position_id, subName: s.sub_name,
+      period: parseRange(s.period), seats: s.seats, commanderFirstSeat: s.commander_first_seat,
+    }));
+
+  // Existing assignments in the rest/rotation window (history + prior drafts).
+  const existing = new Map<number, { positionId: number; period: [Minutes, Minutes]; missionClass: string }[]>();
+  const winFrom = addDays(day, -8);
+  for (const a of await query(`
+    select sa.soldier_id, sa.position_id, sa.period::text, p.mission_class
+    from shift_assignments sa join positions p on p.id = sa.position_id
+    where sa.period && tsrange(day_start($1), day_start($2))`, [winFrom, addDays(day, 1)])) {
+    const list = existing.get(a.soldier_id) ?? [];
+    list.push({ positionId: a.position_id, period: parseRange(a.period), missionClass: a.mission_class });
+    existing.set(a.soldier_id, list);
+  }
+
+  // Yesterday's Level-1 position: prefer day_assignments, fall back to the
+  // dominant (longest) non-readiness shift of yesterday.
+  const yesterday = addDays(day, -1);
+  const yesterdayPosition = new Map<number, number>();
+  for (const r of await query(`select soldier_id, position_id from day_assignments where day = $1`, [yesterday])) {
+    yesterdayPosition.set(r.soldier_id, r.position_id);
+  }
+  if (yesterdayPosition.size === 0) {
+    const yr: [Minutes, Minutes] = [dayStart(yesterday), dayEnd(yesterday)];
+    for (const [sid, list] of existing) {
+      let best: { positionId: number; h: number } | null = null;
+      for (const a of list) {
+        if (a.missionClass === 'readiness' || !overlaps(a.period, yr)) continue;
+        const h = Math.min(a.period[1], yr[1]) - Math.max(a.period[0], yr[0]);
+        if (!best || h > best.h) best = { positionId: a.positionId, h };
+      }
+      if (best) yesterdayPosition.set(sid, best.positionId);
+    }
+  }
+
+  // Static-only streak (days ending yesterday, up to 7 back).
+  const staticStreak = new Map<number, number>();
+  for (const [sid, list] of existing) {
+    let streak = 0;
+    for (let d = 1; d <= 7; d++) {
+      const dr: [Minutes, Minutes] = [dayStart(addDays(day, -d)), dayEnd(addDays(day, -d))];
+      let hasStatic = false, hasDynamic = false;
+      for (const a of list) {
+        if (a.missionClass === 'readiness' || !overlaps(a.period, dr)) continue;
+        if (a.missionClass === 'static') hasStatic = true;
+        if (a.missionClass === 'dynamic') hasDynamic = true;
+      }
+      if (hasStatic && !hasDynamic) streak++;
+      else break;
+    }
+    if (streak) staticStreak.set(sid, streak);
+  }
+
+  // Unavailability windows intersecting the schedule day.
+  const blocked = new Map<number, [Minutes, Minutes][]>();
+  for (const u of await query(`
+    select soldier_id, period::text from unavailability
+    where period && tsrange(day_start($1), day_start($1) + interval '1 day')`, [day])) {
+    const list = blocked.get(u.soldier_id) ?? [];
+    list.push(parseRange(u.period));
+    blocked.set(u.soldier_id, list);
+  }
+
+  const lockedShift = (await query(`
+    select soldier_id, position_id, period::text from shift_assignments
+    where day = $1 and (locked or source in ('manual','import'))`, [day]))
+    .map((r) => ({ soldierId: r.soldier_id, positionId: r.position_id, period: parseRange(r.period) as [Minutes, Minutes] }));
+  const lockedDay = new Map<number, number>();
+  for (const r of await query(`
+    select soldier_id, position_id from day_assignments
+    where day = $1 and (locked or source = 'manual')`, [day])) {
+    lockedDay.set(r.soldier_id, r.position_id);
+  }
+
+  const chainRules: ChainRule[] = (await query(`select * from chain_rules order by id`)).map((c) => ({
+    targetPosition: c.target_position, targetStart: String(c.target_start).slice(0, 5),
+    sourcePosition: c.source_position, sourceStart: String(c.source_start).slice(0, 5),
+    sourceDayOffset: c.source_day_offset, pick: c.pick,
+  }));
+
+  const config: Record<string, any> = {};
+  for (const c of await query(`select key, value from config`)) config[c.key] = c.value;
+
+  return {
+    day, soldiers, positions, positionByName, slots, fairness, existing,
+    yesterdayPosition, staticStreak, blocked, lockedShift, lockedDay, chainRules, config,
+  };
+}
