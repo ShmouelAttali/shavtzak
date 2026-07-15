@@ -7,7 +7,7 @@
 insert into positions (id, name, mission_class, is_scheduled, blocks_day, config) values
   ( 1, 'סיור',        'dynamic',   true,  false, '{}'),
   ( 2, 'עמדות הגנה',  'static',    true,  false, '{}'),
-  ( 3, 'מגן + תגבצ',  'other',     true,  true,  '{"package":"magen_tagbatz","continuity":true,"same_platoon":true}'),
+  ( 3, 'מגן',  'other',     true,  true,  '{"package":"magen_tagbatz","continuity":true,"same_platoon":true}'),
   -- התקפי: standing 8-soldier readiness crew (14:00-14:00) that also staffs
   -- the תגבצ windows and executes ad-hoc attack missions
   ( 4, 'התקפי',       'readiness', true,  true,  '{"open_for_attack":true,"covers":["תגבצ"]}'),
@@ -43,7 +43,7 @@ select 2, sp.id, t.start_time, 240, 1, false, date '2026-07-15'
 from (values (1),(2),(3),(4)) sp(id)
 cross join (values (time '06:00'),('10:00'),('14:00'),('18:00'),('22:00'),('02:00')) t(start_time);
 
--- מגן + תגבצ: 10 seats, 06:00–22:00
+-- מגן: 10 seats, 06:00–22:00
 insert into slot_templates (position_id, start_time, duration_minutes, seats, valid_from)
 values (3, '06:00', 960, 10, '2026-07-15');
 

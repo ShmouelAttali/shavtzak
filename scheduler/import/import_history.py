@@ -34,7 +34,7 @@ def nkey(s):
 IGNORE_SOLDIERS = {'', 'הפלוגה הקודמת', 'על בסיס מגן'}
 
 # position-name keywords -> canonical position name (order matters).
-# NB: 'מגן' MUST precede 'תגבצ' — the position 'מגן + תגבצ' contains both.
+# NB: 'מגן' MUST precede 'תגבצ' — the position 'מגן' contains both.
 POSITION_MAP = [
     ('גשש',        'כונן גשש'),
     ('תורן',       'תורנים'),
@@ -42,7 +42,7 @@ POSITION_MAP = [
     ('כרמל',       'כרמל חטיבה'),
     ('כוננות',     'התקפי'),
     ('חמל',        'חמל'),
-    ('מגן',        'מגן + תגבצ'),
+    ('מגן',        'מגן'),
     ('תגבצ',       'תגבצ'),
     ('סיור',       'סיור'),
 ]

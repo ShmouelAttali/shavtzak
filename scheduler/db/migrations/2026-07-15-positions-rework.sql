@@ -57,3 +57,6 @@ select sd.day,
 from schedule_days sd
 join slot_templates st
   on sd.day >= st.valid_from and (st.valid_to is null or sd.day <= st.valid_to);
+
+-- 2026-07-15 (later): rename the position to just מגן
+update positions set name = 'מגן' where id = 3;

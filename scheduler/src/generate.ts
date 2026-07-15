@@ -220,7 +220,7 @@ export async function generate(day: string): Promise<GenerateResult> {
   }
 
   // fill order: role-gated / commander-heavy first
-  const order = ['קצין מוצב', 'סיור', 'התקפי', 'מגן + תגבצ', 'עמדות הגנה', 'חפק', 'תורנים'];
+  const order = ['קצין מוצב', 'סיור', 'התקפי', 'מגן', 'עמדות הגנה', 'חפק', 'תורנים'];
   const level1 = new Map<number, number>();
   for (const [sid, pid] of ctx.lockedDay) level1.set(sid, pid);
 
@@ -344,10 +344,13 @@ export async function generate(day: string): Promise<GenerateResult> {
       .sort((a, b) => a.period[0] - b.period[0]);
     for (const slot of sorted) {
       const slotReadiness = ctx.positions.get(slot.positionId)!.missionClass === 'readiness';
+      const takenThisSlot = new Set<number>();   // H7: no duplicate soldier in a crew
       for (let seat = 1; seat <= slot.seats; seat++) {
         const commanderSeat = slot.commanderFirstSeat && seat === 1;
         const forNight = overlaps(slot.period, night);
-        const evals = group.map((st) => ({ st, fit: fits(st, slot.period, commanderSeat, slotReadiness) }));
+        const evals = group
+          .filter((st) => !takenThisSlot.has(st.soldier.id))
+          .map((st) => ({ st, fit: fits(st, slot.period, commanderSeat, slotReadiness) }));
         const primary = evals.filter((e) => e.fit.ok && !e.fit.fallback).map((e) => e.st);
         const fallback = evals.filter((e) => e.fit.ok && e.fit.fallback);
         let picked = rank(primary, pid, forNight, slot.period[0])[0];
@@ -378,6 +381,7 @@ export async function generate(day: string): Promise<GenerateResult> {
           issues.push(`${posName} ${fmtHM(slot.period[0])}-${fmtHM(slot.period[1])} מושב ${seat}${commanderSeat ? ' (מפקד)' : ''}: לא אויש`);
           continue;
         }
+        takenThisSlot.add(picked.soldier.id);
         const fit = fits(picked, slot.period, commanderSeat, slotReadiness);
         assign(picked, slot, seat, commanderSeat, [...viol, ...(viol.length ? [] : fit.reasons)]);
       }

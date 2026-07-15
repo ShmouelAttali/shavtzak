@@ -110,7 +110,7 @@ test('מגן continuity: same crew on consecutive days, all one platoon', async 
     select da.day::text, array_agg(da.soldier_id order by da.soldier_id) crew,
            count(distinct s.platoon) platoons
     from day_assignments da join soldiers s on s.id = da.soldier_id
-    where da.position_id = (select id from positions where name = 'מגן + תגבצ')
+    where da.position_id = (select id from positions where name = 'מגן')
       and da.day in ($1, $2) group by da.day order by da.day`, [D2, D3]);
   assert.equal(crews.length, 2);
   assert.deepEqual(crews[0].crew, crews[1].crew, 'crew must repeat (continuity)');
@@ -132,9 +132,9 @@ test('התקפי crew staffs the תגבצ windows (staffed_by)', async () => {
 
 test('seat override changes crew size, continuity keeps existing members', async () => {
   const D4 = '2026-08-04';
-  const magen = `(select id from positions where name = 'מגן + תגבצ')`;
+  const magen = `(select id from positions where name = 'מגן')`;
   await query(`insert into seat_overrides (position_id, valid_from, seats, note)
-               values ((select id from positions where name = 'מגן + תגבצ'), $1, 12, 'test')`, [D4]);
+               values ((select id from positions where name = 'מגן'), $1, 12, 'test')`, [D4]);
   const res = await generate(D4);
   await persist(res);
   const rows = await query(`
@@ -147,6 +147,14 @@ test('seat override changes crew size, continuity keeps existing members', async
   await query(`delete from seat_overrides where note = 'test'`);
   await query(`delete from shift_assignments where day = $1`, [D4]);
   await query(`delete from day_assignments where day = $1`, [D4]);
+});
+
+test('no duplicate soldier within a single slot/crew (H7)', async () => {
+  const dup = await query(`
+    select day, position_id, lower(period) s, soldier_id, count(*)
+    from shift_assignments where day between $1 and $2
+    group by 1,2,3,4 having count(*) > 1`, [D1, D3]);
+  assert.deepEqual(dup, []);
 });
 
 test('fairness spread: nights differ by at most 2 across active soldiers', async () => {

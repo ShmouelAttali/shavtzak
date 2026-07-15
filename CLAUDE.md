@@ -1,5 +1,34 @@
 # shavtzak — project guide
 
+## Current state (2026-07-15)
+
+Everything below is implemented, tested (34 tests: `scheduler/` 29 + root 5),
+and live against the shared Supabase project:
+
+- **Scheduler DB** on Supabase (schema in `scheduler/db/schema.sql`, template
+  seed in `db/seed.sql`, applied migrations in `db/migrations/`). Real history
+  imported (1,836 rows, 24/6–14/7) + `unavailability` built from the roster
+  matrix. Positions model after rework: **מגן** (10, continuity crew, one
+  מחלקה), **התקפי** (8, standing readiness 14:00–14:00, staffs the תגבצ
+  windows + ad-hoc attacks), תגבצ has no own crew (`staffed_by`), כרמל/גשש are
+  chained overlays, seat counts per date via `seat_overrides`.
+- **Generator + validator** (`scheduler/src/`): two-level generation per
+  SPEC §6-7, CLI `generate`/`validate`, drafts 15–19/7 generated (draft-only —
+  approval + sheet sync-out NOT built, by design).
+- **Viewer app**: two officer-only tabs — שבצק חדש (טיוטה) (date range +
+  צור שבצ"ק button → `api/draft.ts`) and הוגנות (Sunday-anchored week,
+  spread cards, sortable table → `api/fairness.ts`). Tab visibility also
+  granted by the `shavtzak_admins` DB table (`api/admins.ts`).
+- **Local dev**: `npm run dev:api` (port 3001) + `npm run dev` (vite 5173);
+  env in `.env`/`.env.local` (git-ignored). Vercel prod needs
+  `SCHEDULER_DATABASE_URL` set in project env — NOT done yet; nothing pushed
+  to the remote either.
+- **Read `scheduler/SPEC.md` before touching scheduling logic** — every rule
+  (H/R/T/P), the 14:00 day anchor, and the positions catalog live there.
+
+Next candidates: approval flow + sheet sync-out (`כל השבצק` append), lock/edit
+from UI, server-side Clerk auth on the API, מגן internal shift scheduling.
+
 Two parts in this repo:
 
 1. **Viewer app** (root): React + Vite + TS, RTL Hebrew, deployed on Vercel. Read-only
