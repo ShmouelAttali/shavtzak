@@ -105,6 +105,50 @@ test('regeneration is stable (same row count)', async () => {
   assert.equal(Number(n2[0].n), Number(n1[0].n));
 });
 
+test('מגן continuity: same crew on consecutive days, all one platoon', async () => {
+  const crews = await query(`
+    select da.day::text, array_agg(da.soldier_id order by da.soldier_id) crew,
+           count(distinct s.platoon) platoons
+    from day_assignments da join soldiers s on s.id = da.soldier_id
+    where da.position_id = (select id from positions where name = 'מגן + תגבצ')
+      and da.day in ($1, $2) group by da.day order by da.day`, [D2, D3]);
+  assert.equal(crews.length, 2);
+  assert.deepEqual(crews[0].crew, crews[1].crew, 'crew must repeat (continuity)');
+  for (const c of crews) assert.equal(Number(c.platoons), 1, 'crew must be one platoon');
+});
+
+test('התקפי crew staffs the תגבצ windows (staffed_by)', async () => {
+  const rows = await query(`
+    select count(*) total,
+           count(*) filter (where exists (
+             select 1 from day_assignments da
+             where da.day = sa.day and da.soldier_id = sa.soldier_id
+               and da.position_id = (select id from positions where name = 'התקפי'))) from_crew
+    from shift_assignments sa
+    where sa.day = $1 and sa.position_id = (select id from positions where name = 'תגבצ')`, [D3]);
+  assert.ok(Number(rows[0].total) > 0, 'תגבצ rows exist');
+  assert.equal(Number(rows[0].from_crew), Number(rows[0].total), 'all תגבצ rows from התקפי crew');
+});
+
+test('seat override changes crew size, continuity keeps existing members', async () => {
+  const D4 = '2026-08-04';
+  const magen = `(select id from positions where name = 'מגן + תגבצ')`;
+  await query(`insert into seat_overrides (position_id, valid_from, seats, note)
+               values ((select id from positions where name = 'מגן + תגבצ'), $1, 12, 'test')`, [D4]);
+  const res = await generate(D4);
+  await persist(res);
+  const rows = await query(`
+    select count(*) total,
+           count(*) filter (where exists (select 1 from day_assignments y
+             where y.day = $2 and y.soldier_id = da.soldier_id and y.position_id = ${magen})) kept
+    from day_assignments da where da.day = $1 and da.position_id = ${magen}`, [D4, D3]);
+  assert.equal(Number(rows[0].total), 12);
+  assert.equal(Number(rows[0].kept), 10);
+  await query(`delete from seat_overrides where note = 'test'`);
+  await query(`delete from shift_assignments where day = $1`, [D4]);
+  await query(`delete from day_assignments where day = $1`, [D4]);
+});
+
 test('fairness spread: nights differ by at most 2 across active soldiers', async () => {
   const rows = await query(`
     select min(night_count_7d) lo, max(night_count_7d) hi

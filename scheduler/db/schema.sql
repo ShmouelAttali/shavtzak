@@ -103,6 +103,17 @@ create table slot_templates (
   valid_to             date                              -- null = still active
 );
 
+-- Per-position seat-count changes over time (seats PER SLOT; latest
+-- valid_from <= day wins). Managed by hand — resolved by the day_slots view.
+create table seat_overrides (
+  id          smallint generated always as identity primary key,
+  position_id smallint not null references positions,
+  valid_from  date not null,
+  seats       smallint not null,
+  note        text,
+  unique (position_id, valid_from)
+);
+
 -- T4 chained duties as data.
 create table chain_rules (
   id               smallint primary key,
@@ -200,7 +211,7 @@ language sql stable as $$
   cross join generate_series(from_day, to_day, interval '1 day') d(day)
 $$;
 
--- Concrete slots per schedule day (template × calendar).
+-- Concrete slots per schedule day (template × calendar × seat overrides).
 create or replace view day_slots as
 select sd.day,
        st.id  as slot_template_id,
@@ -211,7 +222,10 @@ select sd.day,
                sd.day::timestamp + st.start_time::interval
                + case when st.start_time < time '14:00' then interval '1 day' else interval '0' end
                + make_interval(mins => st.duration_minutes)) as period,
-       st.seats,
+       coalesce((select o.seats from seat_overrides o
+                 where o.position_id = st.position_id and o.valid_from <= sd.day
+                 order by o.valid_from desc limit 1),
+                st.seats) as seats,
        st.commander_first_seat
 from schedule_days sd
 join slot_templates st

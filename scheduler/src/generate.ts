@@ -10,7 +10,7 @@ const REST_MIN = 4 * 60;          // H8 hard floor
 const REST_IDEAL = 8 * 60;        // R1
 const LONG_TASK = 4 * 60;         // R1: tasks longer than this need ideal rest
 const DAILY_CAP = 8;              // R4 (counted hours)
-const OVERLAY = new Set(['כוננות', 'כרמל חטיבה', 'כונן גשש']); // chained, not Level-1
+const OVERLAY = new Set(['כרמל חטיבה', 'כונן גשש']); // chained overlays, not Level-1
 const EMPTY_FAIRNESS: Fairness = {
   nightCount7d: 0, nightCountTotal: 0, missionHours7d: 0, weightedHours7d: 0,
   readinessHours7d: 0, trackerHoursTotal: 0, positionCounts: {},
@@ -27,6 +27,8 @@ interface SoldierState {
   /** readiness intervals (don't block, don't reset rest) */
   readiness: [Minutes, Minutes][];
   missionHoursToday: number;
+  /** clipped overlap of existing missions with today (incl. yesterday's tail) */
+  occupiedHoursToday: number;
   nightsToday: number;
   trackerMinutes: number;
   level1: number | null;      // position id
@@ -57,9 +59,17 @@ export async function generate(day: string): Promise<GenerateResult> {
       fairness: ctx.fairness.get(s.id) ?? EMPTY_FAIRNESS,
       intervals: ex.filter((a) => a.missionClass !== 'readiness').map((a) => a.period),
       readiness: ex.filter((a) => a.missionClass === 'readiness').map((a) => a.period),
+      // R4 accounting per SPEC §2: an assignment's counted hours belong to the
+      // schedule day containing its START (a daily mission's tail does NOT
+      // consume the next day's cap — else continuity crews could never repeat).
       missionHoursToday: ex
+        .filter((a) => a.missionClass !== 'readiness'
+          && a.period[0] >= dRange[0] && a.period[0] < dRange[1])
+        .reduce((h, a) => h + countedHours(a.period), 0),
+      // yesterday's tail still occupies the soldier physically today
+      occupiedHoursToday: ex
         .filter((a) => a.missionClass !== 'readiness' && overlaps(a.period, dRange))
-        .reduce((h, a) => h + countedHours([Math.max(a.period[0], dRange[0]), Math.min(a.period[1], dRange[1])]), 0),
+        .reduce((h, a) => h + hours([Math.max(a.period[0], dRange[0]), Math.min(a.period[1], dRange[1])]), 0),
       nightsToday: 0,
       trackerMinutes: 0,
       level1: null,
@@ -95,11 +105,12 @@ export async function generate(day: string): Promise<GenerateResult> {
   }
 
   type Fit = { ok: boolean; fallback: boolean; reasons: string[] };
-  function fits(st: SoldierState, slot: [Minutes, Minutes], commanderSeat: boolean): Fit {
+  function fits(st: SoldierState, slot: [Minutes, Minutes], commanderSeat: boolean, isReadiness = false): Fit {
     const s = st.soldier;
     const reasons: string[] = [];
     if (commanderSeat && !s.isCommander) return { ok: false, fallback: false, reasons: ['לא מפקד'] };
     if (isBlocked(s.id, slot)) return { ok: false, fallback: false, reasons: ['לא זמין'] };
+    if (isReadiness) return { ok: true, fallback: false, reasons: [] }; // R2: rest-transparent, uncapped
     if (st.intervals.some((iv) => overlaps(iv, slot))) return { ok: false, fallback: false, reasons: ['חפיפה'] };
     const counted = countedHours(slot);
     if (st.missionHoursToday + counted > DAILY_CAP + 0.01) {
@@ -114,12 +125,15 @@ export async function generate(day: string): Promise<GenerateResult> {
     return { ok: true, fallback: false, reasons };
   }
 
-  /** Rotation penalty per T1-T3 (lower = better). */
+  /** Rotation penalty per T1-T3 (lower = better). Continuity positions
+   *  (e.g. מגן) invert T1: staying in the same position is preferred. */
   function rotationPenalty(st: SoldierState, positionId: number): number {
-    const cls = ctx.positions.get(positionId)?.missionClass;
+    const pos = ctx.positions.get(positionId);
+    const cls = pos?.missionClass;
     const yPos = ctx.yesterdayPosition.get(st.soldier.id);
     const yCls = yPos !== undefined ? ctx.positions.get(yPos)?.missionClass : undefined;
     const streak = ctx.staticStreak.get(st.soldier.id) ?? 0;
+    if (pos?.config?.continuity) return yPos === positionId ? -2 : 0;
     if (streak >= 2 && cls === 'static') return 3;                 // T3 violation
     if (yPos === positionId) return 2;                             // T1
     if (yCls && cls && yCls === cls && cls !== 'other') return 1;  // T2
@@ -164,8 +178,25 @@ export async function generate(day: string): Promise<GenerateResult> {
     slotsByPosition.set(slot.positionId, list);
   }
 
-  /** distinct soldiers needed = max(concurrent seats, ceil(counted-hours / 8)) */
-  function demand(slots: Slot[]): number {
+  // Positions staffed by another position's crew (e.g. תגבצ ← התקפי): their
+  // slots detach from Level 1 and are filled by the host's group in Level 2.
+  const attachedByHost = new Map<number, Slot[]>();
+  for (const p of ctx.positions.values()) {
+    const hostName = p.config?.staffed_by;
+    if (!hostName || !slotsByPosition.has(p.id)) continue;
+    const hostId = ctx.positionByName.get(hostName);
+    if (hostId === undefined) { issues.push(`${p.name}: staffed_by לא מוכר (${hostName})`); continue; }
+    attachedByHost.set(hostId, [...(attachedByHost.get(hostId) ?? []), ...slotsByPosition.get(p.id)!]);
+    slotsByPosition.delete(p.id);
+  }
+
+  /** distinct soldiers needed = max(concurrent seats, ceil(counted-hours / 8)).
+   *  Readiness hosts (התקפי): crew size = concurrent seats of the readiness
+   *  slot itself; attached mission windows are done by that same crew. */
+  function demand(pid: number, slots: Slot[]): number {
+    if (ctx.positions.get(pid)?.missionClass === 'readiness') {
+      return Math.max(...slots.map((s) => s.seats), 0);
+    }
     const totalHours = slots.reduce((h, s) => h + countedHours(s.period) * s.seats, 0);
     let concurrent = 0;
     for (const s of slots) {
@@ -175,9 +206,12 @@ export async function generate(day: string): Promise<GenerateResult> {
     return Math.max(concurrent, Math.ceil(totalHours / DAILY_CAP - 0.01));
   }
 
-  /** commanders needed: one per commander-first slot start */
-  const commanderQuota = (slots: Slot[]) =>
-    new Set(slots.filter((s) => s.commanderFirstSeat).map((s) => s.period[0])).size;
+  /** commanders needed: one per commander-first slot start of the position's
+   *  own slots, +1 when attached slots need a commander (same crew covers all
+   *  attached windows, so one commander suffices for them). */
+  const commanderQuota = (own: Slot[], attached: Slot[]) =>
+    new Set(own.filter((s) => s.commanderFirstSeat).map((s) => s.period[0])).size
+    + (attached.some((s) => s.commanderFirstSeat) ? 1 : 0);
 
   // honor Level-1 locks first
   for (const [sid, pid] of ctx.lockedDay) {
@@ -185,45 +219,90 @@ export async function generate(day: string): Promise<GenerateResult> {
     if (st) st.level1 = pid;
   }
 
-  // fill order: role-gated / commander-heavy first
-  const order = ['קצין מוצב', 'סיור', 'תגבצ', 'עמדות הגנה', 'מגן + תגבצ', 'חפק', 'תורנים'];
+  // fill order: role-gated / commander-heavy / continuity first
+  const order = ['קצין מוצב', 'סיור', 'התקפי', 'מגן + תגבצ', 'עמדות הגנה', 'חפק', 'תורנים'];
   const level1 = new Map<number, number>();
   for (const [sid, pid] of ctx.lockedDay) level1.set(sid, pid);
 
   for (const posName of order) {
     const pid = ctx.positionByName.get(posName);
     if (pid === undefined || !slotsByPosition.has(pid)) continue;
+    const pos = ctx.positions.get(pid)!;
     const slots = slotsByPosition.get(pid)!;
-    let need = demand(slots) - [...level1.values()].filter((p) => p === pid).length;
-    let cmdNeed = commanderQuota(slots);
+    const attached = attachedByHost.get(pid) ?? [];
+    let need = demand(pid, slots) - [...level1.values()].filter((p) => p === pid).length;
+    let cmdNeed = commanderQuota(slots, attached);
 
-    const free = [...state.values()].filter((st) => {
+    const eligible = (st: SoldierState) => {
       const s = st.soldier;
       if (st.level1 !== null || fullyBlocked(s.id)) return false;
       if (posName === 'קצין מוצב' && !s.isSeniorCommander) return false;         // H6
       if (posName === 'עמדות הגנה' && s.isSeniorCommander) return false;         // H6
-      // boundary rule: heavily occupied by yesterday's tail -> rest today
-      if (st.missionHoursToday >= DAILY_CAP / 2) return false;
+      // boundary rule: heavily occupied by yesterday's tail -> rest today.
+      // Continuity positions are exempt: their own tail is exactly what a
+      // returning crew member carries (next slot starts after it ends).
+      if (!pos.config?.continuity && st.occupiedHoursToday >= DAILY_CAP / 2) return false;
       return true;
-    });
+    };
 
-    // For positions whose work is anchored to few starts (תגבצ, daily
-    // missions) rank by rest before the earliest slot too — avoids picking
-    // soldiers who came off a shift 3h before the position starts.
-    const starts = [...new Set(slots.map((s) => s.period[0]))];
-    const atStart = starts.length <= 2 ? Math.min(...starts) : undefined;
+    const pick = (st: SoldierState) => {
+      st.level1 = pid; level1.set(st.soldier.id, pid); need--;
+      if (st.soldier.isCommander && cmdNeed > 0) cmdNeed--;
+    };
+
+    // continuity (מגן): keep yesterday's crew first, unless seats shrank or
+    // a member is unavailable; manual/locked changes always win (H-locks).
+    if (pos.config?.continuity) {
+      const returning = [...state.values()].filter((st) =>
+        eligible(st) && ctx.yesterdayPosition.get(st.soldier.id) === pid);
+      for (const st of rank(returning, pid, false)) {
+        if (need <= 0) break;
+        pick(st);
+      }
+    }
+
+    let free = [...state.values()].filter(eligible);
+
+    // same-platoon crews (מגן): constrain to one מחלקה — the platoon of the
+    // current members if any, else the platoon with the most free candidates.
+    if (pos.config?.same_platoon && need > 0) {
+      const current = [...state.values()].filter((st) => st.level1 === pid);
+      let platoon: string | undefined;
+      if (current.length) {
+        const counts = new Map<string, number>();
+        for (const st of current) counts.set(st.soldier.platoon, (counts.get(st.soldier.platoon) ?? 0) + 1);
+        platoon = [...counts.entries()].sort((a, b) => b[1] - a[1])[0][0];
+      } else {
+        const counts = new Map<string, number>();
+        for (const st of free) counts.set(st.soldier.platoon, (counts.get(st.soldier.platoon) ?? 0) + 1);
+        platoon = [...counts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0];
+      }
+      if (platoon) {
+        const same = free.filter((st) => st.soldier.platoon === platoon);
+        if (same.length >= need) free = same;
+        else issues.push(`${posName}: אין מספיק חיילים ממחלקה ${platoon} — הצוות מעורב`);
+      }
+    }
+
+    // For positions whose work is anchored to few starts (daily missions)
+    // rank by rest before the earliest MISSION slot — readiness slots are
+    // rest-transparent and must not mask the hint (e.g. התקפי's 24h slot).
+    const missionSlots = [...slots, ...attached].filter((s) =>
+      ctx.positions.get(s.positionId)!.missionClass !== 'readiness');
+    const starts = [...new Set(missionSlots.map((s) => s.period[0]))];
+    const atStart = starts.length > 0 && starts.length <= 2 ? Math.min(...starts) : undefined;
 
     // commanders first (P5 quota), then everyone remaining
-    if (cmdNeed > 0) {
-      for (const st of rank(free.filter((c) => c.soldier.isCommander), pid, false, atStart)) {
+    if (cmdNeed > 0 && need > 0) {
+      for (const st of rank(free.filter((c) => c.soldier.isCommander && c.level1 === null), pid, false, atStart)) {
         if (cmdNeed <= 0 || need <= 0) break;
-        st.level1 = pid; level1.set(st.soldier.id, pid); need--; cmdNeed--;
+        pick(st);
       }
       if (cmdNeed > 0) issues.push(`${posName}: חסרים ${cmdNeed} מפקדים בשיבוץ היומי`);
     }
     for (const st of rank(free.filter((c) => c.level1 === null), pid, false, atStart)) {
       if (need <= 0) break;
-      st.level1 = pid; level1.set(st.soldier.id, pid); need--;
+      pick(st);
     }
     if (need > 0) issues.push(`${posName}: חסרים ${need} חיילים`);
   }
@@ -255,12 +334,15 @@ export async function generate(day: string): Promise<GenerateResult> {
   for (const [pid, slots] of slotsByPosition) {
     const posName = ctx.positions.get(pid)!.name;
     const group = [...state.values()].filter((st) => st.level1 === pid);
-    const sorted = [...slots].sort((a, b) => a.period[0] - b.period[0]);
+    // attached slots (e.g. תגבצ windows) are filled from the host's crew
+    const sorted = [...slots, ...(attachedByHost.get(pid) ?? [])]
+      .sort((a, b) => a.period[0] - b.period[0]);
     for (const slot of sorted) {
+      const slotReadiness = ctx.positions.get(slot.positionId)!.missionClass === 'readiness';
       for (let seat = 1; seat <= slot.seats; seat++) {
         const commanderSeat = slot.commanderFirstSeat && seat === 1;
         const forNight = overlaps(slot.period, night);
-        const evals = group.map((st) => ({ st, fit: fits(st, slot.period, commanderSeat) }));
+        const evals = group.map((st) => ({ st, fit: fits(st, slot.period, commanderSeat, slotReadiness) }));
         const primary = evals.filter((e) => e.fit.ok && !e.fit.fallback).map((e) => e.st);
         const fallback = evals.filter((e) => e.fit.ok && e.fit.fallback);
         let picked = rank(primary, pid, forNight, slot.period[0])[0];
@@ -270,7 +352,7 @@ export async function generate(day: string): Promise<GenerateResult> {
           const resters = [...state.values()].filter((st) => st.level1 === restId
             && (!commanderSeat || st.soldier.isCommander));
           const fitting = resters.filter((st) => {
-            const f = fits(st, slot.period, commanderSeat);
+            const f = fits(st, slot.period, commanderSeat, slotReadiness);
             return f.ok && !f.fallback;
           });
           const pulled = rank(fitting, pid, forNight, slot.period[0])[0];
@@ -291,7 +373,7 @@ export async function generate(day: string): Promise<GenerateResult> {
           issues.push(`${posName} ${fmtHM(slot.period[0])}-${fmtHM(slot.period[1])} מושב ${seat}${commanderSeat ? ' (מפקד)' : ''}: לא אויש`);
           continue;
         }
-        const fit = fits(picked, slot.period, commanderSeat);
+        const fit = fits(picked, slot.period, commanderSeat, slotReadiness);
         assign(picked, slot, seat, commanderSeat, [...viol, ...(viol.length ? [] : fit.reasons)]);
       }
     }
@@ -319,9 +401,7 @@ export async function generate(day: string): Promise<GenerateResult> {
     }
 
     const tStart = slotStart(day, rule.targetStart);
-    // konenut windows subdivide the daily readiness slot (SPEC §2) — always
-    // synthesize the 8h window instead of matching the 24h template slot.
-    let targetSlots = targetName === 'כוננות' ? [] : ctx.slots
+    let targetSlots = ctx.slots
       .filter((s) => s.positionId === rule.targetPosition && s.period[0] === tStart)
       .sort((a, b) => (b.subName === 'מפקד כרמל חטיבה' ? 1 : 0) - (a.subName === 'מפקד כרמל חטיבה' ? 1 : 0));
     if (targetSlots.length === 0) {
@@ -332,7 +412,9 @@ export async function generate(day: string): Promise<GenerateResult> {
     }
 
     let pool = crew.map((id) => state.get(id)!).filter(Boolean)
-      .filter((st) => !isBlocked(st.soldier.id, targetSlots[0].period));
+      .filter((st) => !isBlocked(st.soldier.id, targetSlots[0].period))
+      // a soldier already on a mission during the window can't stand by for it
+      .filter((st) => !st.intervals.some((iv) => overlaps(iv, targetSlots[0].period)));
 
     if (rule.pick === 'min_tracker_hours') {
       pool.sort((a, b) => (a.fairness.trackerHoursTotal + a.trackerMinutes / 60)

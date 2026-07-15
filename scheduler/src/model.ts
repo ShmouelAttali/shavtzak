@@ -19,6 +19,8 @@ export interface Position {
   missionClass: 'static' | 'dynamic' | 'readiness' | 'rest' | 'other';
   isScheduled: boolean;
   blocksDay: boolean;
+  /** jsonb flags: continuity, same_platoon, staffed_by, open_for_attack... */
+  config: Record<string, any>;
 }
 
 export interface Slot {

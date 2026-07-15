@@ -31,9 +31,9 @@ History shows 39 distinct position names over 20 days; templates change mid-depl
 |---|---|---|
 | סיור | 4 seats × 06:00, 14:00, 22:00 | 8h |
 | עמדות הגנה (שג/בונקר/מזרחית/דרומית) | 4 posts × 06,10,14,18,22,02 | 4h |
-| מגן + תגבצ | 10 seats, 06:00–22:00 | daily |
-| כוננות (התקפי) | 8 seats | **14:00–14:00** readiness |
-| תגבצ | 8 × 06:30–09:00, 8 × 17:00–22:00 | per range |
+| מגן + תגבצ | 10 seats, 06:00–22:00 | daily; **continuity crew, one מחלקה** (kept day-to-day unless seat count or a manual change intervenes) |
+| התקפי | 8 seats | **14:00–14:00** standing readiness crew; also **staffs the תגבצ windows** and executes ad-hoc attack missions |
+| תגבצ | 8 × 06:30–09:00, 8 × 17:00–22:00 | staffed by the התקפי crew (`staffed_by`) — no own Level-1 crew |
 | חפק | 4 seats, 06:00–22:00 | daily |
 | תורנים | 2 seats, 07:30–22:00 | daily |
 | כונן גשש | chained to סיור — see T4c | windows: 22–07, 07–14, 14–22 |
@@ -93,7 +93,9 @@ crew first.
 - **T3**: 2+ consecutive static-only days → must break with a dynamic day (strong).
 - **T4 Chained duties** — deterministic staffing; the crew that just descended covers the standby:
   - **T4a כרמל חטיבה**: carmel shift starting at hour H = the 4 soldiers who finished עמדות הגנה at H (defense 06–10 → carmel 10–14, …, 18–22 → 22–06; previous day 02–06 → carmel 06–10). Commander seat = highest רובאי among them. Min staffing 3 regular + 1 commander (validated).
-  - **T4b כוננות התקפית**: konenut window ← patrol crew that just finished (סיור 22–06 → konenut 06–14; סיור 06–14 → 14–22; סיור 14–22 → 22–06) — windows are sub-windows within the 14:00–14:00 konenut day.
+  - **T4b כוננות התקפית** — *retired*: the התקפי position is a standing Level-1
+    crew (8 soldiers, 14:00–14:00) rather than patrol-chained windows; it covers
+    readiness, the תגבצ windows, and ad-hoc attack missions.
   - **T4c כונן גשש**: tied to סיור descents, **one soldier per descending patrol crew**:
     - סיור ירד ב-22:00 → כונן גשש 22:00–07:00
     - סיור ירד ב-06:00 → כונן גשש 07:00–14:00
@@ -169,6 +171,10 @@ Principles:
 - **Small hand-managed source tables; derived data = views.** e.g. no stored presence
   matrix — sparse `unavailability` periods; no row ⇒ soldier available; the per-day
   presence matrix and all fairness counters are views.
+- **Seat counts change over time via `seat_overrides`** (position, valid_from,
+  seats-per-slot; latest wins) — resolved by the `day_slots` view, managed by hand.
+- **Position behavior flags live in `positions.config` jsonb**: `continuity`,
+  `same_platoon` (מגן), `staffed_by` (תגבצ ← התקפי), `open_for_attack`.
 - Facts (`shift_assignments`) and decisions (`day_assignments`, locks) are tables.
 - Double-booking is impossible at the DB level: `EXCLUDE USING gist
   (soldier_id WITH =, period WITH &&) WHERE (blocks_overlap)` on `shift_assignments`

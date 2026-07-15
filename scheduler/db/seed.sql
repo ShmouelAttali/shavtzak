@@ -7,17 +7,18 @@
 insert into positions (id, name, mission_class, is_scheduled, blocks_day, config) values
   ( 1, 'סיור',        'dynamic',   true,  false, '{}'),
   ( 2, 'עמדות הגנה',  'static',    true,  false, '{}'),
-  ( 3, 'מגן + תגבצ',  'other',     true,  true,  '{"package":"magen_tagbatz"}'),
-  ( 4, 'כוננות',      'readiness', true,  true,  '{"open_for_attack":true}'),
-  ( 5, 'תגבצ',        'dynamic',   true,  false, '{}'),
+  ( 3, 'מגן + תגבצ',  'other',     true,  true,  '{"package":"magen_tagbatz","continuity":true,"same_platoon":true}'),
+  -- התקפי: standing 8-soldier readiness crew (14:00-14:00) that also staffs
+  -- the תגבצ windows and executes ad-hoc attack missions
+  ( 4, 'התקפי',       'readiness', true,  true,  '{"open_for_attack":true,"covers":["תגבצ"]}'),
+  ( 5, 'תגבצ',        'dynamic',   true,  false, '{"staffed_by":"התקפי"}'),
   ( 6, 'חפק',         'other',     true,  true,  '{}'),
   ( 7, 'תורנים',      'static',    true,  true,  '{}'),
   ( 8, 'כונן גשש',    'readiness', true,  false, '{"tracker":true}'),
   ( 9, 'קצין מוצב',   'other',     true,  true,  '{}'),
   (10, 'כרמל חטיבה',  'readiness', true,  false, '{}'),
   (11, 'חמל',         'other',     false, false, '{}'),
-  (12, 'מנוחה',       'rest',      true,  false, '{}'),
-  (13, 'התקפי',       'dynamic',   true,  false, '{"attack":true}');
+  (12, 'מנוחה',       'rest',      true,  false, '{}');
 
 -- ── Sub-positions ───────────────────────────────────────────────────────────
 insert into sub_positions (id, position_id, name, required_role) values
@@ -46,7 +47,7 @@ cross join (values (time '06:00'),('10:00'),('14:00'),('18:00'),('22:00'),('02:0
 insert into slot_templates (position_id, start_time, duration_minutes, seats, valid_from)
 values (3, '06:00', 960, 10, '2026-07-15');
 
--- כוננות: 8 seats, full schedule day 14:00–14:00
+-- התקפי: 8 seats, full readiness day 14:00–14:00 (crew also staffs תגבצ windows)
 insert into slot_templates (position_id, start_time, duration_minutes, seats, valid_from)
 values (4, '14:00', 1440, 8, '2026-07-15');
 
@@ -90,10 +91,7 @@ insert into chain_rules (id, target_position, target_start, source_position, sou
   ( 3, 10, '14:00', 2, '10:00', -1, 'all'),  -- defense 10:00 belongs to previous schedule day
   ( 4, 10, '18:00', 2, '14:00',  0, 'all'),
   ( 5, 10, '22:00', 2, '18:00',  0, 'all'),
--- T4b: attack-readiness window ← patrol crew that just finished
-  ( 6,  4, '06:00', 1, '22:00',  0, 'all'),
-  ( 7,  4, '14:00', 1, '06:00', -1, 'all'),  -- patrol 06:00 belongs to previous schedule day
-  ( 8,  4, '22:00', 1, '14:00',  0, 'all'),
+-- (T4b konenut-from-patrol chains removed: התקפי is a standing Level-1 crew)
 -- T4c: tracker window ← one soldier from the descending patrol crew
   ( 9,  8, '22:00', 1, '14:00',  0, 'min_tracker_hours'),  -- ירד ב-22:00 → 22:00–07:00
   (10,  8, '07:00', 1, '22:00',  0, 'min_tracker_hours'),  -- ירד ב-06:00 → 07:00–14:00

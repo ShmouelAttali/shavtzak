@@ -24,7 +24,7 @@ export async function loadContext(day: string): Promise<Context> {
   const [, posRows, soldierRows, fairRows, slotRows, existRows, ydayRows,
     blockRows, lockShiftRows, lockDayRows, chainRows, configRows] = await multiQuery([
     `insert into schedule_days (day) values ('${day}') on conflict do nothing`,
-    `select id, name, mission_class, is_scheduled, blocks_day from positions`,
+    `select id, name, mission_class, is_scheduled, blocks_day, config from positions`,
     `select s.id, s.full_name, s.platoon, coalesce(s.role,'') role,
             coalesce(s.rifle_level,0) rifle,
             coalesce(array_agg(q.qualification) filter (where q.qualification is not null), '{}') quals
@@ -59,6 +59,7 @@ export async function loadContext(day: string): Promise<Context> {
     positions.set(p.id, {
       id: p.id, name: p.name, missionClass: p.mission_class,
       isScheduled: p.is_scheduled, blocksDay: p.blocks_day,
+      config: p.config ?? {},
     });
     positionByName.set(p.name, p.id);
   }
