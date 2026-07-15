@@ -8,6 +8,19 @@ function todayIso(): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
+/** The exact window soldier_fairness(date) checks: [date-7 14:00, date 14:00) */
+function windowLabel(dateIso: string): string {
+  const he = (iso: string) => {
+    const [y, m, d] = iso.split('-');
+    return `${d}/${m}/${y}`;
+  };
+  const start = new Date(`${dateIso}T12:00:00`);
+  start.setDate(start.getDate() - 7);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  const startIso = `${start.getFullYear()}-${pad(start.getMonth() + 1)}-${pad(start.getDate())}`;
+  return `${he(startIso)} 14:00 ← ${he(dateIso)} 14:00`;
+}
+
 type SortKey = keyof Pick<FairnessRow,
   'name' | 'platoon' | 'nightCount7d' | 'weightedHours7d' | 'missionHours7d'
   | 'readinessHours7d' | 'nightCountTotal' | 'trackerHoursTotal'>;
@@ -89,6 +102,9 @@ export function FairnessView() {
           <input type="date" value={date} onChange={(e) => e.target.value && setDate(e.target.value)}
             className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm font-semibold text-slate-800 shadow-sm focus:border-blue-500 focus:outline-none" />
         </label>
+        <span className="rounded-lg bg-slate-100 px-3 py-2 text-sm font-semibold text-slate-700" dir="rtl">
+          חלון נבדק: {windowLabel(date)}
+        </span>
         {allPlatoons.map((p) => (
           <label key={p} className="flex items-center gap-1 text-sm text-gray-600 select-none">
             <input type="checkbox" checked={!platoons.size || platoons.has(p)}
