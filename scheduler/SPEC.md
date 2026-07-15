@@ -55,7 +55,8 @@ assigns them מנוחה on D+1.
 
 - **H1 Availability**: soldier with an active unavailability period (חופש, לא מגויס, short exits) can't be assigned during it. Partial-day periods (יציאה בערב, חזרה ב14:00) block only their window.
 - **H2 Excluded pools**: מפלג / חמ"ל members not scheduled (flag on soldier).
-- **H3 No overlap**: no two time-overlapping assignments per soldier. Exception: readiness ↔ attack/תגבצ (the התקפי crew executes those during its readiness day).
+- **H3 No overlap**: no two time-overlapping assignments per soldier. Exception: readiness ↔ attack/תגבצ (the התקפי crew executes those during its readiness day). Enforced at the DB level for mission rows (`no_double_booking` EXCLUDE constraint), in the generator, and by the validator.
+- **H3b No double standby**: a soldier cannot hold two overlapping readiness duties (e.g. התקפי and כרמל חטיבה simultaneously) — readiness rows don't block at the DB level, so this is enforced by the generator's chain pool and the validator (`double_readiness`).
 - **H4 One position per schedule day**: exactly one Level-1 position (or מנוחה) per soldier per 14:00–14:00 day.
 - **H5 Full-day blockers**: קצין מוצב and "יומי" tasks block the soldier for the rest of the schedule day. התקפי (14:00–14:00 readiness) blocks regular missions all day; its own תגבצ windows and attack missions are exempt.
 - **H6 Role gates**: קצין מוצב → סמל/מ"מ only. First seat of סיור/תגבצ/התקפי crew → commander. מ"מ/סמל never on עמדות הגנה.
@@ -152,8 +153,8 @@ night_count first, weighted_hours second, per-position counts third.
 ## 8. Validation (post-generation & on manual edit)
 
 Checks per day (parity with the Apps Script validator): rest ≥8h incl. previous day,
-overlaps, chained-duty sourcing (carmel/konenut/tracker crews match their source
-shifts), carmel min staffing, ≤8h/day, assignment vs availability,
+overlaps, double standby (H3b), chained-duty sourcing (carmel/tracker crews match
+their source shifts), carmel min staffing, ≤8h/day, assignment vs availability,
 present-but-unassigned, unknown soldier names. Results snapshot stored on
 `schedule_days.validation` (jsonb) — written automatically after every generation
 (`persist`) and available via CLI `validate <day>`.
