@@ -29,6 +29,19 @@ export SCHEDULER_DATABASE_URL='postgres://USER:PASSWORD@HOST:5432/postgres'
 - **Local dev**: leave unset — defaults to the Docker container from "Try it" below
   (`postgres://postgres:test@localhost:55432/postgres`).
 
+## Tests
+
+```bash
+npm test          # 25 tests: time helpers, generator invariants, validator rules
+```
+
+Integration tests run against a dedicated `shavtzak_test` database inside the
+local Docker container (see "Try it") — **never against Supabase**. They rebuild
+the schema, seed a synthetic 60-soldier roster, generate 3 days, and assert the
+SPEC invariants (no double-booking, rest floor, daily cap, chain sourcing,
+single tracker, lock survival, H1/H4, fairness spread) plus validator
+negative cases.
+
 ## Generate a schedule
 
 ```bash

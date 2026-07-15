@@ -5,13 +5,15 @@ import http from 'node:http';
 import { parse } from 'node:url';
 import { readFileSync } from 'node:fs';
 
-// minimal .env.local loader (no dotenv dep)
-try {
-  for (const line of readFileSync(new URL('../.env.local', import.meta.url), 'utf8').split('\n')) {
-    const m = line.match(/^([A-Z_]+)=(.*)$/);
-    if (m && !process.env[m[1]]) process.env[m[1]] = m[2];
-  }
-} catch { /* no .env.local */ }
+// minimal .env / .env.local loader (no dotenv dep; .env.local wins)
+for (const f of ['../.env', '../.env.local']) {
+  try {
+    for (const line of readFileSync(new URL(f, import.meta.url), 'utf8').split('\n')) {
+      const m = line.match(/^([A-Z_]+)=(.*)$/);
+      if (m) process.env[m[1]] = m[2];
+    }
+  } catch { /* file absent */ }
+}
 
 const handlers: Record<string, () => Promise<{ default: Function }>> = {
   '/api/soldiers': () => import('../api/soldiers.js'),
