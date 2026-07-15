@@ -219,10 +219,26 @@ export async function generate(day: string): Promise<GenerateResult> {
     if (st) st.level1 = pid;
   }
 
-  // fill order: role-gated / commander-heavy / continuity first
+  // fill order: role-gated / commander-heavy first
   const order = ['קצין מוצב', 'סיור', 'התקפי', 'מגן + תגבצ', 'עמדות הגנה', 'חפק', 'תורנים'];
   const level1 = new Map<number, number>();
   for (const [sid, pid] of ctx.lockedDay) level1.set(sid, pid);
+
+  // Continuity pre-pass (מגן): returning crew members are reserved BEFORE any
+  // other position can grab them — the crew repeats day-to-day unless seats
+  // shrink, a member is unavailable, or a manual/locked change intervenes.
+  for (const pos of ctx.positions.values()) {
+    if (!pos.config?.continuity || !slotsByPosition.has(pos.id)) continue;
+    let room = demand(pos.id, slotsByPosition.get(pos.id)!)
+      - [...level1.values()].filter((p) => p === pos.id).length;
+    const returning = [...state.values()].filter((st) =>
+      st.level1 === null && !fullyBlocked(st.soldier.id)
+      && ctx.yesterdayPosition.get(st.soldier.id) === pos.id);
+    for (const st of rank(returning, pos.id, false)) {
+      if (room <= 0) break;
+      st.level1 = pos.id; level1.set(st.soldier.id, pos.id); room--;
+    }
+  }
 
   for (const posName of order) {
     const pid = ctx.positionByName.get(posName);
@@ -249,17 +265,6 @@ export async function generate(day: string): Promise<GenerateResult> {
       st.level1 = pid; level1.set(st.soldier.id, pid); need--;
       if (st.soldier.isCommander && cmdNeed > 0) cmdNeed--;
     };
-
-    // continuity (מגן): keep yesterday's crew first, unless seats shrank or
-    // a member is unavailable; manual/locked changes always win (H-locks).
-    if (pos.config?.continuity) {
-      const returning = [...state.values()].filter((st) =>
-        eligible(st) && ctx.yesterdayPosition.get(st.soldier.id) === pid);
-      for (const st of rank(returning, pid, false)) {
-        if (need <= 0) break;
-        pick(st);
-      }
-    }
 
     let free = [...state.values()].filter(eligible);
 

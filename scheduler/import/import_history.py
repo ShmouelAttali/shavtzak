@@ -33,16 +33,17 @@ def nkey(s):
 
 IGNORE_SOLDIERS = {'', 'הפלוגה הקודמת', 'על בסיס מגן'}
 
-# position-name keywords -> canonical position name (order matters)
+# position-name keywords -> canonical position name (order matters).
+# NB: 'מגן' MUST precede 'תגבצ' — the position 'מגן + תגבצ' contains both.
 POSITION_MAP = [
     ('גשש',        'כונן גשש'),
     ('תורן',       'תורנים'),
     ('קצין מוצב',  'קצין מוצב'),
     ('כרמל',       'כרמל חטיבה'),
-    ('כוננות',     'כוננות'),
+    ('כוננות',     'התקפי'),
     ('חמל',        'חמל'),
-    ('תגבצ',       'תגבצ'),
     ('מגן',        'מגן + תגבצ'),
+    ('תגבצ',       'תגבצ'),
     ('סיור',       'סיור'),
 ]
 DEFENSE_POSTS = {'שג', 'בונקר', 'מזרחית', 'דרומית'}
@@ -93,7 +94,7 @@ def infer_period(date, position, typ, time_text, canon):
         return at(7, 30), at(22, 0)
 
     if 'יומי' in t or not t:
-        if canon in ('כוננות', 'כרמל חטיבה'):
+        if canon in ('התקפי', 'כרמל חטיבה'):
             return at(6, 0), at(6, 0, 1)          # readiness full day (old anchor)
         return at(6, 0), at(22, 0)
 
@@ -194,7 +195,7 @@ def main():
         print(f"insert into schedule_days (day, status) values ('{d}','published')"
               ' on conflict do nothing;', file=out)
     for soldier, canon, (start, end) in assignments:
-        blocks = 'false' if canon in ('כוננות', 'כרמל חטיבה', 'כונן גשש') else 'true'
+        blocks = 'false' if canon in ('התקפי', 'כרמל חטיבה', 'כונן גשש') else 'true'
         print(f'insert into shift_assignments (day, position_id, soldier_id, period, source, blocks_overlap)'
               f' select schedule_day_of({q(start.isoformat(sep=" "))}::timestamp),'
               f" coalesce((select id from positions where name = {q(canon)}), 99),"
