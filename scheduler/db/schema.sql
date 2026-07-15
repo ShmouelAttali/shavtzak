@@ -166,6 +166,14 @@ create index shift_assignments_soldier on shift_assignments (soldier_id);
 alter table shift_assignments add constraint no_double_booking
   exclude using gist (soldier_id with =, period with &&) where (blocks_overlap);
 
+-- Emails allowed to see the scheduler tabs in the viewer app (SPEC §12),
+-- independent of sheet role. Managed by hand in the Supabase dashboard.
+create table shavtzak_admins (
+  email    text primary key,     -- lowercased
+  note     text,
+  added_at timestamp not null default now()
+);
+
 create table sheet_sync_log (
   id         bigint generated always as identity primary key,
   direction  text not null check (direction in ('import','export')),

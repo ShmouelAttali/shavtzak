@@ -21,6 +21,7 @@ const handlers: Record<string, () => Promise<{ default: Function }>> = {
   '/api/exits': () => import('../api/exits.js'),
   '/api/draft': () => import('../api/draft.js'),
   '/api/fairness': () => import('../api/fairness.js'),
+  '/api/admins': () => import('../api/admins.js'),
 };
 
 http.createServer(async (req, res) => {
