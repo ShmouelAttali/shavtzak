@@ -97,6 +97,27 @@ export async function validateDay(day: string): Promise<Finding[]> {
     }
   }
 
+  // ── 2b: two simultaneous standbys (readiness × readiness) ────────────────
+  const readinessBySoldier = new Map<number, Row[]>();
+  for (const r of [...prev, ...today]) {
+    if (r.missionClass !== 'readiness') continue;
+    (readinessBySoldier.get(r.soldierId)
+      ?? readinessBySoldier.set(r.soldierId, []).get(r.soldierId)!).push(r);
+  }
+  for (const [sid, list] of readinessBySoldier) {
+    list.sort((a, b) => a.period[0] - b.period[0]);
+    for (let i = 1; i < list.length; i++) {
+      const a = list[i - 1], b = list[i];
+      if (b.period[0] < dRange[0]) continue;
+      if (overlaps(a.period, b.period) && a.positionName !== b.positionName) {
+        findings.push({
+          severity: 'error', rule: 'double_readiness', soldierId: sid,
+          message: `${b.soldierName}: שתי כוננויות במקביל — ${a.positionName} ${fmtHM(a.period[0])}-${fmtHM(a.period[1])} וגם ${b.positionName} ${fmtHM(b.period[0])}-${fmtHM(b.period[1])}`,
+        });
+      }
+    }
+  }
+
   // ── 3: chain sourcing ────────────────────────────────────────────────────
   for (const cr of chainRows as any[]) {
     const tStart = slotStart(day, String(cr.target_start).slice(0, 5));

@@ -8,10 +8,12 @@ const D = '2026-09-01';
 
 async function manualRow(name: string, position: string, start: string, end: string) {
   const sid = await soldierId(name);
+  // readiness rows don't block overlaps (mirrors the generator)
   await query(`
-    insert into shift_assignments (day, position_id, soldier_id, period, source)
-    values ($1, (select id from positions where name = $2), $3,
-            tsrange($4::timestamp, $5::timestamp), 'manual')`,
+    insert into shift_assignments (day, position_id, soldier_id, period, source, blocks_overlap)
+    select $1, p.id, $3, tsrange($4::timestamp, $5::timestamp), 'manual',
+           p.mission_class <> 'readiness'
+    from positions p where p.name = $2`,
     [D, position, sid, start, end]);
 }
 
@@ -58,6 +60,13 @@ test('assignment during unavailability reported', async () => {
   await manualRow('חייל 34', 'חפק', '2026-09-02 06:00', '2026-09-02 12:00');
   const f = await validateDay(D);
   assert.ok(f.some((x) => x.rule === 'availability' && x.message.includes('חייל 34')), JSON.stringify(f));
+});
+
+test('two simultaneous standbys reported (double_readiness)', async () => {
+  await manualRow('חייל 36', 'התקפי', '2026-09-01 14:00', '2026-09-02 14:00');
+  await manualRow('חייל 36', 'כרמל חטיבה', '2026-09-01 22:00', '2026-09-02 06:00');
+  const f = await validateDay(D);
+  assert.ok(f.some((x) => x.rule === 'double_readiness' && x.message.includes('חייל 36')), JSON.stringify(f));
 });
 
 test('R5: post-attack morning counts as rest (no error for 14:00 start)', async () => {

@@ -423,7 +423,9 @@ export async function generate(day: string): Promise<GenerateResult> {
     let pool = crew.map((id) => state.get(id)!).filter(Boolean)
       .filter((st) => !isBlocked(st.soldier.id, targetSlots[0].period))
       // a soldier already on a mission during the window can't stand by for it
-      .filter((st) => !st.intervals.some((iv) => overlaps(iv, targetSlots[0].period)));
+      .filter((st) => !st.intervals.some((iv) => overlaps(iv, targetSlots[0].period)))
+      // nor can they hold two simultaneous standbys (e.g. התקפי + כרמל)
+      .filter((st) => !st.readiness.some((iv) => overlaps(iv, targetSlots[0].period)));
 
     if (rule.pick === 'min_tracker_hours') {
       pool.sort((a, b) => (a.fairness.trackerHoursTotal + a.trackerMinutes / 60)
