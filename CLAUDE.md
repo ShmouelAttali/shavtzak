@@ -53,6 +53,18 @@ Generated rows land in `shift_assignments` (`source='auto'|'chain'`) and
 generator never deletes those. Fairness counters are the `soldier_fairness(date)`
 DB function — computed from assignments, never stored.
 
+## Testing policy
+
+**Every new feature must come with tests.** Scheduler logic goes in
+`scheduler/tests/` (`npm test` there — node:test + tsx, runs serially against a
+dedicated `shavtzak_test` database in the local Docker container, **never
+against Supabase**). Pattern: unit-test pure helpers directly; integration-test
+generator/validator changes by asserting SPEC invariants over generated days
+(see `tests/generator.test.ts`); add a negative case per new validation rule.
+New API endpoints: add handler-level tests (invoke the handler with a mock
+req/res like `scripts/dev-api.ts` does). Run the relevant suite before
+committing.
+
 ## Conventions & gotchas
 
 - Schedule day = **14:00 → 14:00**; night = 00:00–06:00; all times naive local
