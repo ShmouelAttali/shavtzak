@@ -8,17 +8,23 @@ function todayIso(): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
-/** The exact window soldier_fairness(date) checks: [date-7 14:00, date 14:00) */
-function windowLabel(dateIso: string): string {
-  const he = (iso: string) => {
-    const [y, m, d] = iso.split('-');
-    return `${d}/${m}/${y}`;
-  };
-  const start = new Date(`${dateIso}T12:00:00`);
+const pad = (n: number) => String(n).padStart(2, '0');
+const isoOf = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+const heDate = (iso: string) => { const [y, m, d] = iso.split('-'); return `${d}/${m}/${y}`; };
+
+/** Fairness weeks are Sunday-anchored: window END = next-or-same Sunday of the
+ *  picked date (on a Sunday the window ends today — the completed week). */
+function sundayEnd(dateIso: string): string {
+  const d = new Date(`${dateIso}T12:00:00`);
+  d.setDate(d.getDate() + ((7 - d.getDay()) % 7));   // Sunday = 0
+  return isoOf(d);
+}
+
+/** [end-7 יום א' 14:00, end יום א' 14:00) */
+function windowLabel(endIso: string): string {
+  const start = new Date(`${endIso}T12:00:00`);
   start.setDate(start.getDate() - 7);
-  const pad = (n: number) => String(n).padStart(2, '0');
-  const startIso = `${start.getFullYear()}-${pad(start.getMonth() + 1)}-${pad(start.getDate())}`;
-  return `${he(startIso)} 14:00 ← ${he(dateIso)} 14:00`;
+  return `יום א' ${heDate(isoOf(start))} 14:00 ← יום א' ${heDate(endIso)} 14:00`;
 }
 
 type SortKey = keyof Pick<FairnessRow,
@@ -59,7 +65,8 @@ function topPositions(counts: Record<string, number>): string {
 
 export function FairnessView() {
   const [date, setDate] = useState(todayIso());
-  const { data, loading, error } = useFairness(date);
+  const windowEnd = sundayEnd(date);
+  const { data, loading, error } = useFairness(windowEnd);
   const [sort, setSort] = useState<{ key: SortKey; asc: boolean }>({ key: 'weightedHours7d', asc: false });
   const [platoons, setPlatoons] = useState<Set<string>>(new Set());
   const [hideIdle, setHideIdle] = useState(true);
@@ -98,12 +105,12 @@ export function FairnessView() {
       {/* Controls */}
       <div className="flex items-center gap-3 flex-wrap">
         <label className="flex items-center gap-2 text-sm text-gray-600">
-          חלון של 7 ימים המסתיים ב:
+          שבוע (א'–א') המכיל את:
           <input type="date" value={date} onChange={(e) => e.target.value && setDate(e.target.value)}
             className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm font-semibold text-slate-800 shadow-sm focus:border-blue-500 focus:outline-none" />
         </label>
         <span className="rounded-lg bg-slate-100 px-3 py-2 text-sm font-semibold text-slate-700" dir="rtl">
-          חלון נבדק: {windowLabel(date)}
+          חלון נבדק: {windowLabel(windowEnd)}
         </span>
         {allPlatoons.map((p) => (
           <label key={p} className="flex items-center gap-1 text-sm text-gray-600 select-none">
