@@ -2,8 +2,9 @@ import { useMemo, useState } from 'react';
 import type { Soldier } from '../types';
 import type { DraftDay, DraftFinding } from '../../api/draft';
 import { useDraft } from '../hooks/useDraft';
-import { GroupsView, SoldierCtx, NameClickCtx, MyNameCtx, SoldierInfo } from './Shavtzak';
+import { GroupsView, SoldierCtx, NameClickCtx, MyNameCtx, DraftMetaCtx, RationaleClickCtx, SoldierInfo } from './Shavtzak';
 import { SoldierPopup, PopupState } from './SoldierPopup';
+import { RationalePopup, RationalePopupState } from './RationalePopup';
 
 // ── date helpers (YYYY-MM-DD, local) ────────────────────────────────────────
 function todayIso(): string {
@@ -125,7 +126,9 @@ function DaySection({ day, onGenerate, generating }: {
         </div>
       ) : (
         <>
-          <GroupsView dayData={{ date: day.day, groups: day.groups }} />
+          <DraftMetaCtx.Provider value={day.meta}>
+            <GroupsView dayData={{ date: day.day, groups: day.groups }} />
+          </DraftMetaCtx.Provider>
           <RestList day={day} />
         </>
       )}
@@ -141,6 +144,7 @@ export function DraftSchedule({ soldiers, mySoldierName = '' }: {
   const [multiDay, setMultiDay] = useState(false);
   const [to, setTo] = useState(todayIso());
   const [popup, setPopup] = useState<PopupState | null>(null);
+  const [rationalePopup, setRationalePopup] = useState<RationalePopupState | null>(null);
   const effectiveTo = multiDay && to >= from ? to : from;
   const { data, loading, error, generating, generateRange } = useDraft(from, effectiveTo);
 
@@ -171,6 +175,7 @@ export function DraftSchedule({ soldiers, mySoldierName = '' }: {
     <SoldierCtx.Provider value={lookup}>
       <NameClickCtx.Provider value={handleNameClick}>
         <MyNameCtx.Provider value={mySoldierName}>
+        <RationaleClickCtx.Provider value={(name, time, meta) => setRationalePopup({ name, time, meta })}>
           <div className="space-y-5">
             {/* Controls */}
             <div className="flex items-center gap-2 flex-wrap" dir="ltr">
@@ -214,6 +219,8 @@ export function DraftSchedule({ soldiers, mySoldierName = '' }: {
             })}
           </div>
           {popup && <SoldierPopup info={popup} onClose={() => setPopup(null)} />}
+          {rationalePopup && <RationalePopup info={rationalePopup} onClose={() => setRationalePopup(null)} />}
+        </RationaleClickCtx.Provider>
         </MyNameCtx.Provider>
       </NameClickCtx.Provider>
     </SoldierCtx.Provider>

@@ -9,7 +9,7 @@
     "preview": "vite preview",
     "vercel-build": "tsc && vite build",
     "dev:api": "tsx scripts/dev-api.ts",
-    "test": "node --import tsx --test tests/*.test.ts"
+    "test": "node --import tsx --test --test-concurrency=1 tests/*.test.ts"
   },
   "dependencies": {
     "@clerk/clerk-react": "^5.61.8",

@@ -2,6 +2,7 @@ import { pool } from './db.js';
 import { loadContext } from './load.js';
 import { validateAndStore, Finding } from './validate.js';
 import { Soldier, Slot, Assignment, Fairness } from './model.js';
+import { RationaleEntry } from './rationale.js';
 import {
   Minutes, dayStart, dayEnd, addDays, slotStart, overlaps, hours, minToIso, fmtHM, nightRange,
 } from './time.js';
@@ -33,6 +34,8 @@ interface SoldierState {
   trackerMinutes: number;
   level1: number | null;      // position id
   hadAttackYesterday: boolean;
+  /** why this soldier landed in their Level-1 group (continuity/commander quota) */
+  level1Rationale: RationaleEntry[];
 }
 
 export interface GenerateResult {
@@ -74,6 +77,7 @@ export async function generate(day: string): Promise<GenerateResult> {
       trackerMinutes: 0,
       level1: null,
       hadAttackYesterday: ex.some((a) => a.positionId === attackId && overlaps(a.period, yRange)),
+      level1Rationale: [],
     };
     state.set(s.id, st);
   }
@@ -83,26 +87,27 @@ export async function generate(day: string): Promise<GenerateResult> {
   const fullyBlocked = (sid: number) => isBlocked(sid, dRange) &&
     (ctx.blocked.get(sid) ?? []).some((b) => b[0] <= dRange[0] && b[1] >= dRange[1]);
 
-  /** Rest gap before `start` (minutes); readiness is transparent (R2);
-   *  R5: an attack ending by ~06:00 counts as full rest for >= 14:00 starts. */
-  function restBefore(st: SoldierState, start: Minutes): number {
+  /** Rest facts before `start`; readiness is transparent (R2);
+   *  R5: an attack ending by ~06:00 counts as full rest for >= 14:00 starts.
+   *  `attackRest` is true only when the R5 boost actually lifted the gap. */
+  function restInfo(st: SoldierState, start: Minutes): { gap: number; prevEnd: Minutes | null; attackRest: boolean } {
     let prevEnd = -Infinity;
-    let prevWasAttack = false;
     for (const iv of st.intervals) {
-      if (iv[1] <= start && iv[1] > prevEnd) {
-        prevEnd = iv[1];
-        prevWasAttack = false; // recomputed below
-      }
+      if (iv[1] <= start && iv[1] > prevEnd) prevEnd = iv[1];
     }
-    if (prevEnd === -Infinity) return Infinity;
+    if (prevEnd === -Infinity) return { gap: Infinity, prevEnd: null, attackRest: false };
+    let prevWasAttack = false;
     if (attackId !== undefined) {
       const ex = ctx.existing.get(st.soldier.id) ?? [];
       prevWasAttack = ex.some((a) => a.positionId === attackId && a.period[1] === prevEnd);
     }
     const gap = start - prevEnd;
-    if (prevWasAttack && start >= dRange[0]) return Math.max(gap, REST_IDEAL); // R5
-    return gap;
+    if (prevWasAttack && start >= dRange[0] && gap < REST_IDEAL) {
+      return { gap: REST_IDEAL, prevEnd, attackRest: true }; // R5
+    }
+    return { gap, prevEnd, attackRest: false };
   }
+  const restBefore = (st: SoldierState, start: Minutes): number => restInfo(st, start).gap;
 
   type Fit = { ok: boolean; fallback: boolean; reasons: string[] };
   function fits(st: SoldierState, slot: [Minutes, Minutes], commanderSeat: boolean, isReadiness = false): Fit {
@@ -237,6 +242,7 @@ export async function generate(day: string): Promise<GenerateResult> {
     for (const st of rank(returning, pos.id, false)) {
       if (room <= 0) break;
       st.level1 = pos.id; level1.set(st.soldier.id, pos.id); room--;
+      st.level1Rationale.push({ code: 'continuity_crew', params: { position: pos.name } });
     }
   }
 
@@ -302,6 +308,7 @@ export async function generate(day: string): Promise<GenerateResult> {
       for (const st of rank(free.filter((c) => c.soldier.isCommander && c.level1 === null), pid, false, atStart)) {
         if (cmdNeed <= 0 || need <= 0) break;
         pick(st);
+        st.level1Rationale.push({ code: 'commander_quota', params: { position: posName } });
       }
       if (cmdNeed > 0) issues.push(`${posName}: חסרים ${cmdNeed} מפקדים בשיבוץ היומי`);
     }
@@ -320,12 +327,89 @@ export async function generate(day: string): Promise<GenerateResult> {
   // ── Level 2: fill slots within each position group ──────────────────────
   const assignments: Assignment[] = [];
 
-  function assign(st: SoldierState, slot: Slot, seat: number, commanderSeat: boolean, viol: string[], source: 'auto' | 'chain' = 'auto') {
+  const CLASS_HE: Record<string, string> = {
+    static: 'סטטית', dynamic: 'דינמית', readiness: 'כוננות', rest: 'מנוחה', other: 'אחרת',
+  };
+  const median = (xs: number[]): number => {
+    const s = [...xs].sort((a, b) => a - b);
+    const mid = (s.length - 1) / 2;
+    return (s[Math.floor(mid)] + s[Math.ceil(mid)]) / 2;
+  };
+
+  /** Snapshot of why `st` was picked for `slot`, built BEFORE assign() mutates
+   *  state. Comparative claims use the primary candidate group at pick time. */
+  function buildRationale(st: SoldierState, slot: Slot, pid: number, opts: {
+    pickedFrom: 'primary' | 'rest' | 'fallback';
+    fitReasons: string[];
+    commanderSeat: boolean;
+    groupNights: number[]; groupLoads: number[];   // pre-pick primary snapshot
+    myNights: number; myLoad: number;
+  }): RationaleEntry[] {
+    const out: RationaleEntry[] = [...st.level1Rationale];
+
+    // rest before this shift (R1/R2/R5)
+    const ri = restInfo(st, slot.period[0]);
+    if (ri.gap === Infinity) out.push({ code: 'no_prior' });
+    else if (ri.attackRest) out.push({ code: 'attack_rest' });
+    else if (ri.gap >= REST_IDEAL) {
+      out.push({
+        code: 'rest_ok',
+        params: { lastEnd: fmtHM(ri.prevEnd!), restH: (ri.gap / 60).toFixed(1), start: fmtHM(slot.period[0]) },
+      });
+    } else if (opts.pickedFrom === 'primary') {
+      out.push({ code: 'caveat_short_rest', params: { restH: (ri.gap / 60).toFixed(1) } });
+    }
+
+    // rotation facts — same order of dominance as rotationPenalty() (T1-T3)
+    const pos = ctx.positions.get(pid);
+    const cls = pos?.missionClass;
+    const yPos = ctx.yesterdayPosition.get(st.soldier.id);
+    const yName = yPos !== undefined ? ctx.positions.get(yPos)?.name : undefined;
+    const yCls = yPos !== undefined ? ctx.positions.get(yPos)?.missionClass : undefined;
+    const streak = ctx.staticStreak.get(st.soldier.id) ?? 0;
+    if (pos?.config?.continuity) { /* staying put is the point — continuity_crew covers it */ }
+    else if (streak >= 2 && cls === 'static') out.push({ code: 'caveat_static_streak', params: { streak } });
+    else if (yPos === pid) out.push({ code: 'caveat_same_position', params: { position: yName ?? pos?.name ?? '' } });
+    else if (yCls && cls && yCls === cls && cls !== 'other') {
+      out.push({ code: 'caveat_same_class', params: { cls: CLASS_HE[cls] ?? cls } });
+    } else if (streak >= 2 && cls === 'dynamic') out.push({ code: 'rotation_break_static', params: { streak } });
+    else if (yName && yName !== pos?.name) {
+      out.push({ code: 'rotation_switch', params: { yesterday: yName, today: pos?.name ?? '' } });
+    }
+
+    // one comparative fairness claim, only against a real group (>1 candidate)
+    if (opts.pickedFrom === 'primary' && opts.groupNights.length > 1) {
+      const mN = median(opts.groupNights);
+      const mL = median(opts.groupLoads);
+      if (opts.myNights <= mN) {
+        out.push({ code: 'fewest_nights', params: { nights: opts.myNights, median: mN } });
+      } else if (opts.myLoad <= mL) {
+        out.push({ code: 'low_load', params: { hours: opts.myLoad.toFixed(1), median: mL.toFixed(1) } });
+      }
+    }
+
+    if (opts.commanderSeat) out.push({ code: 'commander_seat' });
+
+    // fallback paths: the primary list was empty by construction
+    if (opts.pickedFrom === 'rest') {
+      out.push({ code: 'pulled_from_rest' }, { code: 'caveat_no_alternative' });
+    } else if (opts.pickedFrom === 'fallback') {
+      for (const r of opts.fitReasons) {
+        if (r.includes('פחות מ-4')) out.push({ code: 'caveat_rest_lt4' });
+        else if (r.includes('פחות מ-8')) out.push({ code: 'caveat_rest_lt8_long' });
+      }
+      out.push({ code: 'caveat_no_alternative' });
+    }
+    return out;
+  }
+
+  function assign(st: SoldierState, slot: Slot, seat: number, commanderSeat: boolean, viol: string[],
+                  source: 'auto' | 'chain' = 'auto', rationale: RationaleEntry[] = []) {
     const readiness = ctx.positions.get(slot.positionId)!.missionClass === 'readiness';
     assignments.push({
       soldierId: st.soldier.id, positionId: slot.positionId, subPositionId: slot.subPositionId,
       period: slot.period, seatIndex: seat, isCommanderSeat: commanderSeat,
-      blocksOverlap: !readiness, source, violations: viol,
+      blocksOverlap: !readiness, source, violations: viol, rationale,
     });
     if (readiness) {
       st.readiness.push(slot.period);
@@ -353,7 +437,14 @@ export async function generate(day: string): Promise<GenerateResult> {
           .map((st) => ({ st, fit: fits(st, slot.period, commanderSeat, slotReadiness) }));
         const primary = evals.filter((e) => e.fit.ok && !e.fit.fallback).map((e) => e.st);
         const fallback = evals.filter((e) => e.fit.ok && e.fit.fallback);
+        // pre-pick snapshot of the primary group's fairness keys (same formulas
+        // rank() uses) — comparative rationale must not drift with later state
+        const nightsOf = (st: SoldierState) => st.fairness.nightCount7d + st.nightsToday * (forNight ? 1 : 0);
+        const loadOf = (st: SoldierState) => st.fairness.weightedHours7d + st.missionHoursToday;
+        const groupNights = primary.map(nightsOf);
+        const groupLoads = primary.map(loadOf);
         let picked = rank(primary, pid, forNight, slot.period[0])[0];
+        let pickedFrom: 'primary' | 'rest' | 'fallback' = 'primary';
         let viol: string[] = [];
         if (!picked) {
           // prefer a fully-rested soldier from מנוחה over an in-group בדוחק pick
@@ -369,13 +460,15 @@ export async function generate(day: string): Promise<GenerateResult> {
             level1.set(pulled.soldier.id, pid);
             group.push(pulled);
             picked = pulled;
+            pickedFrom = 'rest';
             viol = ['הושלם ממנוחה'];
           }
         }
         if (!picked && fallback.length) {
           const f = rank(fallback.map((e) => e.st), pid, forNight, slot.period[0])[0];
           const fe = fallback.find((e) => e.st === f)!;
-          picked = f; viol = fe.fit.reasons.map((r) => `בדוחק: ${r}`);
+          picked = f; pickedFrom = 'fallback';
+          viol = fe.fit.reasons.map((r) => `בדוחק: ${r}`);
         }
         if (!picked) {
           issues.push(`${posName} ${fmtHM(slot.period[0])}-${fmtHM(slot.period[1])} מושב ${seat}${commanderSeat ? ' (מפקד)' : ''}: לא אויש`);
@@ -383,7 +476,11 @@ export async function generate(day: string): Promise<GenerateResult> {
         }
         takenThisSlot.add(picked.soldier.id);
         const fit = fits(picked, slot.period, commanderSeat, slotReadiness);
-        assign(picked, slot, seat, commanderSeat, [...viol, ...(viol.length ? [] : fit.reasons)]);
+        const rationale = buildRationale(picked, slot, pid, {
+          pickedFrom, fitReasons: fit.reasons, commanderSeat, groupNights, groupLoads,
+          myNights: nightsOf(picked), myLoad: loadOf(picked),
+        });
+        assign(picked, slot, seat, commanderSeat, [...viol, ...(viol.length ? [] : fit.reasons)], 'auto', rationale);
       }
     }
   }
@@ -404,6 +501,7 @@ export async function generate(day: string): Promise<GenerateResult> {
     }
     crew = [...new Set(crew)];
     const targetName = ctx.positions.get(rule.targetPosition)!.name;
+    const sourceName = ctx.positions.get(rule.sourcePosition)!.name;
     if (crew.length === 0) {
       issues.push(`שרשור ${targetName} ${rule.targetStart}: לא נמצא צוות מקור`);
       continue;
@@ -440,7 +538,13 @@ export async function generate(day: string): Promise<GenerateResult> {
         ? [...pool].sort((a, b) => b.soldier.rifle - a.soldier.rifle).slice(0, slot.seats)
         : pool.filter((st) => !assignments.some((a) => a.soldierId === st.soldier.id && a.period[0] === slot.period[0] && a.positionId === rule.targetPosition)).slice(0, slot.seats);
       take.forEach((st, i) => {
-        assign(st, slot, i + 1, isCmdSlot, [], 'chain');
+        const rationale: RationaleEntry[] = [{
+          code: 'chain',
+          params: { target: targetName, source: sourceName, sourceStart: rule.sourceStart },
+        }];
+        if (rule.pick === 'min_tracker_hours') rationale.push({ code: 'chain_min_tracker' });
+        if (isCmdSlot) rationale.push({ code: 'chain_commander' });
+        assign(st, slot, i + 1, isCmdSlot, [], 'chain', rationale);
         if (st.trackerMinutes === 0 && targetName === 'כונן גשש') st.trackerMinutes += slot.period[1] - slot.period[0];
         if (isCmdSlot) commanderAssigned = true;
       });
@@ -473,11 +577,11 @@ export async function persist(res: GenerateResult): Promise<Finding[]> {
     sv.push(a.positionId, a.subPositionId, a.soldierId,
       minToIso(a.period[0]), minToIso(a.period[1]),
       a.seatIndex, a.isCommanderSeat, a.source, a.blocksOverlap,
-      JSON.stringify(a.violations));
-    const b = sv.length - 10;
+      JSON.stringify(a.violations), JSON.stringify(a.rationale));
+    const b = sv.length - 11;
     return `($1::date, $${b + 1}, $${b + 2}, $${b + 3},` +
       ` tsrange($${b + 4}::timestamp, $${b + 5}::timestamp),` +
-      ` $${b + 6}, $${b + 7}, $${b + 8}, $${b + 9}, $${b + 10}::jsonb)`;
+      ` $${b + 6}, $${b + 7}, $${b + 8}, $${b + 9}, $${b + 10}::jsonb, $${b + 11}::jsonb)`;
   });
 
   const client = await pool.connect();
@@ -512,7 +616,7 @@ export async function persist(res: GenerateResult): Promise<Finding[]> {
       await client.query(
         `insert into shift_assignments
            (day, position_id, sub_position_id, soldier_id, period, seat_index,
-            is_commander_seat, source, blocks_overlap, violations)
+            is_commander_seat, source, blocks_overlap, violations, rationale)
          values ${sTuples.join(',')}`, sv);
     }
     await client.query(

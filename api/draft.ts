@@ -1,8 +1,11 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { getPool, DATE_RE } from './_db.js';
 import type { StationGroup, SubType, TimeSlot } from './shavtzak.js';
+import type { RationaleEntry } from '../scheduler/src/rationale.js';
 
 // ── Types (imported by the frontend as ../../api/draft) ────────────────────
+export type { RationaleEntry };
+
 export interface DraftFinding {
   severity: 'error' | 'warning';
   rule: string;
@@ -14,6 +17,8 @@ export interface DraftAssignmentMeta {
   source: string;               // auto | chain | manual | import
   locked: boolean;
   violations: string[];
+  /** structured "why picked" entries (rendered via scheduler/src/rationale.ts) */
+  rationale: RationaleEntry[];
 }
 
 export interface DraftDay {
@@ -48,7 +53,7 @@ async function getDrafts(from: string, to: string): Promise<DraftResponse> {
     pool.query(
       `select sa.day::text, p.name pos_name, sp.name sub_name, s.full_name,
               lower(sa.period) p_start, upper(sa.period) p_end,
-              sa.source, sa.locked, sa.violations, sa.seat_index
+              sa.source, sa.locked, sa.violations, sa.rationale, sa.seat_index
        from shift_assignments sa
        join positions p on p.id = sa.position_id
        left join sub_positions sp on sp.id = sa.sub_position_id
@@ -92,9 +97,16 @@ async function getDrafts(from: string, to: string): Promise<DraftResponse> {
     const name = r.full_name ?? '?';
     soldiers.push(name);
     const violations: string[] = Array.isArray(r.violations) ? r.violations : [];
-    if (violations.length || r.locked || r.source === 'manual') {
-      day.meta[`${name}|${time}`] = { source: r.source, locked: r.locked, violations };
-    }
+    const rationale: RationaleEntry[] = Array.isArray(r.rationale) ? r.rationale : [];
+    // meta for every row (the ⓘ popup needs it); on key collision — e.g. a
+    // readiness overlay sharing a time label with a mission row — merge.
+    const key = `${name}|${time}`;
+    const prev = day.meta[key];
+    day.meta[key] = prev ? {
+      source: prev.source, locked: prev.locked || r.locked,
+      violations: [...new Set([...prev.violations, ...violations])],
+      rationale: [...prev.rationale, ...rationale],
+    } : { source: r.source, locked: r.locked, violations, rationale };
   }
   for (const [gKey, bySug] of grouping) {
     const [dayKey, station] = gKey.split('|');

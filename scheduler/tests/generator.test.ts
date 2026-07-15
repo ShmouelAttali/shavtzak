@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import { freshSchema, seedSoldiers, soldierId, closePool, query } from './helpers.js';
 import { generate, persist } from '../src/generate.js';
 import { validateDay } from '../src/validate.js';
+import { RATIONALE_CODES, RationaleEntry } from '../src/rationale.js';
 
 const D1 = '2026-08-01', D2 = '2026-08-02', D3 = '2026-08-03';
 
@@ -155,6 +156,80 @@ test('no duplicate soldier within a single slot/crew (H7)', async () => {
     from shift_assignments where day between $1 and $2
     group by 1,2,3,4 having count(*) > 1`, [D1, D3]);
   assert.deepEqual(dup, []);
+});
+
+test('rationale: every generated row explains itself with known codes', async () => {
+  const rows = await query<{ rationale: RationaleEntry[] }>(`
+    select rationale from shift_assignments
+    where source in ('auto','chain') and day between $1 and $2`, [D1, D3]);
+  assert.ok(rows.length > 0, 'generated rows exist');
+  const known = new Set<string>(RATIONALE_CODES);
+  for (const r of rows) {
+    assert.ok(Array.isArray(r.rationale) && r.rationale.length > 0, 'empty rationale');
+    for (const e of r.rationale) assert.ok(known.has(e.code), `unknown code: ${e.code}`);
+  }
+});
+
+test('rationale: chained overlays record their source shift (T4)', async () => {
+  const rows = await query<{ name: string; rationale: RationaleEntry[] }>(`
+    select p.name, sa.rationale from shift_assignments sa
+    join positions p on p.id = sa.position_id
+    where sa.source = 'chain' and sa.day between $1 and $2`, [D1, D3]);
+  assert.ok(rows.length > 0, 'chain rows exist');
+  for (const r of rows) {
+    const chain = r.rationale.find((e) => e.code === 'chain');
+    assert.ok(chain, `${r.name}: no chain entry`);
+    assert.ok(chain!.params?.source, `${r.name}: missing source`);
+    assert.ok(chain!.params?.sourceStart, `${r.name}: missing sourceStart`);
+  }
+});
+
+test('rationale: returning מגן crew members carry continuity_crew', async () => {
+  const rows = await query<{ rationale: RationaleEntry[] }>(`
+    select sa.rationale from shift_assignments sa
+    join positions p on p.id = sa.position_id
+    where p.name = 'מגן' and sa.day = $1 and sa.source = 'auto'
+      and exists (select 1 from day_assignments da
+                  where da.day = $2 and da.soldier_id = sa.soldier_id
+                    and da.position_id = sa.position_id)`, [D3, D2]);
+  assert.ok(rows.length > 0, 'returning מגן rows exist');
+  for (const r of rows) {
+    assert.ok(r.rationale.some((e) => e.code === 'continuity_crew'), JSON.stringify(r.rationale));
+  }
+});
+
+test('rationale: fallback violations map to structured caveats + counterfactual', async () => {
+  const rows = await query<{ violations: string[]; rationale: RationaleEntry[] }>(`
+    select violations, rationale from shift_assignments
+    where source in ('auto','chain') and day between $1 and $2`, [D1, D3]);
+  for (const r of rows) {
+    const codes = new Set(r.rationale.map((e) => e.code));
+    for (const v of r.violations) {
+      if (v === 'הושלם ממנוחה') {
+        assert.ok(codes.has('pulled_from_rest') && codes.has('caveat_no_alternative'), v);
+      } else if (v.includes('פחות מ-4')) {
+        assert.ok(codes.has('caveat_rest_lt4') && codes.has('caveat_no_alternative'), v);
+      } else if (v.includes('פחות מ-8')) {
+        assert.ok(codes.has('caveat_rest_lt8_long') && codes.has('caveat_no_alternative'), v);
+      }
+    }
+  }
+});
+
+test('rationale: fewest_nights claims are honest vs the pick-time median', async () => {
+  const rows = await query<{ rationale: RationaleEntry[] }>(`
+    select rationale from shift_assignments
+    where source = 'auto' and day between $1 and $2`, [D1, D3]);
+  let seen = 0;
+  for (const r of rows) {
+    for (const e of r.rationale) {
+      if (e.code !== 'fewest_nights') continue;
+      seen++;
+      assert.ok(Number(e.params!.nights) <= Number(e.params!.median),
+        `dishonest claim: ${JSON.stringify(e.params)}`);
+    }
+  }
+  assert.ok(seen > 0, 'no fewest_nights entries to check');
 });
 
 test('fairness spread: nights differ by at most 2 across active soldiers', async () => {

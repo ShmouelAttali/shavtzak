@@ -1,4 +1,5 @@
 import { Minutes } from './time.js';
+import type { RationaleEntry } from './rationale.js';
 
 export interface Soldier {
   id: number;
@@ -52,6 +53,8 @@ export interface Assignment {
   blocksOverlap: boolean;
   source: 'auto' | 'chain';
   violations: string[];
+  /** structured "why picked" entries, snapshotted at decision time */
+  rationale: RationaleEntry[];
 }
 
 export interface ChainRule {

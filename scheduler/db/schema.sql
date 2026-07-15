@@ -168,7 +168,8 @@ create table shift_assignments (
   source            text not null default 'auto'
                     check (source in ('auto','manual','chain','import')),
   blocks_overlap    boolean not null default true,  -- false for readiness rows (H3 exception)
-  violations        jsonb not null default '[]'     -- recorded fallbacks/forced warnings
+  violations        jsonb not null default '[]',    -- recorded fallbacks/forced warnings
+  rationale         jsonb not null default '[]'     -- structured "why picked" entries (src/rationale.ts)
 );
 create index shift_assignments_day on shift_assignments (day);
 create index shift_assignments_soldier on shift_assignments (soldier_id);
