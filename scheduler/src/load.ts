@@ -1,6 +1,6 @@
 import { multiQuery } from './db.js';
 import { Context, Soldier, Position, Slot, Fairness, ChainRule } from './model.js';
-import { toMin, parseRange, dayStart, dayEnd, addDays, slotStart, overlaps, Minutes } from './time.js';
+import { parseRange, dayStart, dayEnd, addDays, overlaps, Minutes } from './time.js';
 
 const strip = (s: string) => (s ?? '').replace(/[״"'׳`]/g, '').trim();
 

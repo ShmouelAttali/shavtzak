@@ -33,7 +33,7 @@ const DAILY_CAP = 8;
 export async function validateDay(day: string): Promise<Finding[]> {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) throw new Error(`bad day: ${day}`);
   const yesterday = addDays(day, -1);
-  const [rows, prevRows, unavailRows, dayAssignRows, soldierRows, chainRows, posRows] = await multiQuery([
+  const [rows, prevRows, unavailRows, dayAssignRows, soldierRows, chainRows] = await multiQuery([
     ...[day, yesterday].map((d) => `
       select sa.soldier_id, s.full_name, sa.position_id, p.name pos_name, p.mission_class,
              sp.name sub_name, sa.period::text, sa.blocks_overlap
@@ -50,10 +50,8 @@ export async function validateDay(day: string): Promise<Finding[]> {
     `select cr.*, tp.name target_name, sp2.name source_name from chain_rules cr
      join positions tp on tp.id = cr.target_position
      join positions sp2 on sp2.id = cr.source_position order by cr.id`,
-    `select id, name from positions`,
   ]);
 
-  const posName = new Map<number, string>(posRows.map((p: any) => [p.id, p.name]));
   const toRow = (r: any): Row => ({
     soldierId: r.soldier_id, soldierName: r.full_name ?? `#${r.soldier_id}`,
     positionId: r.position_id, positionName: r.pos_name, missionClass: r.mission_class,

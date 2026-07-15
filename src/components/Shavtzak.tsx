@@ -6,16 +6,18 @@ import type {PopupState} from './SoldierPopup';
 import {SoldierPopup} from './SoldierPopup';
 
 // ── Soldier lookup context ─────────────────────────────────────────────────
-interface SoldierInfo {
+// (exported so other tabs — e.g. the draft schedule — reuse the same
+//  name-rendering/popup system and layout renderers)
+export interface SoldierInfo {
     unit: string;
     role: string;
     phone: string
 }
 
-const SoldierCtx = createContext<Map<string, SoldierInfo>>(new Map());
-const NameClickCtx = createContext<(name: string, info: SoldierInfo | undefined) => void>(() => {
+export const SoldierCtx = createContext<Map<string, SoldierInfo>>(new Map());
+export const NameClickCtx = createContext<(name: string, info: SoldierInfo | undefined) => void>(() => {
 });
-const MyNameCtx = createContext<string>('');
+export const MyNameCtx = createContext<string>('');
 
 const BOLD_ROLES = new Set(['מ"מ', 'מ"פ', 'סמ"פ', 'סמל', 'מ"כ']);
 const UNIT_COLOR: Record<string, string> = {
@@ -440,8 +442,8 @@ function GroupCard({group}: { group: StationGroup }) {
     );
 }
 
-// ── Groups renderer (shared by date view) ─────────────────────────────────
-function GroupsView({dayData}: { dayData: ShavtzakData }) {
+// ── Groups renderer (shared by date view; also used by the draft tab) ──────
+export function GroupsView({dayData}: { dayData: ShavtzakData }) {
     const smallGroups = sortByOrder(dayData.groups.filter(g => getTier(g) === 'small'), SMALL_ORDER);
     const mediumGroups = dayData.groups.filter(g => getTier(g) === 'medium');
     const wideGroups = dayData.groups.filter(g => getTier(g) === 'wide');

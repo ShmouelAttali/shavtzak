@@ -1,7 +1,7 @@
-import { pool, query } from './db.js';
+import { pool } from './db.js';
 import { loadContext } from './load.js';
 import { validateAndStore, Finding } from './validate.js';
-import { Context, Soldier, Slot, Assignment, Fairness } from './model.js';
+import { Soldier, Slot, Assignment, Fairness } from './model.js';
 import {
   Minutes, dayStart, dayEnd, addDays, slotStart, overlaps, hours, minToIso, fmtHM, nightRange,
 } from './time.js';
@@ -194,7 +194,6 @@ export async function generate(day: string): Promise<GenerateResult> {
     const pid = ctx.positionByName.get(posName);
     if (pid === undefined || !slotsByPosition.has(pid)) continue;
     const slots = slotsByPosition.get(pid)!;
-    const pos = ctx.positions.get(pid)!;
     let need = demand(slots) - [...level1.values()].filter((p) => p === pid).length;
     let cmdNeed = commanderQuota(slots);
 
@@ -293,7 +292,7 @@ export async function generate(day: string): Promise<GenerateResult> {
           continue;
         }
         const fit = fits(picked, slot.period, commanderSeat);
-        assign(picked, slot, seat, commanderSeat, [...viol, ...fit.reasons.filter((r) => !viol.length)]);
+        assign(picked, slot, seat, commanderSeat, [...viol, ...(viol.length ? [] : fit.reasons)]);
       }
     }
   }

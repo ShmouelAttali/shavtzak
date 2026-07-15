@@ -7,6 +7,8 @@ import { PersonalSchedule } from './components/PersonalSchedule';
 import { UnitSchedule } from './components/UnitSchedule';
 import { CompanySummary } from './components/CompanySummary';
 import { Shavtzak } from './components/Shavtzak';
+import { DraftSchedule } from './components/DraftSchedule';
+import { FairnessView } from './components/FairnessView';
 
 const COMPANY_ROLES = new Set(['מ"פ', 'סמ"פ', 'מ"מ', 'סמל', 'מ"כ']);
 
@@ -15,6 +17,8 @@ const TABS: { id: TabId; label: string; restricted?: true }[] = [
   { id: 'unit',      label: 'לוז יציאות מחלקתי' },
   { id: 'company',   label: 'סיכום פלוגתי', restricted: true },
   { id: 'shavtzak',  label: 'שבצק' },
+  { id: 'draft',     label: 'שבצק חדש (טיוטה)', restricted: true },
+  { id: 'fairness',  label: 'הוגנות', restricted: true },
 ];
 
 const APP_VERSION = '1.0.1';
@@ -48,9 +52,9 @@ function AppContent({ data }: { data: SheetData }) {
   const mySoldierName = mySoldier?.fullName ?? '';
   const canSeeCompany = COMPANY_ROLES.has(myRole);
 
-  // If the company tab becomes inaccessible, fall back to personal
+  // If a restricted tab becomes inaccessible, fall back to personal
   useEffect(() => {
-    if (activeTab === 'company' && !canSeeCompany) setActiveTab('personal');
+    if (['company', 'draft', 'fairness'].includes(activeTab) && !canSeeCompany) setActiveTab('personal');
   }, [activeTab, canSeeCompany]);
   const { data: shavtzakAll, loading: shavtzakLoading, error: shavtzakError, reload: reloadShavtzak } = useShavtzak();
 
@@ -116,6 +120,8 @@ function AppContent({ data }: { data: SheetData }) {
         {activeTab === 'unit' && <UnitSchedule data={data} />}
         {activeTab === 'company' && <CompanySummary data={data} shavtzakAll={shavtzakAll} />}
         {activeTab === 'shavtzak' && <Shavtzak soldiers={data.soldiers} shavtzakAll={shavtzakAll} loading={shavtzakLoading} error={shavtzakError} mySoldierName={mySoldierName} />}
+        {activeTab === 'draft' && <DraftSchedule soldiers={data.soldiers} mySoldierName={mySoldierName} />}
+        {activeTab === 'fairness' && <FairnessView />}
       </main>
     </div>
   );
