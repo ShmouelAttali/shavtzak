@@ -16,8 +16,16 @@ One env var, everywhere:
 export SCHEDULER_DATABASE_URL='postgres://USER:PASSWORD@HOST:5432/postgres'
 ```
 
-- **Supabase (shared)**: Dashboard → Project Settings → Database → Connection string
-  (URI). Ask the project owner for an org invite; each teammate uses their own login.
+- **Supabase (shared/production)**:
+  - Account: **shavtzakshilo@gmail.com** — for the password ask **Elyashiv Lavi**.
+  - Project: `shavtzak-scheduler`, org `shavtzak`, region `eu-central-1` —
+    dashboard: https://supabase.com/dashboard/project/yoaymfryftsqqjjyvwym
+  - Connection string (session pooler):
+    `postgres://postgres.yoaymfryftsqqjjyvwym:<DB_PASSWORD>@aws-0-eu-central-1.pooler.supabase.com:5432/postgres`
+  - `<DB_PASSWORD>` is the *database* password (different from the account password):
+    Dashboard → Project Settings → Database, or on Elyashiv's Mac from the keychain:
+    `security find-generic-password -s supabase-shavtzak-db -w`
+    (account password is under service `supabase-shavtzak`).
 - **Local dev**: leave unset — defaults to the Docker container from "Try it" below
   (`postgres://postgres:test@localhost:55432/postgres`).
 

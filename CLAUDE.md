@@ -17,12 +17,14 @@ Everything connects through one env var:
 export SCHEDULER_DATABASE_URL='postgres://USER:PASSWORD@HOST:5432/postgres'
 ```
 
-- **Supabase (shared/production)**: get the connection string from
-  Supabase Dashboard → Project Settings → Database → Connection string (URI).
-  Use the *session pooler* URI for CLI work. Ask the project owner for an invite
-  to the Supabase org (Dashboard → Organization → Members) — each teammate uses
-  their own login; don't share the service-role key.
-  <!-- TODO: paste project URL here once the Supabase project is created -->
+- **Supabase (shared/production)**: account **shavtzakshilo@gmail.com** (password:
+  ask Elyashiv Lavi). Project `shavtzak-scheduler`, region eu-central-1:
+  https://supabase.com/dashboard/project/yoaymfryftsqqjjyvwym
+  Session-pooler URI:
+  `postgres://postgres.yoaymfryftsqqjjyvwym:<DB_PASSWORD>@aws-0-eu-central-1.pooler.supabase.com:5432/postgres`
+  — DB password from Dashboard → Project Settings → Database, or on Elyashiv's Mac:
+  `security find-generic-password -s supabase-shavtzak-db -w`.
+  Schema + seed + history already applied (2026-07-15: 133 soldiers, 1,786 rows).
 - **Local dev** (default when the env var is unset —
   `postgres://postgres:test@localhost:55432/postgres`):
 
