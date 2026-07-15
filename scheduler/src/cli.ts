@@ -1,18 +1,38 @@
 import { generate, persist } from './generate.js';
+import { validateAndStore, Finding } from './validate.js';
 import { pool, query } from './db.js';
 import { fmtHM, minToDate, addDays } from './time.js';
 
 function usage(): never {
   console.log(`usage:
-  tsx src/cli.ts generate <YYYY-MM-DD> [<to YYYY-MM-DD>] [--dry-run]`);
+  tsx src/cli.ts generate <YYYY-MM-DD> [<to YYYY-MM-DD>] [--dry-run]
+  tsx src/cli.ts validate <YYYY-MM-DD> [<to YYYY-MM-DD>]`);
   process.exit(1);
+}
+
+function printFindings(findings: Finding[]) {
+  const errs = findings.filter((f) => f.severity === 'error');
+  const warns = findings.filter((f) => f.severity === 'warning');
+  console.log(`ולידציה: ${errs.length} שגיאות, ${warns.length} אזהרות`);
+  for (const f of errs) console.log(`  ❌ [${f.rule}] ${f.message}`);
+  for (const f of warns.slice(0, 20)) console.log(`  ⚠ [${f.rule}] ${f.message}`);
+  if (warns.length > 20) console.log(`  … ועוד ${warns.length - 20} אזהרות`);
 }
 
 async function main() {
   const [cmd, from, ...rest] = process.argv.slice(2);
-  if (cmd !== 'generate' || !from) usage();
+  if (!['generate', 'validate'].includes(cmd) || !from) usage();
   const dry = rest.includes('--dry-run');
   const to = rest.find((a) => /^\d{4}-\d{2}-\d{2}$/.test(a)) ?? from;
+
+  if (cmd === 'validate') {
+    for (let day = from; day <= to; day = addDays(day, 1)) {
+      console.log(`\n═══ ולידציה ${day} ═══`);
+      printFindings(await validateAndStore(day));
+    }
+    await pool.end();
+    return;
+  }
 
   for (let day = from; day <= to; day = addDays(day, 1)) {
     const res = await generate(day);
@@ -43,8 +63,9 @@ async function main() {
     }
 
     if (!dry) {
-      await persist(res);
+      const findings = await persist(res);
       console.log(`נשמר (status=generated).`);
+      printFindings(findings);
     } else {
       console.log('(dry-run — לא נשמר)');
     }

@@ -1,4 +1,4 @@
-import { query } from './db.js';
+import { multiQuery } from './db.js';
 import { Context, Soldier, Position, Slot, Fairness, ChainRule } from './model.js';
 import { toMin, parseRange, dayStart, dayEnd, addDays, slotStart, overlaps, Minutes } from './time.js';
 
@@ -13,11 +13,49 @@ function roleFlags(role: string) {
 }
 
 export async function loadContext(day: string): Promise<Context> {
-  await query(`insert into schedule_days (day) values ($1) on conflict do nothing`, [day]);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) throw new Error(`bad day: ${day}`);
+  const winFrom = addDays(day, -8);
+  const yesterday = addDays(day, -1);
+  const tomorrow = addDays(day, 1);
+
+  // ONE round trip for everything — per-query round trips (and per-connection
+  // TLS handshakes) dominate wall-clock over the WAN pooler. Day literals are
+  // regex-validated above; no user input reaches this SQL.
+  const [, posRows, soldierRows, fairRows, slotRows, existRows, ydayRows,
+    blockRows, lockShiftRows, lockDayRows, chainRows, configRows] = await multiQuery([
+    `insert into schedule_days (day) values ('${day}') on conflict do nothing`,
+    `select id, name, mission_class, is_scheduled, blocks_day from positions`,
+    `select s.id, s.full_name, s.platoon, coalesce(s.role,'') role,
+            coalesce(s.rifle_level,0) rifle,
+            coalesce(array_agg(q.qualification) filter (where q.qualification is not null), '{}') quals
+     from soldiers s
+     left join soldier_qualifications q on q.soldier_id = s.id
+     where s.is_schedulable
+     group by s.id`,
+    `select * from soldier_fairness('${day}')`,
+    `select ds.position_id, ds.sub_position_id, sp.name sub_name, ds.period::text, ds.seats, ds.commander_first_seat
+     from day_slots ds left join sub_positions sp on sp.id = ds.sub_position_id
+     where ds.day = '${day}'`,
+    // NB: the day's own auto/chain unlocked rows are EXCLUDED — regeneration
+    // replaces them; including them makes every soldier look already-assigned.
+    `select sa.soldier_id, sa.position_id, sa.period::text, p.mission_class
+     from shift_assignments sa join positions p on p.id = sa.position_id
+     where sa.period && tsrange(day_start('${winFrom}'), day_start('${tomorrow}'))
+       and not (sa.day = '${day}' and sa.source in ('auto','chain') and not sa.locked)`,
+    `select soldier_id, position_id from day_assignments where day = '${yesterday}'`,
+    `select soldier_id, period::text from unavailability
+     where period && tsrange(day_start('${day}'), day_start('${day}') + interval '1 day')`,
+    `select soldier_id, position_id, period::text from shift_assignments
+     where day = '${day}' and (locked or source in ('manual','import'))`,
+    `select soldier_id, position_id from day_assignments
+     where day = '${day}' and (locked or source = 'manual')`,
+    `select * from chain_rules order by id`,
+    `select key, value from config`,
+  ]);
 
   const positions = new Map<number, Position>();
   const positionByName = new Map<string, number>();
-  for (const p of await query(`select id, name, mission_class, is_scheduled, blocks_day from positions`)) {
+  for (const p of posRows) {
     positions.set(p.id, {
       id: p.id, name: p.name, missionClass: p.mission_class,
       isScheduled: p.is_scheduled, blocksDay: p.blocks_day,
@@ -26,15 +64,7 @@ export async function loadContext(day: string): Promise<Context> {
   }
 
   const soldiers = new Map<number, Soldier>();
-  const rows = await query(`
-    select s.id, s.full_name, s.platoon, coalesce(s.role,'') role,
-           coalesce(s.rifle_level,0) rifle,
-           coalesce(array_agg(q.qualification) filter (where q.qualification is not null), '{}') quals
-    from soldiers s
-    left join soldier_qualifications q on q.soldier_id = s.id
-    where s.is_schedulable
-    group by s.id`);
-  for (const r of rows) {
+  for (const r of soldierRows) {
     const flags = roleFlags(r.role);
     const quals: string[] = r.quals;
     soldiers.set(r.id, {
@@ -46,7 +76,7 @@ export async function loadContext(day: string): Promise<Context> {
   }
 
   const fairness = new Map<number, Fairness>();
-  for (const f of await query(`select * from soldier_fairness($1)`, [day])) {
+  for (const f of fairRows) {
     fairness.set(f.soldier_id, {
       nightCount7d: Number(f.night_count_7d),
       nightCountTotal: Number(f.night_count_total),
@@ -58,21 +88,14 @@ export async function loadContext(day: string): Promise<Context> {
     });
   }
 
-  const slots: Slot[] = (await query(`
-    select ds.position_id, ds.sub_position_id, sp.name sub_name, ds.period::text, ds.seats, ds.commander_first_seat
-    from day_slots ds left join sub_positions sp on sp.id = ds.sub_position_id
-    where ds.day = $1`, [day])).map((s) => ({
+  const slots: Slot[] = slotRows.map((s) => ({
       positionId: s.position_id, subPositionId: s.sub_position_id, subName: s.sub_name,
       period: parseRange(s.period), seats: s.seats, commanderFirstSeat: s.commander_first_seat,
     }));
 
   // Existing assignments in the rest/rotation window (history + prior drafts).
   const existing = new Map<number, { positionId: number; period: [Minutes, Minutes]; missionClass: string }[]>();
-  const winFrom = addDays(day, -8);
-  for (const a of await query(`
-    select sa.soldier_id, sa.position_id, sa.period::text, p.mission_class
-    from shift_assignments sa join positions p on p.id = sa.position_id
-    where sa.period && tsrange(day_start($1), day_start($2))`, [winFrom, addDays(day, 1)])) {
+  for (const a of existRows) {
     const list = existing.get(a.soldier_id) ?? [];
     list.push({ positionId: a.position_id, period: parseRange(a.period), missionClass: a.mission_class });
     existing.set(a.soldier_id, list);
@@ -80,9 +103,8 @@ export async function loadContext(day: string): Promise<Context> {
 
   // Yesterday's Level-1 position: prefer day_assignments, fall back to the
   // dominant (longest) non-readiness shift of yesterday.
-  const yesterday = addDays(day, -1);
   const yesterdayPosition = new Map<number, number>();
-  for (const r of await query(`select soldier_id, position_id from day_assignments where day = $1`, [yesterday])) {
+  for (const r of ydayRows) {
     yesterdayPosition.set(r.soldier_id, r.position_id);
   }
   if (yesterdayPosition.size === 0) {
@@ -118,33 +140,27 @@ export async function loadContext(day: string): Promise<Context> {
 
   // Unavailability windows intersecting the schedule day.
   const blocked = new Map<number, [Minutes, Minutes][]>();
-  for (const u of await query(`
-    select soldier_id, period::text from unavailability
-    where period && tsrange(day_start($1), day_start($1) + interval '1 day')`, [day])) {
+  for (const u of blockRows) {
     const list = blocked.get(u.soldier_id) ?? [];
     list.push(parseRange(u.period));
     blocked.set(u.soldier_id, list);
   }
 
-  const lockedShift = (await query(`
-    select soldier_id, position_id, period::text from shift_assignments
-    where day = $1 and (locked or source in ('manual','import'))`, [day]))
+  const lockedShift = lockShiftRows
     .map((r) => ({ soldierId: r.soldier_id, positionId: r.position_id, period: parseRange(r.period) as [Minutes, Minutes] }));
   const lockedDay = new Map<number, number>();
-  for (const r of await query(`
-    select soldier_id, position_id from day_assignments
-    where day = $1 and (locked or source = 'manual')`, [day])) {
+  for (const r of lockDayRows) {
     lockedDay.set(r.soldier_id, r.position_id);
   }
 
-  const chainRules: ChainRule[] = (await query(`select * from chain_rules order by id`)).map((c) => ({
+  const chainRules: ChainRule[] = chainRows.map((c) => ({
     targetPosition: c.target_position, targetStart: String(c.target_start).slice(0, 5),
     sourcePosition: c.source_position, sourceStart: String(c.source_start).slice(0, 5),
     sourceDayOffset: c.source_day_offset, pick: c.pick,
   }));
 
   const config: Record<string, any> = {};
-  for (const c of await query(`select key, value from config`)) config[c.key] = c.value;
+  for (const c of configRows) config[c.key] = c.value;
 
   return {
     day, soldiers, positions, positionByName, slots, fairness, existing,

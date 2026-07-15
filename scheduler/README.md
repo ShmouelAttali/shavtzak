@@ -71,8 +71,12 @@ docker exec -i shavtzak-pg psql -U postgres \
 ## Next phases
 
 1. ~~Generator~~ (done — `src/`).
-2. Provision shared Supabase project; point `SCHEDULER_DATABASE_URL` at it; real import
-   (incl. building `unavailability` from the roster status matrix + deciding the 50
-   overlapping history rows; dedupe name-spelling variants, e.g. קלין/קליין).
-3. Validator function (SPEC §8) writing `schedule_days.validation`.
-4. Sheet sync-out (append approved days to `כל השבצק`).
+2. ~~Supabase provisioning + import~~ (done — see "Connect to the DB").
+3. ~~Import cleanup~~ (overlap rows as `blocks_overlap=false`, name dedupe,
+   `unavailability` from roster matrix — `import/cleanup.py`).
+4. ~~Validator~~ (SPEC §8 — `src/validate.ts`, runs after every generation and via
+   `npx tsx src/cli.ts validate <day>`; results in `schedule_days.validation`).
+5. ~~Operational UI~~ (SPEC §12 — draft + fairness tabs in the viewer app;
+   `api/draft.ts`, `api/fairness.ts`).
+6. Sheet sync-out (append approved days to `כל השבצק`) — NOT started; everything is
+   draft-only by design.

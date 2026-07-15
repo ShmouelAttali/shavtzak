@@ -158,7 +158,8 @@ Checks per day (parity with the Apps Script validator): rest ≥8h incl. previou
 overlaps, chained-duty sourcing (carmel/konenut/tracker crews match their source
 shifts), carmel min staffing, ≤8h/day, assignment vs availability,
 present-but-unassigned, unknown soldier names. Results snapshot stored on
-`schedule_days.validation` (jsonb).
+`schedule_days.validation` (jsonb) — written automatically after every generation
+(`persist`) and available via CLI `validate <day>`.
 
 ## 9. Database design
 
@@ -205,3 +206,37 @@ validator keep working. Optional: render the daily שבצק-tab layout.
 - History data quality: import dry-run found **50 genuinely overlapping rows** in
   כל השבצק (mostly יומי + timed shift, same soldier, same day). Decide per row on
   real import: drop, trim, or mark `blocks_overlap=false`.
+
+## 11. Import data-quality decisions (resolved)
+
+- The 50 genuinely-overlapping history rows (יומי mission alongside a timed shift,
+  same soldier, same day) are imported with `blocks_overlap=false` — day-duty
+  semantics, matching the Apps Script engine's treatment.
+- Soldier-name spelling variants (e.g. קלין/קליין) are merged automatically:
+  normalized-name match (quotes stripped, spaces collapsed, single-letter edit
+  distance within the same platoon); the roster spelling is kept and history rows
+  re-pointed. Every merge is logged.
+- `unavailability` is built from the roster's date-status matrix: consecutive
+  non-נוכח runs become one period row anchored to 14:00 day boundaries.
+
+## 12. Operational UI (viewer app)
+
+Two officer-only tabs (client-side gating via COMPANY_ROLES, consistent with the
+existing סיכום פלוגתי tab) added to the existing React viewer:
+
+- **שבצק חדש (טיוטה)** — daily draft view. Date picker with optional multi-day range;
+  renders drafts from the DB in the same station-group layouts as the sheet-based
+  שבצק tab. Shows per-day status badge, per-assignment violation markers, the day's
+  validation panel (errors/warnings), and the מנוחה list. A **צור שבצ"ק** button
+  triggers generation for the selected day(s) via the API; regeneration replaces
+  only `source in ('auto','chain')` unlocked rows. Days remain in the draft family
+  (`generated`) — approval/publish and sheet sync-out are explicitly out of scope.
+- **הוגנות** — weekly fairness. Date picker selects the rolling-7-day window end;
+  table per soldier: nights 7d, weighted hours 7d, mission/readiness hours 7d,
+  deployment totals (nights, tracker hours), common positions. Sortable columns,
+  platoon filter, spread indicator cards (min/max/avg/stddev) with outlier
+  color-coding (above avg+σ / below avg−σ).
+
+Data flows through two Vercel serverless endpoints (`api/draft.ts`, `api/fairness.ts`)
+reading the scheduler DB via `SCHEDULER_DATABASE_URL`; endpoints are open like the
+existing sheet endpoints (no server-side auth) per current app security model.
