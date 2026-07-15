@@ -63,17 +63,25 @@ function localPlusHours(h: number): string {
   const p = (n: number) => String(n).padStart(2, '0');
   return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
 }
-function fmtDateTime(iso: string): string {
-  if (!iso) return '—';
-  try {
-    const d = new Date(iso);
-    const p = (n: number) => String(n).padStart(2, '0');
-    const today = new Date();
-    const isToday = d.toDateString() === today.toDateString();
-    const time = `${p(d.getHours())}:${p(d.getMinutes())}`;
-    if (isToday) return time;
-    return `${time} • ${p(d.getDate())}/${p(d.getMonth()+1)}`;
-  } catch { return iso; }
+// Parses the sheet's "dd/mm/yy HH:mm" format — not reliably parseable by `new Date()`
+function parseSheetDateTime(s: string): Date | null {
+  const m = s.trim().match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})\s+(\d{1,2}):(\d{2})$/);
+  if (!m) return null;
+  const [, dd, mm, yy, hh, min] = m;
+  const year = yy.length === 2 ? 2000 + parseInt(yy, 10) : parseInt(yy, 10);
+  const d = new Date(year, parseInt(mm, 10) - 1, parseInt(dd, 10), parseInt(hh, 10), parseInt(min, 10));
+  return isNaN(d.getTime()) ? null : d;
+}
+function fmtDateTime(sheetStr: string): string {
+  if (!sheetStr) return '—';
+  const d = parseSheetDateTime(sheetStr);
+  if (!d) return sheetStr;
+  const p = (n: number) => String(n).padStart(2, '0');
+  const today = new Date();
+  const isToday = d.toDateString() === today.toDateString();
+  const time = `${p(d.getHours())}:${p(d.getMinutes())}`;
+  if (isToday) return time;
+  return `${time} • ${p(d.getDate())}/${p(d.getMonth()+1)}`;
 }
 function isoToSheet(iso: string): string {
   if (!iso) return '';
