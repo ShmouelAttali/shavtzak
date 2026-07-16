@@ -48,6 +48,16 @@ Playwright gotcha: `npm i --no-save playwright`, then launch with
 `chromium.launch({ executablePath: '/opt/pw-browsers/chromium' })` — the
 preinstalled browser revision won't match the npm package's expected one.
 
+On macOS (local dev, not the headless container): launch with
+`chromium.launch({ channel: 'chrome', headless: true })` instead. The drive
+script must resolve `playwright` from the project's node_modules — run it from
+the repo, or import by absolute path
+(`<repo>/node_modules/playwright/index.mjs`) if it lives in the scratchpad.
+
+Cleanup: kill only the servers YOU started (by PID or
+`kill $(lsof -ti:3001)`) — `pkill -f vite` also kills a dev server the user
+has running.
+
 ## Gotchas
 
 - The draft tab needs a date with generated rows — fill the first
