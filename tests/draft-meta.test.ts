@@ -56,6 +56,7 @@ test('GET returns rationale meta for every soldier×time in groups', async () =>
     for (const sub of g.subTypes) {
       for (const slot of sub.times) {
         for (const name of slot.soldiers) {
+          if (name === 'לא מאויש') continue;   // empty-seat placeholder — no meta
           cells++;
           const meta = day.meta[`${name}|${slot.time}`];
           assert.ok(meta, `missing meta for ${name}|${slot.time}`);

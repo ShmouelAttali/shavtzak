@@ -43,6 +43,14 @@ function SoldierName({name, time}: { name: string; time?: string }) {
     const myName = useContext(MyNameCtx);
     const draftMeta = useContext(DraftMetaCtx);
     const onRationale = useContext(RationaleClickCtx);
+    // draft API pads under-filled slots with this marker — render as a red badge
+    if (name === 'לא מאויש') {
+        return (
+            <span className="text-sm whitespace-nowrap leading-snug select-none font-bold text-red-600 bg-red-50 ring-1 ring-red-300 rounded px-1.5 py-0.5">
+                ⚠ לא מאויש
+            </span>
+        );
+    }
     const info = lookup.get(name);
     const bold = info ? BOLD_ROLES.has(info.role) : false;
     const color = info ? (UNIT_COLOR[info.unit] ?? 'text-gray-800') : 'text-gray-800';

@@ -29,6 +29,12 @@ SCHEDULER_DATABASE_URL='postgres://postgres:test@localhost:55432/shavtzak_test' 
 curl 'http://localhost:3001/api/draft?from=2026-09-02&to=2026-09-02'
 ```
 
+**Gotcha**: `scripts/dev-api.ts`'s minimal .env loader OVERRIDES existing env
+vars — if `.env`/`.env.local` holds the Supabase URL, the export above is
+silently ignored and dev-api connects to Supabase. Verify which DB you hit
+(real names vs `חייל NN` in responses) before trusting results; GETs are safe,
+never verify writes that way.
+
 ## UI surface (Clerk-gated)
 
 `src/main.tsx` throws without `VITE_CLERK_PUBLISHABLE_KEY` (git-ignored `.env`),

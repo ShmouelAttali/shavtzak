@@ -44,9 +44,12 @@ export interface GenerateResponse {
 const hm = (d: Date) =>
   `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
 
+/** placeholder soldier name for an empty seat (rendered as a red badge by SoldierName) */
+const UNFILLED = 'לא מאויש';
+
 async function getDrafts(from: string, to: string): Promise<DraftResponse> {
   const pool = getPool();
-  const [daysRes, rowsRes, dayAssignRes] = await Promise.all([
+  const [daysRes, rowsRes, dayAssignRes, slotsRes] = await Promise.all([
     pool.query(
       `select day::text, status, generated_at, validation
        from schedule_days where day between $1 and $2 order by day`, [from, to]),
@@ -67,6 +70,15 @@ async function getDrafts(from: string, to: string): Promise<DraftResponse> {
        join soldiers s on s.id = da.soldier_id
        where da.day between $1 and $2
        order by da.day, p.id, s.full_name`, [from, to]),
+    pool.query(
+      `select ds.day::text, p.name pos_name, p.config pos_config, sp.name sub_name,
+              lower(ds.period) p_start, upper(ds.period) p_end, ds.seats
+       from day_slots ds
+       join positions p on p.id = ds.position_id
+       left join sub_positions sp on sp.id = ds.sub_position_id
+       where ds.day between $1 and $2 and p.is_scheduled
+         and p.mission_class <> 'rest' and not (p.config ? 'staff_all_roles')
+       order by ds.day, p.id, lower(ds.period)`, [from, to]),
   ]);
 
   const days = new Map<string, DraftDay>();
@@ -114,6 +126,37 @@ async function getDrafts(from: string, to: string): Promise<DraftResponse> {
       rationale: [...prev.rationale, ...rationale],
     } : { source: r.source, locked: r.locked, violations, rationale };
   }
+  // Merge the day's slot catalog in: an under-filled slot shows explicit
+  // "לא מאויש" markers so empty positions are visible on the page itself,
+  // not only in the validation panel. Imported history rows carry no
+  // sub-position, so null-sub rows at the same start excuse any sub-slot.
+  const countAt = (bySug: Map<string, Map<string, string[]>>, sug: string, time: string) =>
+    bySug.get(sug)?.get(time)?.length ?? 0;
+  for (const sl of slotsRes.rows) {
+    const day = days.get(sl.day);
+    if (!day || day.status === 'draft') continue;   // never-generated days stay empty
+    const start = new Date(sl.p_start), end = new Date(sl.p_end);
+    const startsNextDay = `${start.getFullYear()}-${String(start.getMonth() + 1).padStart(2, '0')}-${String(start.getDate()).padStart(2, '0')}` !== sl.day;
+    const time = sl.pos_config?.yomi_display
+      ? 'יומי'
+      : `${hm(start)}-${hm(end)}${startsNextDay ? ' (למחרת)' : ''}`;
+    const station = sl.pos_name as string;
+    const sug = (sl.sub_name as string | null) ?? station;
+    const gKey = `${sl.day}|${station}`;
+    const bySug = grouping.get(gKey) ?? new Map<string, Map<string, string[]>>();
+    grouping.set(gKey, bySug);
+    // rows matching this slot: exact sub + pooled null-sub rows (import data)
+    let n = countAt(bySug, sug, time);
+    if (sl.sub_name !== null) n += countAt(bySug, station, time);
+    const missing = Number(sl.seats) - n;
+    if (missing <= 0) continue;
+    const byTime = bySug.get(sug) ?? new Map<string, string[]>();
+    bySug.set(sug, byTime);
+    const soldiers = byTime.get(time) ?? [];
+    byTime.set(time, soldiers);
+    for (let i = 0; i < missing; i++) soldiers.push(UNFILLED);
+  }
+
   for (const [gKey, bySug] of grouping) {
     const [dayKey, station] = gKey.split('|');
     const day = days.get(dayKey)!;
