@@ -11,7 +11,7 @@ insert into positions (id, name, mission_class, is_scheduled, blocks_day, config
   -- התקפי: standing 8-soldier readiness crew (14:00-14:00) that also staffs
   -- the תגבצ windows and executes ad-hoc attack missions
   ( 4, 'התקפי',       'readiness', true,  true,  '{"open_for_attack":true,"covers":["תגבצ"]}'),
-  ( 5, 'תגבצ',        'dynamic',   true,  false, '{"staffed_by":"התקפי"}'),
+  ( 5, 'תגבצ',        'dynamic',   false, false, '{"staffed_by":"התקפי"}'),  -- disabled for now (is_scheduled=false)
   ( 6, 'חפק',         'other',     true,  true,  '{"seat_rules": [
       {"sub": "מפקד", "roles": ["מ\"פ", "סמ\"פ"], "commander": true},
       {"sub": "קשר",  "soldiers": ["יהודה חושן", "אור חיים בלונדר", "יחיעם אושפיזאי"], "ordered": true, "release_unpicked": true},
@@ -23,7 +23,8 @@ insert into positions (id, name, mission_class, is_scheduled, blocks_day, config
   ( 9, 'קצין מוצב',   'other',     true,  true,  '{}'),
   (10, 'כרמל חטיבה',  'readiness', true,  false, '{}'),
   (11, 'חמל',         'other',     false, false, '{}'),
-  (12, 'מנוחה',       'rest',      true,  false, '{}');
+  (12, 'מנוחה',       'rest',      true,  false, '{}'),
+  (13, 'בבית',        'rest',      true,  false, '{}');  -- fully unavailable (H1) — not on base
 
 -- ── Sub-positions ───────────────────────────────────────────────────────────
 insert into sub_positions (id, position_id, name, required_role) values
@@ -70,9 +71,9 @@ values
 insert into slot_templates (position_id, sub_position_id, start_time, duration_minutes, seats, valid_from)
 select 6, v.sp, '06:00', 960, 1, date '2026-07-15' from (values (7),(8),(9),(10)) v(sp);
 
--- תורנים: 2 seats, 07:30–22:00
+-- תורנים: 2 seats, 14:00–14:00 (full schedule day, aligned with the rotation)
 insert into slot_templates (position_id, start_time, duration_minutes, seats, valid_from)
-values (7, '07:30', 870, 2, '2026-07-15');
+values (7, '14:00', 1440, 2, '2026-07-15');
 
 -- כונן גשש: 3 chained windows (T4c), 1 seat each
 insert into slot_templates (position_id, start_time, duration_minutes, seats, valid_from)
@@ -81,9 +82,9 @@ values
   (8, '07:00', 420, 1, '2026-07-15'),   -- 07:00–14:00
   (8, '14:00', 480, 1, '2026-07-15');   -- 14:00–22:00
 
--- קצין מוצב: 1 seat, 06:00–22:00 (blocks day)
+-- קצין מוצב: 1 seat, full schedule day 14:00–14:00 (blocks day)
 insert into slot_templates (position_id, start_time, duration_minutes, seats, valid_from)
-values (9, '06:00', 960, 1, '2026-07-15');
+values (9, '14:00', 1440, 1, '2026-07-15');
 
 -- כרמל חטיבה: 3 regular + 1 commander × (06,10,14,18 = 4h; 22:00 = 8h)
 insert into slot_templates (position_id, sub_position_id, start_time, duration_minutes, seats, valid_from)

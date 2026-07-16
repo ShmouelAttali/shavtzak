@@ -62,18 +62,30 @@ function ValidationPanel({ findings }: { findings: DraftFinding[] }) {
 }
 
 function RestList({ day }: { day: DraftDay }) {
+  const sections: [string, string, string[]][] = [
+    ['מנוחה', '😴', day.dayAssignments['מנוחה'] ?? []],
+    ['בבית', '🏠', day.dayAssignments['בבית'] ?? []],
+  ];
+  return (
+    <>
+      {sections.map(([label, icon, names]) => names.length > 0 && (
+        <RestSection key={label} label={`${icon} ${label}`} names={names} />
+      ))}
+    </>
+  );
+}
+
+function RestSection({ label, names }: { label: string; names: string[] }) {
   const [open, setOpen] = useState(false);
-  const resting = day.dayAssignments['מנוחה'] ?? [];
-  if (!resting.length) return null;
   return (
     <div className="rounded-lg border border-gray-200 bg-white">
       <button onClick={() => setOpen(!open)} className="w-full px-3 py-2 text-right text-sm font-semibold text-gray-600 flex justify-between items-center">
-        <span>מנוחה ({resting.length})</span>
+        <span>{label} ({names.length})</span>
         <span className="text-gray-400">{open ? '▲' : '▼'}</span>
       </button>
       {open && (
         <div className="px-4 pb-3 flex flex-wrap gap-x-3 gap-y-1 text-sm text-gray-700">
-          {resting.map((n) => <span key={n}>{n}</span>)}
+          {names.map((n) => <span key={n}>{n}</span>)}
         </div>
       )}
     </div>

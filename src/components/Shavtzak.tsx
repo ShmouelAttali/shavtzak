@@ -72,10 +72,12 @@ function SoldierName({name, time}: { name: string; time?: string }) {
 // SoldierPopup is imported from ./SoldierPopup
 
 // ── Helpers ────────────────────────────────────────────────────────────────
+// Schedule day runs 14:00→14:00 — shift lists start at 14:00, times before
+// 14:00 belong to the tail of the day (02:00, 06:00, 10:00 come last).
 function timeToVal(t: string): number {
     if (!t || t === 'יומי') return 9999;
     const h = parseInt(t.split(':')[0] ?? '0');
-    return h < 6 ? h + 24 : h;
+    return h < 14 ? h + 24 : h;
 }
 
 function allUniqueTimes(subTypes: SubType[]): string[] {

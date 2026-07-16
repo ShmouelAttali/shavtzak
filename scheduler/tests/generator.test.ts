@@ -83,7 +83,25 @@ test('unavailable soldier is never assigned (H1)', async () => {
   const rows = await query(`
     select 1 from shift_assignments where soldier_id = $1 and day = $2`, [sid, D3]);
   assert.equal(rows.length, 0);
+  // fully-unavailable soldier lands in the בבית bucket, not מנוחה
+  const bucket = await query<{ name: string }>(`
+    select p.name from day_assignments da join positions p on p.id = da.position_id
+    where da.soldier_id = $1 and da.day = $2`, [sid, D3]);
+  assert.equal(bucket[0]?.name, 'בבית');
   await query(`delete from unavailability where soldier_id = $1`, [sid]);
+});
+
+test('partial-day unavailability never lands in בבית', async () => {
+  const sid = await soldierId('חייל 21');
+  await query(`insert into unavailability (soldier_id, period, kind)
+               values ($1, tsrange(day_start($2) + interval '4 hours', day_start($2) + interval '8 hours'), 'יציאה')`, [sid, D3]);
+  await persist(await generate(D3));
+  const bucket = await query<{ name: string }>(`
+    select p.name from day_assignments da join positions p on p.id = da.position_id
+    where da.soldier_id = $1 and da.day = $2`, [sid, D3]);
+  assert.notEqual(bucket[0]?.name, 'בבית');
+  await query(`delete from unavailability where soldier_id = $1`, [sid]);
+  await persist(await generate(D3));   // restore clean D3 for later tests
 });
 
 test('locked assignment survives regeneration', async () => {
@@ -118,17 +136,24 @@ test('מגן continuity: same crew on consecutive days, all one platoon', async 
   for (const c of crews) assert.equal(Number(c.platoons), 1, 'crew must be one platoon');
 });
 
-test('התקפי crew staffs the תגבצ windows (staffed_by)', async () => {
+test('תגבצ is disabled (is_scheduled=false) — no rows generated', async () => {
   const rows = await query(`
-    select count(*) total,
-           count(*) filter (where exists (
-             select 1 from day_assignments da
-             where da.day = sa.day and da.soldier_id = sa.soldier_id
-               and da.position_id = (select id from positions where name = 'התקפי'))) from_crew
-    from shift_assignments sa
-    where sa.day = $1 and sa.position_id = (select id from positions where name = 'תגבצ')`, [D3]);
-  assert.ok(Number(rows[0].total) > 0, 'תגבצ rows exist');
-  assert.equal(Number(rows[0].from_crew), Number(rows[0].total), 'all תגבצ rows from התקפי crew');
+    select count(*) n from shift_assignments sa
+    where sa.position_id = (select id from positions where name = 'תגבצ')`);
+  assert.equal(Number(rows[0].n), 0);
+});
+
+test('תורנים and קצין מוצב run the full schedule day (14:00→14:00)', async () => {
+  const rows = await query(`
+    select p.name, lower(sa.period)::text lo,
+           extract(epoch from (upper(sa.period) - lower(sa.period))) / 3600 dur_h
+    from shift_assignments sa join positions p on p.id = sa.position_id
+    where sa.day = $1 and p.name in ('תורנים', 'קצין מוצב')`, [D3]);
+  assert.ok(rows.length >= 3, 'תורנים + קצין מוצב rows exist');
+  for (const r of rows) {
+    assert.ok(String(r.lo).includes('14:00:00'), `${r.name}: starts at ${r.lo}`);
+    assert.equal(Number(r.dur_h), 24, `${r.name}: duration ${r.dur_h}h`);
+  }
 });
 
 test('seat override changes crew size, continuity keeps existing members', async () => {

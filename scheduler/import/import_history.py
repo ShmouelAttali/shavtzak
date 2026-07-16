@@ -199,6 +199,9 @@ def main():
         print(f'insert into soldiers (personal_number, full_name, platoon, role, rifle_level)'
               f' values ({q(pn2)}, {q(name)}, {q(platoon or "לא ידוע")}, {q(role)},'
               f' {rifle or "null"}) on conflict (personal_number) do nothing;', file=out)
+    # H2: role חמל is excluded from scheduling (no חמל shift logic yet)
+    print("update soldiers set is_schedulable = false"
+          " where translate(coalesce(role,''),'\"״','') = 'חמל';", file=out)
     for name, _pn, _platoon, _role, _rifle, quals in soldiers.values():
         for qual in sorted(quals):
             print(f'insert into soldier_qualifications (soldier_id, qualification)'

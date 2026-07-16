@@ -84,7 +84,10 @@ async function getDrafts(from: string, to: string): Promise<DraftResponse> {
     const day = days.get(r.day);
     if (!day) continue;
     const start = new Date(r.p_start), end = new Date(r.p_end);
-    const time = `${hm(start)}-${hm(end)}`;
+    // a shift starting on the next calendar day (tail of the 14:00→14:00
+    // schedule day) is marked למחרת so the card reads unambiguously
+    const startsNextDay = `${start.getFullYear()}-${String(start.getMonth() + 1).padStart(2, '0')}-${String(start.getDate()).padStart(2, '0')}` !== r.day;
+    const time = `${hm(start)}-${hm(end)}${startsNextDay ? ' (למחרת)' : ''}`;
     const station = r.pos_name as string;
     const sug = (r.sub_name as string | null) ?? station;
     const gKey = `${r.day}|${station}`;

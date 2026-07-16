@@ -17,7 +17,7 @@
 | Soldier | Roster member: platoon (עלי/שילה/גבעות צפון/גבעות דרום/מפלג), role (מ"פ/סמ"פ/מ"מ/סמל/מ"כ/מ"ח/לוחם…), rifle level (רובאי), qualifications (נהג דוד, נהג טיגריס, חובש, מאג, קלע, חמליסט…) |
 | Schedule day | **14:00 → 14:00 next day** — the single day unit for Level-1 assignment, konenut, rest accounting, daily caps. A shift belongs to the schedule day containing its start |
 | Night | **00:00–06:00** (fairness night-count window; configurable) |
-| Position (עמדה) | Top-level Level-1 unit: סיור, עמדות הגנה (merged שג+בונקר+מזרחית+דרומית), מגן, התקפי, חפק, תורנים, קצין מוצב, מנוחה (explicit rest bucket). תגבצ is staffed by the התקפי crew; כרמל חטיבה + כונן גשש are chained overlays; חמל excluded (config) |
+| Position (עמדה) | Top-level Level-1 unit: סיור, עמדות הגנה (merged שג+בונקר+מזרחית+דרומית), מגן, התקפי, חפק, תורנים, קצין מוצב, מנוחה (rest on base), בבית (fully unavailable). תגבצ is disabled for now; כרמל חטיבה + כונן גשש are chained overlays; חמל excluded (soldiers with role חמל are is_schedulable=false) |
 | Slot | Concrete (position, sub-position, time-range, seat#) needing one soldier. Level-2 unit |
 | Mission class | `static` (עמדות הגנה, תורן) / `dynamic` (סיור, תגבצ) / `readiness` (התקפי, כרמל, כונן גשש) — drives rotation + rest-transparency |
 | Chained duty | Duty auto-staffed by the crew descending from a source shift (rule T4): כרמל חטיבה, כונן גשש |
@@ -33,11 +33,11 @@ History shows 39 distinct position names over 20 days; templates change mid-depl
 | עמדות הגנה (שג/בונקר/מזרחית/דרומית) | 4 posts × 06,10,14,18,22,02 | 4h |
 | מגן | 10 seats, 06:00–22:00 | daily; **continuity crew, one מחלקה** (kept day-to-day unless seat count or a manual change intervenes) |
 | התקפי | 8 seats | **14:00–14:00** standing readiness crew; also **staffs the תגבצ windows** and executes ad-hoc attack missions |
-| תגבצ | 8 × 06:30–09:00, 8 × 17:00–22:00 | staffed by the התקפי crew (`staffed_by`) — no own Level-1 crew |
+| תגבצ | **disabled for now** (`is_scheduled=false`; was: staffed by the התקפי crew via `staffed_by`) | — |
 | חפק | 4 named seats (מפקד/קשר/חובש/נהג), 06:00–22:00 | daily; **dedicated candidates per seat — see H6b** |
-| תורנים | 2 seats, 07:30–22:00 | daily |
+| תורנים | 2 seats, **14:00–14:00** | full schedule day, aligned with the general rotation |
 | כונן גשש | chained to סיור — see T4c | windows: 22–07, 07–14, 14–22 |
-| קצין מוצב | 1 seat, 06:00–22:00 | blocks whole day |
+| קצין מוצב | 1 seat, **14:00–14:00** | full schedule day (no hours — the whole day) |
 | כרמל חטיבה / מפקד כרמל חטיבה | 3+1 × 06,10,14,18, 22:00–06:00 | 4h (last shift 8h) |
 
 Ad-hoc attack missions (פטרול, תגבצ+פטרול, צ'קפוסט…) are executed by the התקפי

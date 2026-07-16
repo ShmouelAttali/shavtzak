@@ -375,8 +375,13 @@ export async function generate(day: string): Promise<GenerateResult> {
   }
 
   const restId = ctx.positionByName.get('מנוחה')!;
+  // מנוחה = resting on base; a soldier blocked for the whole day is בבית
+  const homeId = ctx.positionByName.get('בבית') ?? restId;
   for (const st of state.values()) {
-    if (st.level1 === null) { st.level1 = restId; level1.set(st.soldier.id, restId); }
+    if (st.level1 === null) {
+      const pid = fullyBlocked(st.soldier.id) ? homeId : restId;
+      st.level1 = pid; level1.set(st.soldier.id, pid);
+    }
   }
 
   // ── Level 2: fill slots within each position group ──────────────────────
