@@ -48,6 +48,15 @@ POSITION_MAP = [
 ]
 DEFENSE_POSTS = {'שג', 'בונקר', 'מזרחית', 'דרומית'}
 
+# qualifications hide in the roster's תפקיד (when it isn't a command role) and
+# in the free-text הערות column ('מאג + קלע.', 'מ"כ + נגביסט', 'רחפן - יולי').
+# 'נגב' also matches 'נגביסט'.
+QUAL_KEYWORDS = ['נהג דוד', 'נהג טיגריס', 'חובש', 'קלע', 'נגב', 'מאג', 'רחפן', 'מטב']
+
+def extract_quals(role, notes):
+    text = nkey(role) + ' | ' + nkey(notes)
+    return {q for q in QUAL_KEYWORDS if nkey(q) in text}
+
 def canonical_position(position, typ):
     text = nkey(position + ' ' + typ)
     if nkey(position) in {nkey(p) for p in DEFENSE_POSTS} or 'עמדות הגנה' in text:
@@ -144,6 +153,7 @@ def main():
         c_platoon = h.index('מחלקה') if 'מחלקה' in h else None
         c_role = h.index('תפקיד') if 'תפקיד' in h else None
         c_rifle = h.index('רובאי') if 'רובאי' in h else None
+        c_notes = h.index('הערות') if 'הערות' in h else None
         for r in rows[header_idx + 1:]:
             name = norm(r[c_name]) if c_name < len(r) else ''
             if not name or nkey(name) in {nkey(x) for x in IGNORE_SOLDIERS}:
@@ -152,8 +162,9 @@ def main():
             platoon = norm(r[c_platoon]) if c_platoon is not None and c_platoon < len(r) else ''
             role = norm(r[c_role]) if c_role is not None and c_role < len(r) else ''
             rifle = re.sub(r'\D', '', norm(r[c_rifle])) if c_rifle is not None and c_rifle < len(r) else ''
+            notes = norm(r[c_notes]) if c_notes is not None and c_notes < len(r) else ''
             if nkey(name) not in soldiers:
-                soldiers[nkey(name)] = (name, pn, platoon, role, rifle)
+                soldiers[nkey(name)] = (name, pn, platoon, role, rifle, extract_quals(role, notes))
 
     hist = list(csv.reader(open(args.history)))
     h = [norm(c) for c in hist[0]]
@@ -176,18 +187,23 @@ def main():
             skipped.append((i, position, typ, time_text))
             continue
         if nkey(soldier) not in soldiers:
-            soldiers[nkey(soldier)] = (soldier, '', '', '', '')
+            soldiers[nkey(soldier)] = (soldier, '', '', '', '', set())
         assignments.append((soldier, canon, period))
 
     # emit SQL (no wrapping transaction: genuine overlaps in manual history data
     # should fail row-by-row against no_double_booking, not abort the import)
     print("insert into positions (id, name, mission_class) values (99,'אחר','other')"
           ' on conflict do nothing;', file=out)
-    for idx, (name, pn, platoon, role, rifle) in enumerate(soldiers.values(), start=1):
+    for idx, (name, pn, platoon, role, rifle, _quals) in enumerate(soldiers.values(), start=1):
         pn2 = pn or f'IMP{idx:04d}'
         print(f'insert into soldiers (personal_number, full_name, platoon, role, rifle_level)'
               f' values ({q(pn2)}, {q(name)}, {q(platoon or "לא ידוע")}, {q(role)},'
               f' {rifle or "null"}) on conflict (personal_number) do nothing;', file=out)
+    for name, _pn, _platoon, _role, _rifle, quals in soldiers.values():
+        for qual in sorted(quals):
+            print(f'insert into soldier_qualifications (soldier_id, qualification)'
+                  f' select id, {q(qual)} from soldiers where full_name = {q(name)}'
+                  f' on conflict do nothing;', file=out)
     for soldier, canon, (start, end) in assignments:
         sd = start.date() if start.hour >= 14 or (start.hour == 14 and start.minute >= 0) else start.date() - timedelta(days=1)
         days.add(sd)
