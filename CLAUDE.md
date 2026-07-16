@@ -17,7 +17,9 @@ and live against the shared Supabase project:
   approval + sheet sync-out NOT built, by design).
 - **Viewer app**: two officer-only tabs — שבצק חדש (טיוטה) (date range +
   צור שבצ"ק button → `api/draft.ts`) and הוגנות (Sunday-anchored week,
-  spread cards, sortable table → `api/fairness.ts`). Tab visibility also
+  compliance dashboard: one exceptions-only card per SPEC rule fed by running
+  the validator over the window's days, plus fairness-spread / position-balance
+  cards → `api/fairness.ts`). Tab visibility also
   granted by the `shavtzak_admins` DB table (`api/admins.ts`).
 - **Local dev**: `npm run dev:api` (port 3001) + `npm run dev` (vite 5173);
   env in `.env`/`.env.local` (git-ignored). Vercel prod needs
