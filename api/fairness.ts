@@ -49,10 +49,10 @@ async function collectCompliance(date: string): Promise<{ compliance: Compliance
   const checkedDays: string[] = rows.map((r) => r.day);
   // validateDay reads through scheduler/src/db.js (same SCHEDULER_DATABASE_URL)
   const { validateDay } = await import('../scheduler/src/validate.js');
-  const compliance: ComplianceFinding[] = [];
-  for (const day of checkedDays) {
-    for (const f of await validateDay(day)) compliance.push({ day, ...f });
-  }
+  // parallel — each validateDay is a single multiQuery round trip
+  const perDay = await Promise.all(checkedDays.map(async (day) =>
+    (await validateDay(day)).map((f): ComplianceFinding => ({ day, ...f }))));
+  const compliance: ComplianceFinding[] = perDay.flat();
   const STREAK_RULES = new Set(['consecutive_nights', 'static_streak']);
   const best = new Map<string, ComplianceFinding>();
   const rest: ComplianceFinding[] = [];

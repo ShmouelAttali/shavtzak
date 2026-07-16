@@ -17,7 +17,7 @@ insert into positions (id, name, mission_class, is_scheduled, blocks_day, config
       {"sub": "קשר",  "soldiers": ["יהודה חושן", "אור חיים בלונדר", "יחיעם אושפיזאי"], "ordered": true, "release_unpicked": true},
       {"sub": "חובש", "soldiers": ["כפיר לנדסמן", "שחר מיכאלי"]},
       {"sub": "נהג",  "soldiers": ["אמיר יונייב", "יאיר מובשוביץ"]}
-    ]}'),
+    ], "yomi_display": true}'),
   ( 7, 'תורנים',      'static',    true,  true,  '{"night_exempt":true}'),
   ( 8, 'כונן גשש',    'readiness', true,  false, '{"tracker":true}'),
   ( 9, 'קצין מוצב',   'other',     true,  true,  '{"night_exempt":true}'),
