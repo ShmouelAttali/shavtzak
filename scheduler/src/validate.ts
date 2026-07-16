@@ -46,12 +46,12 @@ export async function validateDay(day: string): Promise<Finding[]> {
      where period && tsrange(day_start('${day}'), day_start('${day}') + interval '1 day')`,
     `select da.soldier_id, p.name pos_name from day_assignments da
      join positions p on p.id = da.position_id where da.day = '${day}'`,
-    `select id, full_name, is_schedulable, coalesce(role,'') role from soldiers`,
+    `select id, full_name, is_schedulable, coalesce(role,'') role, allowed_positions from soldiers`,
     `select cr.*, tp.name target_name, sp2.name source_name from chain_rules cr
      join positions tp on tp.id = cr.target_position
      join positions sp2 on sp2.id = cr.source_position order by cr.id`,
     `select id, name, config from positions where config ? 'seat_rules'`,
-    `select ds.position_id, sp.name sub_name from day_slots ds
+    `select ds.position_id, sp.name sub_name, ds.period::text from day_slots ds
      left join sub_positions sp on sp.id = ds.sub_position_id where ds.day = '${day}'`,
   ]);
 
@@ -259,11 +259,17 @@ export async function validateDay(day: string): Promise<Finding[]> {
         }
       }
       // exclusivity: candidates serve only in this position; a release rule
-      // frees the unchosen candidates once the seat is covered by someone else
+      // frees the unchosen candidates once the seat is covered by someone else,
+      // and a candidate blocked for the seat's window is excused entirely
       const seatFilled = seatRows.length > 0;
+      const slotRow = (daySlotRows as any[]).find((ds) => ds.position_id === p.id
+        && nrm(ds.sub_name ?? '') === nrm(rule.sub));
+      const window = slotRow ? parseRange(slotRow.period) : dRange;
       for (const cid of candIds) {
         const isChosen = seatRows.some((sr) => sr.soldierId === cid);
-        const allowedElsewhere = !!rule.release_unpicked && seatFilled && !isChosen;
+        const blockedForSeat = unavail.some((u) => u.soldierId === cid && overlaps(u.period, window));
+        const allowedElsewhere = (!!rule.release_unpicked && seatFilled && !isChosen)
+          || (!isChosen && blockedForSeat);
         if (allowedElsewhere) continue;
         const elsewhere = today.filter((r) => r.soldierId === cid
           && r.positionId !== p.id && r.missionClass !== 'rest');
@@ -273,6 +279,22 @@ export async function validateDay(day: string): Promise<Finding[]> {
             message: `${e.soldierName} שמור למושב ${rule.sub} ב${p.name} אך משובץ ל${e.positionName} ${fmtHM(e.period[0])}`,
           });
         }
+      }
+    }
+  }
+
+  // ── 10: per-soldier position whitelist (H6c) ─────────────────────────────
+  for (const s of soldierRows as any[]) {
+    const allowed: string[] | null = s.allowed_positions;
+    if (!allowed) continue;
+    const allowedSet = new Set(allowed.map(nrm));
+    for (const r of today) {
+      if (r.soldierId !== s.id || r.missionClass === 'rest') continue;
+      if (!allowedSet.has(nrm(r.positionName))) {
+        findings.push({
+          severity: 'error', rule: 'allowed_positions', soldierId: s.id,
+          message: `${r.soldierName} מוגבל ל${allowed.join('/')} אך משובץ ל${r.positionName} ${fmtHM(r.period[0])}`,
+        });
       }
     }
   }

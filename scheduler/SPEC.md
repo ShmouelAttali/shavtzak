@@ -38,7 +38,7 @@ History shows 39 distinct position names over 20 days; templates change mid-depl
 | תורנים | 2 seats, **14:00–14:00** | full schedule day, aligned with the general rotation |
 | כונן גשש | chained to סיור — see T4c | windows: 22–07, 07–14, 14–22 |
 | קצין מוצב | 1 seat, **14:00–14:00** | full schedule day (no hours — the whole day) |
-| כרמל חטיבה / מפקד כרמל חטיבה | 3+1 × 06,10,14,18, 22:00–06:00 | 4h (last shift 8h) |
+| כרמל חטיבה / מפקד כרמל חטיבה | 3+1 × 14,18,22,02,06,10 | 4h — same grid as עמדות הגנה |
 
 Ad-hoc attack missions (פטרול, תגבצ+פטרול, צ'קפוסט…) are executed by the התקפי
 crew and recorded manually as extra rows when they happen (H3/H5).
@@ -54,6 +54,11 @@ assigns them מנוחה on D+1.
 ## 3. Hard constraints (H — never violated)
 
 - **H1 Availability**: soldier with an active unavailability period (חופש, לא מגויס, short exits) can't be assigned during it. Partial-day periods (יציאה בערב, חזרה ב14:00) block only their window.
+  **Bus-at-10:00 semantics** for whole-day home ranges in the roster matrix: a
+  departing soldier works until 10:00 of his first home day; a returnee is
+  available from 10:00 of his first present day, straight to a position — no
+  rest needed (rest is measured from his last actual shift, and home counts
+  as rest).
 - **H2 Excluded pools**: מפלג / חמ"ל members not scheduled (flag on soldier).
 - **H3 No overlap**: no two time-overlapping assignments per soldier. Exception: readiness ↔ attack/תגבצ (the התקפי crew executes those during its readiness day). Enforced at the DB level for mission rows (`no_double_booking` EXCLUDE constraint), in the generator, and by the validator.
 - **H3b No double standby**: a soldier cannot hold two overlapping readiness duties (e.g. התקפי and כרמל חטיבה simultaneously) — readiness rows don't block at the DB level, so this is enforced by the generator's chain pool and the validator (`double_readiness`).
@@ -73,6 +78,13 @@ assigns them מנוחה on D+1.
   any other assignment. Exception (`release_unpicked`, the קשר rule): once the
   seat is covered, the unchosen candidates return to the general pool for that
   day. Unchosen candidates of non-release rules go to מנוחה.
+- **H6c Per-soldier position whitelist** (`soldiers.allowed_positions`, null =
+  unrestricted): a listed soldier may serve ONLY in those positions (chains
+  included) — he competes normally inside them and rests otherwise. Currently:
+  אריאל ביר → סיור. Enforced with H6b through one generator mechanism
+  (`allowedIn`) and validated (`allowed_positions` rule).
+  Contrast: H2 `is_schedulable=false` = outside the system entirely (חמל,
+  מפלג); H6b = must-serve in a dedicated seat; H6c = may-serve-only.
 - **H7 Crew integrity**: no duplicate soldier in a crew/slot. (The former
   מגן+תגבצ package rule is obsolete: תגבצ is staffed by the התקפי crew, and מגן
   is a standalone continuity crew.)
@@ -101,7 +113,7 @@ assigns them מנוחה on D+1.
 - **T2**: avoid same mission class on consecutive days; alternating static/dynamic preferred.
 - **T3**: 2+ consecutive static-only days → must break with a dynamic day (strong).
 - **T4 Chained duties** — deterministic staffing; the crew that just descended covers the standby:
-  - **T4a כרמל חטיבה**: carmel shift starting at hour H = the 4 soldiers who finished עמדות הגנה at H (defense 06–10 → carmel 10–14, …, 18–22 → 22–06; previous day 02–06 → carmel 06–10). Commander seat = highest רובאי among them. Min staffing 3 regular + 1 commander (validated).
+  - **T4a כרמל חטיבה**: carmel shift starting at hour H = the 4 soldiers who finished עמדות הגנה at H, on the same 6×4h grid (defense 06–10 → carmel 10–14, …, 18–22 → carmel 22–02, 22–02 → carmel 02–06; previous day 10–14 → carmel 14–18). Commander seat = highest רובאי among them. Min staffing 3 regular + 1 commander (validated).
   - **T4b כוננות התקפית** — *retired*: the התקפי position is a standing Level-1
     crew (8 soldiers, 14:00–14:00) rather than patrol-chained windows; it covers
     readiness, the תגבצ windows, and ad-hoc attack missions.

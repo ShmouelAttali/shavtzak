@@ -26,7 +26,7 @@ export async function loadContext(day: string): Promise<Context> {
     `insert into schedule_days (day) values ('${day}') on conflict do nothing`,
     `select id, name, mission_class, is_scheduled, blocks_day, config from positions`,
     `select s.id, s.full_name, s.platoon, coalesce(s.role,'') role,
-            coalesce(s.rifle_level,0) rifle,
+            coalesce(s.rifle_level,0) rifle, s.allowed_positions,
             coalesce(array_agg(q.qualification) filter (where q.qualification is not null), '{}') quals
      from soldiers s
      left join soldier_qualifications q on q.soldier_id = s.id
@@ -75,6 +75,7 @@ export async function loadContext(day: string): Promise<Context> {
       // the role (תפקיד), so check both the quals table and the role itself
       isDudDriver: [...quals, r.role].some((q) => strip(q).includes('נהג דוד')),
       isTigerDriver: [...quals, r.role].some((q) => strip(q).includes('נהג טיגריס')),
+      allowedPositions: r.allowed_positions ?? null,
     });
   }
 

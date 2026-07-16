@@ -19,7 +19,10 @@ Inputs:
                            where a.source='import'`
 
 Status → unavailability mapping (calendar-day semantics; see SPEC §11):
-  full-day block: חופש, לא מגויס, שחרור, גיוס, מחלה   -> [X 00:00, X+1 00:00)
+  full-day block: חופש, לא מגויס, שחרור, גיוס, מחלה   -> [X 10:00, X+1 10:00)
+  (bus leaves/arrives at 10:00: a departing soldier works until 10:00 of his
+   first home day; a returnee is available from 10:00 of his first present day
+   and needs no rest — rest is measured from his last actual shift anyway)
   יציאה בבוקר  -> [X 08:00, X+1 00:00)
   יציאה ב14:00 -> [X 14:00, X+1 00:00)
   יציאה בערב   -> [X 18:00, X+1 08:00)
@@ -169,6 +172,9 @@ def main():
                 merged.append((s, e, k))
         for s, e, k in merged:
             n_periods += 1
+            if k in FULL_BLOCK:   # bus at 10:00 — shift the whole run
+                s += timedelta(hours=10)
+                e += timedelta(hours=10)
             print(f'insert into unavailability (soldier_id, period, kind)'
                   f" values ({sid}, tsrange('{ts(s)}','{ts(e)}'), {q(k)});", file=out)
     log.write(f'UNAVAILABILITY PERIODS: {n_periods}\n')

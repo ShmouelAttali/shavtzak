@@ -12,6 +12,8 @@ export interface Soldier {
   isSeniorCommander: boolean;  // מ"מ/סמל
   isDudDriver: boolean;
   isTigerDriver: boolean;
+  /** H6c: null = unrestricted; else the only positions this soldier may fill */
+  allowedPositions: string[] | null;
 }
 
 export interface Position {

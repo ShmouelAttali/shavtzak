@@ -86,11 +86,11 @@ values
 insert into slot_templates (position_id, start_time, duration_minutes, seats, valid_from)
 values (9, '14:00', 1440, 1, '2026-07-15');
 
--- כרמל חטיבה: 3 regular + 1 commander × (06,10,14,18 = 4h; 22:00 = 8h)
+-- כרמל חטיבה: 3 regular + 1 commander × 6 shifts × 4h (same grid as עמדות הגנה)
 insert into slot_templates (position_id, sub_position_id, start_time, duration_minutes, seats, valid_from)
-select 10, sp, t.start_time, t.dur, case sp when 5 then 3 else 1 end, date '2026-07-15'
+select 10, sp, t.start_time, 240, case sp when 5 then 3 else 1 end, date '2026-07-15'
 from (values (5),(6)) s(sp)
-cross join (values (time '06:00',240),('10:00',240),('14:00',240),('18:00',240),('22:00',480)) t(start_time, dur);
+cross join (values (time '06:00'),('10:00'),('14:00'),('18:00'),('22:00'),('02:00')) t(start_time);
 
 -- ── Chain rules (T4) ────────────────────────────────────────────────────────
 -- source_day_offset is relative to the 14:00–14:00 schedule day of the TARGET.
@@ -101,6 +101,7 @@ insert into chain_rules (id, target_position, target_start, source_position, sou
   ( 3, 10, '14:00', 2, '10:00', -1, 'all'),  -- defense 10:00 belongs to previous schedule day
   ( 4, 10, '18:00', 2, '14:00',  0, 'all'),
   ( 5, 10, '22:00', 2, '18:00',  0, 'all'),
+  ( 6, 10, '02:00', 2, '22:00',  0, 'all'),
 -- (T4b konenut-from-patrol chains removed: התקפי is a standing Level-1 crew)
 -- T4c: tracker window ← one soldier from the descending patrol crew
   ( 9,  8, '22:00', 1, '14:00',  0, 'min_tracker_hours'),  -- ירד ב-22:00 → 22:00–07:00

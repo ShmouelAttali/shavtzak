@@ -239,9 +239,18 @@ export async function generate(day: string): Promise<GenerateResult> {
     ordered?: boolean; release_unpicked?: boolean; commander?: boolean;
   }
   const nrm = (s: string) => s.replace(/[״"׳']/g, '').trim();
+  /** One position-whitelist mechanism for both restriction sources:
+   *  H6c allowed_positions (DB column) and H6b seat-rule reservation
+   *  (candidates of a seat-rule position serve only there; a release rule
+   *  removes its unchosen candidates from this map again). */
+  const seatRestrict = new Map<number, string>();   // soldier id -> position name
+  const allowedIn = (s: Soldier, posName: string) => {
+    const reserved = seatRestrict.get(s.id);
+    if (reserved !== undefined && nrm(reserved) !== nrm(posName)) return false;
+    return !s.allowedPositions || s.allowedPositions.some((p) => nrm(p) === nrm(posName));
+  };
   const seatPlan = new Map<number, Map<string, SoldierState>>();   // pid -> sub -> chosen
   const seatRuleBySub = new Map<number, Map<string, SeatRule>>();
-  const seatReserved = new Set<number>();
   {
     const byName = new Map([...state.values()].map((st) => [nrm(st.soldier.name), st]));
     for (const pos of ctx.positions.values()) {
@@ -249,8 +258,11 @@ export async function generate(day: string): Promise<GenerateResult> {
       if (!rules.length || !slotsByPosition.has(pos.id)) continue;
       const plan = new Map<string, SoldierState>();
       const ruleMap = new Map<string, SeatRule>();
+      const subPeriod = new Map(slotsByPosition.get(pos.id)!
+        .map((sl) => [nrm(sl.subName ?? ''), sl.period] as const));
       for (const rule of rules) {
         ruleMap.set(nrm(rule.sub), rule);
+        const window = subPeriod.get(nrm(rule.sub)) ?? dRange;
         // candidates in priority order: explicit list, or role matches ordered
         // by the roles list (e.g. מ"פ before סמ"פ)
         const cands = rule.soldiers
@@ -260,13 +272,15 @@ export async function generate(day: string): Promise<GenerateResult> {
               .sort((a, b) =>
                 rule.roles!.findIndex((r) => nrm(r) === nrm(a.soldier.role))
                 - rule.roles!.findIndex((r) => nrm(r) === nrm(b.soldier.role)));
-        for (const c of cands) seatReserved.add(c.soldier.id);
+        for (const c of cands) seatRestrict.set(c.soldier.id, pos.name);
         const avail = cands.filter((st) =>
-          (st.level1 === null || st.level1 === pos.id) && !fullyBlocked(st.soldier.id));
+          (st.level1 === null || st.level1 === pos.id) && !isBlocked(st.soldier.id, window));
         // ordered/role rules take the first available; unordered pairs rotate by fairness
         const chosen = (rule.ordered || rule.roles) ? avail[0] : rank(avail, pos.id, false)[0];
         if (!chosen) {
           issues.push(`${pos.name}: אין מועמד זמין למושב ${rule.sub} — המושב יישאר ריק`);
+          // nothing to protect — free the (blocked) candidates for other positions
+          for (const c of cands) seatRestrict.delete(c.soldier.id);
           continue;
         }
         if (chosen.level1 === null) { chosen.level1 = pos.id; level1.set(chosen.soldier.id, pos.id); }
@@ -275,7 +289,7 @@ export async function generate(day: string): Promise<GenerateResult> {
           params: { seat: rule.sub, position: pos.name, priority: cands.indexOf(chosen) + 1 },
         });
         plan.set(nrm(rule.sub), chosen);
-        if (rule.release_unpicked) for (const c of cands) if (c !== chosen) seatReserved.delete(c.soldier.id);
+        if (rule.release_unpicked) for (const c of cands) if (c !== chosen) seatRestrict.delete(c.soldier.id);
       }
       seatPlan.set(pos.id, plan);
       seatRuleBySub.set(pos.id, ruleMap);
@@ -289,8 +303,12 @@ export async function generate(day: string): Promise<GenerateResult> {
     if (!pos.config?.continuity || !slotsByPosition.has(pos.id)) continue;
     let room = demand(pos.id, slotsByPosition.get(pos.id)!)
       - [...level1.values()].filter((p) => p === pos.id).length;
+    const posSlots = slotsByPosition.get(pos.id)!;
     const returning = [...state.values()].filter((st) =>
-      st.level1 === null && !fullyBlocked(st.soldier.id) && !seatReserved.has(st.soldier.id)
+      st.level1 === null && !fullyBlocked(st.soldier.id)
+      && allowedIn(st.soldier, pos.name)
+      // returning member must still be available for the crew's mission window
+      && posSlots.some((sl) => !isBlocked(st.soldier.id, sl.period))
       && ctx.yesterdayPosition.get(st.soldier.id) === pos.id);
     for (const st of rank(returning, pos.id, false)) {
       if (room <= 0) break;
@@ -312,7 +330,10 @@ export async function generate(day: string): Promise<GenerateResult> {
     const eligible = (st: SoldierState) => {
       const s = st.soldier;
       if (st.level1 !== null || fullyBlocked(s.id)) return false;
-      if (seatReserved.has(s.id)) return false;                                  // H6b: dedicated seats only
+      if (!allowedIn(s, posName)) return false;                                  // H6b/H6c: position whitelist
+      // must be available for at least one of the position's slot windows
+      // (a soldier leaving/arriving mid-day can't hold a window he'd miss)
+      if (![...slots, ...attached].some((sl) => !isBlocked(s.id, sl.period))) return false;
       if (posName === 'קצין מוצב' && !s.isSeniorCommander) return false;         // H6
       if (posName === 'עמדות הגנה' && s.isSeniorCommander) return false;         // H6
       // boundary rule: heavily occupied by yesterday's tail -> rest today.
@@ -534,7 +555,7 @@ export async function generate(day: string): Promise<GenerateResult> {
         if (!picked) {
           // prefer a fully-rested soldier from מנוחה over an in-group בדוחק pick
           const resters = [...state.values()].filter((st) => st.level1 === restId
-            && !seatReserved.has(st.soldier.id)
+            && allowedIn(st.soldier, posName)
             && (!commanderSeat || st.soldier.isCommander));
           const fitting = resters.filter((st) => {
             const f = fits(st, slot.period, commanderSeat, slotReadiness);
@@ -609,7 +630,9 @@ export async function generate(day: string): Promise<GenerateResult> {
       // a soldier already on a mission during the window can't stand by for it
       .filter((st) => !st.intervals.some((iv) => overlaps(iv, targetSlots[0].period)))
       // nor can they hold two simultaneous standbys (e.g. התקפי + כרמל)
-      .filter((st) => !st.readiness.some((iv) => overlaps(iv, targetSlots[0].period)));
+      .filter((st) => !st.readiness.some((iv) => overlaps(iv, targetSlots[0].period)))
+      // H6c: whitelisted soldiers take only their allowed positions, chains included
+      .filter((st) => allowedIn(st.soldier, targetName));
 
     if (rule.pick === 'min_tracker_hours') {
       pool.sort((a, b) => (a.fairness.trackerHoursTotal + a.trackerMinutes / 60)

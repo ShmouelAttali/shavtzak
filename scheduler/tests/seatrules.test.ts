@@ -114,3 +114,27 @@ test('no seat_rules errors on clean generated days', async () => {
     assert.deepEqual(errs, [], `day ${d}`);
   }
 });
+
+test('allowed_positions (H6c): whitelisted soldier serves only there, incl. chains', async () => {
+  const sid = await soldierId('חייל 30');
+  await query(`update soldiers set allowed_positions = array['סיור'] where id = $1`, [sid]);
+  const D5 = '2026-08-05', D6 = '2026-08-06';
+  for (const d of [D5, D6]) await persist(await generate(d));
+  const wrong = await query(`
+    select p.name from shift_assignments sa join positions p on p.id = sa.position_id
+    where sa.soldier_id = $1 and sa.day in ($2, $3) and p.name <> 'סיור'`, [sid, D5, D6]);
+  assert.deepEqual(wrong, [], 'restricted soldier assigned outside סיור');
+  await query(`update soldiers set allowed_positions = null where id = $1`, [sid]);
+});
+
+test('allowed_positions: validator errors on out-of-whitelist assignment', async () => {
+  const sid = await soldierId('חייל 31');
+  await query(`update soldiers set allowed_positions = array['סיור'] where id = $1`, [sid]);
+  await query(`insert into shift_assignments (day, position_id, soldier_id, period, source, blocks_overlap)
+               values ($1, 2, $2, tsrange(day_start($1) + interval '26 hours', day_start($1) + interval '30 hours'), 'manual', false)`, [D2, sid]);
+  const findings = await validateDay(D2);
+  assert.ok(findings.some((f) => f.rule === 'allowed_positions' && f.soldierId === sid),
+    JSON.stringify(findings.filter((f) => f.rule === 'allowed_positions')));
+  await query(`delete from shift_assignments where soldier_id = $1 and source = 'manual'`, [sid]);
+  await query(`update soldiers set allowed_positions = null where id = $1`, [sid]);
+});

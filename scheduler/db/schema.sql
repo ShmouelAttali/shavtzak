@@ -53,6 +53,7 @@ create table soldiers (
   phone           text,
   email           text,
   is_schedulable  boolean not null default true,  -- H2: מפלג / חמ"ל => false
+  allowed_positions text[],                -- H6c: null = all; else only these positions
   notes           text
 );
 
