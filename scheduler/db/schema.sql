@@ -250,18 +250,23 @@ language sql stable as $$
     select day_start(as_of) as t_end, day_start(as_of) - interval '7 days' as t_start
   ),
   base as (
-    select sa.soldier_id, sa.period, sa.day, p.mission_class, p.name as position_name
+    select sa.soldier_id, sa.period, sa.day, p.mission_class, p.name as position_name,
+           coalesce((p.config->>'night_exempt')::boolean, false) as night_exempt
     from shift_assignments sa
     join positions p on p.id = sa.position_id
     where p.mission_class <> 'rest'
   )
   select s.id,
+    -- night_exempt positions (24h duties like תורנים/קצין מוצב — the soldier
+    -- sleeps) overlap 00-06 but do not count as nights
     count(*) filter (where b.period && night_range(b.day)
                        and b.period && tsrange(w.t_start, w.t_end)
-                       and b.mission_class <> 'readiness')             as night_count_7d,
+                       and b.mission_class <> 'readiness'
+                       and not b.night_exempt)                         as night_count_7d,
     count(*) filter (where b.period && night_range(b.day)
                        and lower(b.period) < w.t_end
-                       and b.mission_class <> 'readiness')             as night_count_total,
+                       and b.mission_class <> 'readiness'
+                       and not b.night_exempt)                         as night_count_total,
     -- counted hours: a single assignment contributes at most 8h (R4 — daily
     -- 06:00-22:00 missions count as one 8h duty, matching the generator's cap).
     -- NB: the && filter is essential — hours(empty_range) is NULL and
@@ -285,7 +290,7 @@ language sql stable as $$
   from soldiers s
   cross join w
   left join (
-    select soldier_id, period, day, mission_class, position_name,
+    select soldier_id, period, day, mission_class, position_name, night_exempt,
            count(*) over (partition by soldier_id, position_name) as cnt
     from base
   ) b on b.soldier_id = s.id and lower(b.period) < w.t_end

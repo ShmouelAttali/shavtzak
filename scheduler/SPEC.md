@@ -17,7 +17,7 @@
 | Soldier | Roster member: platoon (עלי/שילה/גבעות צפון/גבעות דרום/מפלג), role (מ"פ/סמ"פ/מ"מ/סמל/מ"כ/מ"ח/לוחם…), rifle level (רובאי), qualifications (נהג דוד, נהג טיגריס, חובש, מאג, קלע, חמליסט…) |
 | Schedule day | **14:00 → 14:00 next day** — the single day unit for Level-1 assignment, konenut, rest accounting, daily caps. A shift belongs to the schedule day containing its start |
 | Night | **00:00–06:00** (fairness night-count window; configurable) |
-| Position (עמדה) | Top-level Level-1 unit: סיור, עמדות הגנה (merged שג+בונקר+מזרחית+דרומית), מגן, התקפי, חפק, תורנים, קצין מוצב, מנוחה (rest on base), בבית (fully unavailable). תגבצ is disabled for now; כרמל חטיבה + כונן גשש are chained overlays; חמל excluded (soldiers with role חמל are is_schedulable=false) |
+| Position (עמדה) | Top-level Level-1 unit: סיור, עמדות הגנה (merged שג+בונקר+מזרחית+דרומית), מגן, התקפי, חפק, חמל (standing role crew), תורנים, קצין מוצב, מנוחה (rest on base), בבית (fully unavailable). תגבצ is disabled for now; כרמל חטיבה + כונן גשש are chained overlays |
 | Slot | Concrete (position, sub-position, time-range, seat#) needing one soldier. Level-2 unit |
 | Mission class | `static` (עמדות הגנה, תורן) / `dynamic` (סיור, תגבצ) / `readiness` (התקפי, כרמל, כונן גשש) — drives rotation + rest-transparency |
 | Chained duty | Duty auto-staffed by the crew descending from a source shift (rule T4): כרמל חטיבה, כונן גשש |
@@ -38,6 +38,7 @@ History shows 39 distinct position names over 20 days; templates change mid-depl
 | תורנים | 2 seats, **14:00–14:00** | full schedule day, aligned with the general rotation |
 | כונן גשש | chained to סיור — see T4c | windows: 22–07, 07–14, 14–22 |
 | קצין מוצב | 1 seat, **14:00–14:00** | full schedule day (no hours — the whole day) |
+| חמל | **14:00–14:00**, variable crew | standing crew: every present role-חמל soldier daily (`staff_all_roles`); readiness class (rest-transparent); members whitelisted to חמל only (H6c) |
 | כרמל חטיבה / מפקד כרמל חטיבה | 3+1 × 14,18,22,02,06,10 | 4h — same grid as עמדות הגנה |
 
 Ad-hoc attack missions (פטרול, תגבצ+פטרול, צ'קפוסט…) are executed by the התקפי
@@ -106,12 +107,17 @@ assigns them מנוחה on D+1.
   after it counts as a full 8h rest. A soldier coming off an attack mission is
   therefore eligible for assignments starting at 14:00 of the new schedule day
   (attack-blocks-day, H7b, applies only to the attack's own schedule day).
+- **R6 Consecutive nights**: a night assignment (non-readiness shift intersecting
+  00:00–06:00) on two consecutive schedule days = warning; three or more = error.
+  Validated post-hoc (`consecutive_nights`) over a 7-day lookback.
 
 ## 5. Rotation rules (T)
 
 - **T1**: avoid same exact position on consecutive days.
 - **T2**: avoid same mission class on consecutive days; alternating static/dynamic preferred.
 - **T3**: 2+ consecutive static-only days → must break with a dynamic day (strong).
+  Post-hoc: a 3rd consecutive static-only day is reported as a warning
+  (`static_streak`).
 - **T4 Chained duties** — deterministic staffing; the crew that just descended covers the standby:
   - **T4a כרמל חטיבה**: carmel shift starting at hour H = the 4 soldiers who finished עמדות הגנה at H, on the same 6×4h grid (defense 06–10 → carmel 10–14, …, 18–22 → carmel 22–02, 22–02 → carmel 02–06; previous day 10–14 → carmel 14–18). Commander seat = highest רובאי among them. Min staffing 3 regular + 1 commander (validated).
   - **T4b כוננות התקפית** — *retired*: the התקפי position is a standing Level-1
@@ -180,7 +186,8 @@ night_count first, weighted_hours second, per-position counts third.
 Checks per day (parity with the Apps Script validator): rest ≥8h incl. previous day,
 overlaps, double standby (H3b), chained-duty sourcing (carmel/tracker crews match
 their source shifts), carmel min staffing, ≤8h/day, assignment vs availability,
-present-but-unassigned, unknown soldier names. Results snapshot stored on
+present-but-unassigned, unknown soldier names, consecutive nights (R6: 2 = warning,
+3+ = error), static streak (T3: 3rd static-only day = warning). Results snapshot stored on
 `schedule_days.validation` (jsonb) — written automatically after every generation
 (`persist`) and available via CLI `validate <day>`.
 
@@ -258,11 +265,17 @@ existing סיכום פלוגתי tab) added to the existing React viewer:
   triggers generation for the selected day(s) via the API; regeneration replaces
   only `source in ('auto','chain')` unlocked rows. Days remain in the draft family
   (`generated`) — approval/publish and sheet sync-out are explicitly out of scope.
-- **הוגנות** — weekly fairness. Date picker selects the rolling-7-day window end;
-  table per soldier: nights 7d, weighted hours 7d, mission/readiness hours 7d,
-  deployment totals (nights, tracker hours), common positions. Sortable columns,
-  platoon filter, spread indicator cards (min/max/avg/stddev) with outlier
-  color-coding (above avg+σ / below avg−σ).
+- **הוגנות** — weekly compliance + fairness dashboard. Date picker selects the
+  rolling-7-day window end (Sunday-anchored). Top: summary strip (total
+  errors/warnings across the window, or "all rules hold"). Then one card per
+  rule criterion (exceptions-only: green ✓ when clean, otherwise the offending
+  soldiers/days) — rest, daily cap, consecutive nights (R6), static streak (T3),
+  availability, overlaps/double standby, chain sourcing + carmel staffing, seat
+  rules, position restrictions, slot coverage, present-but-unassigned. Findings
+  come from running the validator over each day of the window. Below: fairness
+  cards — nights 7d and weighted-hours 7d spread (min/max/avg/stddev with
+  top/bottom outlier names) and per-position balance from `position_counts`.
+  Platoon filter applies to all cards.
 
 Data flows through two Vercel serverless endpoints (`api/draft.ts`, `api/fairness.ts`)
 reading the scheduler DB via `SCHEDULER_DATABASE_URL`; endpoints are open like the

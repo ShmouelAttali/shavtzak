@@ -1,6 +1,6 @@
 import { multiQuery } from './db.js';
 import { Context, Soldier, Position, Slot, Fairness, ChainRule } from './model.js';
-import { parseRange, dayStart, dayEnd, addDays, overlaps, Minutes } from './time.js';
+import { parseRange, dayStart, dayEnd, addDays, overlaps, nightRange, Minutes } from './time.js';
 
 const strip = (s: string) => (s ?? '').replace(/[״"'׳`]/g, '').trim();
 
@@ -142,6 +142,19 @@ export async function loadContext(day: string): Promise<Context> {
     if (streak) staticStreak.set(sid, streak);
   }
 
+  // Consecutive-night streak (R6): days ending yesterday where the soldier
+  // held a non-readiness assignment overlapping that day's night window.
+  const nightStreak = new Map<number, number>();
+  for (const [sid, list] of existing) {
+    let streak = 0;
+    for (let d = 1; d <= 7; d++) {
+      const nr = nightRange(addDays(day, -d));
+      if (list.some((a) => a.missionClass !== 'readiness' && overlaps(a.period, nr))) streak++;
+      else break;
+    }
+    if (streak) nightStreak.set(sid, streak);
+  }
+
   // Unavailability windows intersecting the schedule day.
   const blocked = new Map<number, [Minutes, Minutes][]>();
   for (const u of blockRows) {
@@ -168,6 +181,6 @@ export async function loadContext(day: string): Promise<Context> {
 
   return {
     day, soldiers, positions, positionByName, slots, fairness, existing,
-    yesterdayPosition, staticStreak, blocked, lockedShift, lockedDay, chainRules, config,
+    yesterdayPosition, staticStreak, nightStreak, blocked, lockedShift, lockedDay, chainRules, config,
   };
 }

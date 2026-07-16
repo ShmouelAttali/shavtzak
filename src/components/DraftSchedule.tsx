@@ -191,20 +191,29 @@ export function DraftSchedule({ soldiers, mySoldierName = '' }: {
           <div className="space-y-5">
             {/* Controls */}
             <div className="flex items-center gap-2 flex-wrap" dir="ltr">
-              <button onClick={() => { setFrom(addDaysIso(from, -1)); if (!multiDay) setTo(addDaysIso(from, -1)); }}
+              <button onClick={() => { setFrom(addDaysIso(from, -1)); setTo(multiDay ? addDaysIso(to, -1) : addDaysIso(from, -1)); }}
                 className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-gray-700 hover:bg-gray-50 font-bold text-lg leading-none">‹</button>
               <input type="date" value={from}
-                onChange={(e) => { setFrom(e.target.value); if (!multiDay) setTo(e.target.value); }}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  if (!v) return;
+                  setFrom(v);
+                  if (!multiDay || to < v) setTo(v);
+                }}
                 className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm font-semibold text-slate-800 shadow-sm focus:border-blue-500 focus:outline-none" />
               {multiDay && (
                 <>
                   <span className="text-sm text-gray-500" dir="rtl">עד</span>
-                  <input type="date" value={effectiveTo} min={from}
-                    onChange={(e) => setTo(e.target.value)}
+                  <input type="date" value={to} min={from}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      if (!v) return;
+                      setTo(v < from ? from : v);
+                    }}
                     className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm font-semibold text-slate-800 shadow-sm focus:border-blue-500 focus:outline-none" />
                 </>
               )}
-              <button onClick={() => { setFrom(addDaysIso(from, 1)); if (!multiDay) setTo(addDaysIso(from, 1)); }}
+              <button onClick={() => { setFrom(addDaysIso(from, 1)); setTo(multiDay ? addDaysIso(to, 1) : addDaysIso(from, 1)); }}
                 className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-gray-700 hover:bg-gray-50 font-bold text-lg leading-none">›</button>
               <label className="flex items-center gap-1.5 text-sm text-gray-600 select-none" dir="rtl">
                 <input type="checkbox" checked={multiDay} onChange={(e) => { setMultiDay(e.target.checked); if (!e.target.checked) setTo(from); }} />

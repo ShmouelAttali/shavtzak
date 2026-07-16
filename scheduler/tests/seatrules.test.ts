@@ -127,6 +127,27 @@ test('allowed_positions (H6c): whitelisted soldier serves only there, incl. chai
   await query(`update soldiers set allowed_positions = null where id = $1`, [sid]);
 });
 
+test('staff_all_roles (חמל): every present role soldier staffs daily, absent -> בבית', async () => {
+  const a = await soldierId('חייל 40'), b = await soldierId('חייל 41');
+  await query(`update soldiers set role = 'חמל', allowed_positions = array['חמל'] where id in ($1, $2)`, [a, b]);
+  const D7 = '2026-08-07';
+  await query(`insert into unavailability (soldier_id, period, kind)
+               values ($1, tsrange(day_start($2), day_start($2) + interval '1 day'), 'חופש')`, [b, D7]);
+  await persist(await generate(D7));
+  const rows = await query<{ id: number; pos: string }>(`
+    select da.soldier_id id, p.name pos from day_assignments da
+    join positions p on p.id = da.position_id
+    where da.day = $1 and da.soldier_id in ($2, $3)`, [D7, a, b]);
+  assert.equal(rows.find((r) => String(r.id) === String(a))?.pos, 'חמל');
+  assert.equal(rows.find((r) => String(r.id) === String(b))?.pos, 'בבית');
+  const shift = await query(`select 1 from shift_assignments where day = $1 and soldier_id = $2 and position_id = 11`, [D7, a]);
+  assert.equal(shift.length, 1, 'present חמל soldier must hold the 24h חמל row');
+  const errs = (await validateDay(D7)).filter((f) => f.severity === 'error');
+  assert.deepEqual(errs, [], JSON.stringify(errs));
+  await query(`delete from unavailability where soldier_id = $1`, [b]);
+  await query(`update soldiers set role = 'לוחם', allowed_positions = null where id in ($1, $2)`, [a, b]);
+});
+
 test('allowed_positions: validator errors on out-of-whitelist assignment', async () => {
   const sid = await soldierId('חייל 31');
   await query(`update soldiers set allowed_positions = array['סיור'] where id = $1`, [sid]);

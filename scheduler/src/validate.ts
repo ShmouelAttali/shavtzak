@@ -1,6 +1,7 @@
 import { multiQuery, query } from './db.js';
 import {
   Minutes, parseRange, dayStart, dayEnd, addDays, slotStart, overlaps, hours, fmtHM,
+  nightRange,
 } from './time.js';
 
 export interface Finding {
@@ -33,7 +34,7 @@ const DAILY_CAP = 8;
 export async function validateDay(day: string): Promise<Finding[]> {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) throw new Error(`bad day: ${day}`);
   const yesterday = addDays(day, -1);
-  const [rows, prevRows, unavailRows, dayAssignRows, soldierRows, chainRows, seatRulePosRows, daySlotRows] = await multiQuery([
+  const [rows, prevRows, unavailRows, dayAssignRows, soldierRows, chainRows, seatRulePosRows, daySlotRows, posRows, historyRows] = await multiQuery([
     ...[day, yesterday].map((d) => `
       select sa.soldier_id, s.full_name, sa.position_id, p.name pos_name, p.mission_class,
              sp.name sub_name, sa.period::text, sa.blocks_overlap
@@ -51,8 +52,16 @@ export async function validateDay(day: string): Promise<Finding[]> {
      join positions tp on tp.id = cr.target_position
      join positions sp2 on sp2.id = cr.source_position order by cr.id`,
     `select id, name, config from positions where config ? 'seat_rules'`,
-    `select ds.position_id, sp.name sub_name, ds.period::text from day_slots ds
+    `select ds.position_id, sp.name sub_name, ds.period::text, ds.seats from day_slots ds
      left join sub_positions sp on sp.id = ds.sub_position_id where ds.day = '${day}'`,
+    `select id, name, is_scheduled, mission_class, config from positions`,
+    // 7-day lookback for streak rules (consecutive nights R6, static streak T3)
+    `select sa.soldier_id, s.full_name, sa.period::text, p.mission_class
+     from shift_assignments sa
+     join positions p on p.id = sa.position_id
+     left join soldiers s on s.id = sa.soldier_id
+     where sa.period && tsrange(day_start('${addDays(day, -7)}'), day_start('${day}') + interval '1 day')
+       and p.mission_class <> 'rest'`,
   ]);
 
   const toRow = (r: any): Row => ({
@@ -283,7 +292,28 @@ export async function validateDay(day: string): Promise<Finding[]> {
     }
   }
 
-  // ── 10: per-soldier position whitelist (H6c) ─────────────────────────────
+  // ── 10: slot coverage — empty seats are errors (visible at the top) ──────
+  const posInfo = new Map((posRows as any[]).map((p) => [p.id, p]));
+  for (const ds of daySlotRows as any[]) {
+    const p = posInfo.get(ds.position_id);
+    if (!p || !p.is_scheduled || p.mission_class === 'rest') continue;
+    if (p.config?.staff_all_roles) continue;   // variable crew — seats is a cap, not demand
+    const period = parseRange(ds.period);
+    // draft rows carry the sub-position; imported history rows don't — count
+    // null-sub rows toward any sub-slot with the same start so published
+    // days aren't falsely flagged
+    const n = today.filter((r) => r.positionId === ds.position_id
+      && r.period[0] === period[0]
+      && (r.subName === null || nrm(r.subName) === nrm(ds.sub_name ?? '') || ds.sub_name === null)).length;
+    if (n < ds.seats) {
+      findings.push({
+        severity: 'error', rule: 'coverage',
+        message: `${p.name}${ds.sub_name ? ` ${ds.sub_name}` : ''} ${fmtHM(period[0])}: אוישו ${n}/${ds.seats} מושבים`,
+      });
+    }
+  }
+
+  // ── 11: per-soldier position whitelist (H6c) ─────────────────────────────
   for (const s of soldierRows as any[]) {
     const allowed: string[] | null = s.allowed_positions;
     if (!allowed) continue;
@@ -296,6 +326,62 @@ export async function validateDay(day: string): Promise<Finding[]> {
           message: `${r.soldierName} מוגבל ל${allowed.join('/')} אך משובץ ל${r.positionName} ${fmtHM(r.period[0])}`,
         });
       }
+    }
+  }
+
+  // ── 12: consecutive nights (R6): 2 in a row = warning, 3+ = error ────────
+  const history = (historyRows as any[]).map((r) => ({
+    soldierId: r.soldier_id as number,
+    name: (r.full_name ?? `#${r.soldier_id}`) as string,
+    missionClass: r.mission_class as string,
+    period: parseRange(r.period) as [Minutes, Minutes],
+  }));
+  const hasNight = (sid: number, d: string) => history.some((h) =>
+    h.soldierId === sid && h.missionClass !== 'readiness' && overlaps(h.period, nightRange(d)));
+  const tonight = new Map<number, string>();
+  for (const h of history) {
+    if (h.missionClass !== 'readiness' && overlaps(h.period, nightRange(day))) tonight.set(h.soldierId, h.name);
+  }
+  for (const [sid, name] of tonight) {
+    let run = 1;
+    while (run <= 7 && hasNight(sid, addDays(day, -run))) run++;
+    if (run === 2) {
+      findings.push({
+        severity: 'warning', rule: 'consecutive_nights', soldierId: sid,
+        message: `${name}: לילה שני ברצף`,
+      });
+    } else if (run >= 3) {
+      findings.push({
+        severity: 'error', rule: 'consecutive_nights', soldierId: sid,
+        message: `${name}: ${run} לילות ברצף (מקסימום 2)`,
+      });
+    }
+  }
+
+  // ── 13: static streak (T3): 3rd static-only day without a dynamic break ──
+  const staticOnly = (sid: number, d: string): boolean => {
+    const dr: [Minutes, Minutes] = [dayStart(d), dayEnd(d)];
+    let hasStatic = false, hasDynamic = false;
+    for (const h of history) {
+      if (h.soldierId !== sid || h.missionClass === 'readiness' || !overlaps(h.period, dr)) continue;
+      if (h.missionClass === 'static') hasStatic = true;
+      if (h.missionClass === 'dynamic') hasDynamic = true;
+    }
+    return hasStatic && !hasDynamic;
+  };
+  const activeToday = new Map<number, string>();
+  for (const h of history) {
+    if (overlaps(h.period, dRange)) activeToday.set(h.soldierId, h.name);
+  }
+  for (const [sid, name] of activeToday) {
+    if (!staticOnly(sid, day)) continue;
+    let streak = 0;
+    while (streak < 7 && staticOnly(sid, addDays(day, -(streak + 1)))) streak++;
+    if (streak >= 2) {
+      findings.push({
+        severity: 'warning', rule: 'static_streak', soldierId: sid,
+        message: `${name}: ${streak + 1} ימי עמדה ברצף ללא יום דינמי`,
+      });
     }
   }
 

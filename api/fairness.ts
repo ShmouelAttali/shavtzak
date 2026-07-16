@@ -18,10 +18,52 @@ export interface FairnessRow {
 
 export interface SpreadStat { min: number; max: number; avg: number; stddev: number }
 
+/** One validator finding, tagged with the schedule day it was found on. */
+export interface ComplianceFinding {
+  day: string;
+  severity: 'error' | 'warning';
+  rule: string;
+  message: string;
+  soldierId?: number;
+}
+
 export interface FairnessResponse {
   date: string;                 // window = 7 days ending at this schedule day
   rows: FairnessRow[];
   spread: { nights: SpreadStat; weightedHours: SpreadStat };
+  /** validator findings over every checked day of the window, most recent last */
+  compliance: ComplianceFinding[];
+  /** window days that had assignments and were validated */
+  checkedDays: string[];
+}
+
+/**
+ * Run the post-hoc validator over each window day that has assignments.
+ * Streak rules (consecutive_nights / static_streak) restate the same run on
+ * every day it grows — keep only the worst (then latest) finding per soldier.
+ */
+async function collectCompliance(date: string): Promise<{ compliance: ComplianceFinding[]; checkedDays: string[] }> {
+  const { rows } = await getPool().query(
+    `select distinct day::text from shift_assignments
+     where day >= $1::date - 7 and day < $1::date order by day`, [date]);
+  const checkedDays: string[] = rows.map((r) => r.day);
+  // validateDay reads through scheduler/src/db.js (same SCHEDULER_DATABASE_URL)
+  const { validateDay } = await import('../scheduler/src/validate.js');
+  const compliance: ComplianceFinding[] = [];
+  for (const day of checkedDays) {
+    for (const f of await validateDay(day)) compliance.push({ day, ...f });
+  }
+  const STREAK_RULES = new Set(['consecutive_nights', 'static_streak']);
+  const best = new Map<string, ComplianceFinding>();
+  const rest: ComplianceFinding[] = [];
+  for (const f of compliance) {
+    if (!STREAK_RULES.has(f.rule) || f.soldierId == null) { rest.push(f); continue; }
+    const key = `${f.rule}|${f.soldierId}`;
+    const cur = best.get(key);
+    if (!cur || (cur.severity === 'warning' && f.severity === 'error')
+      || (cur.severity === f.severity && f.day >= cur.day)) best.set(key, f);
+  }
+  return { compliance: [...rest, ...best.values()], checkedDays };
 }
 
 function spread(values: number[]): SpreadStat {
@@ -39,6 +81,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (!DATE_RE.test(date)) return res.status(400).json({ error: 'date required (YYYY-MM-DD)' });
 
   try {
+    const compliancePromise = collectCompliance(date);
     const { rows } = await getPool().query(
       `select f.soldier_id, s.full_name, s.platoon, coalesce(s.role,'') role,
               f.night_count_7d, f.night_count_total, f.mission_hours_7d,
@@ -65,6 +108,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         nights: spread(rows.map((r) => Number(r.night_count_7d))),
         weightedHours: spread(rows.map((r) => Number(r.weighted_hours_7d))),
       },
+      ...(await compliancePromise),
     };
     res.setHeader('Cache-Control', 'no-store');
     return res.status(200).json(out);

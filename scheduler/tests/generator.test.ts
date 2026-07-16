@@ -11,6 +11,17 @@ const D1 = '2026-08-01', D2 = '2026-08-02', D3 = '2026-08-03';
 before(async () => {
   await freshSchema();
   await seedSoldiers();
+  // seed.sql's חפק seat rules name real soldiers — remap to synthetic ones so
+  // the seats fill and the coverage rule sees a fully-staffable roster
+  await query(`update soldiers set role = 'מ"פ' where full_name = 'חייל 55'`);
+  await query(`update positions set config = config || $1::jsonb where id = 6`, [JSON.stringify({
+    seat_rules: [
+      { sub: 'מפקד', roles: ['מ"פ'], commander: true },
+      { sub: 'קשר', soldiers: ['חייל 20', 'חייל 21'], ordered: true, release_unpicked: true },
+      { sub: 'חובש', soldiers: ['חייל 23', 'חייל 24'] },
+      { sub: 'נהג', soldiers: ['חייל 25', 'חייל 26'] },
+    ],
+  })]);
   for (const d of [D1, D2, D3]) {
     const res = await generate(d);
     await persist(res);
@@ -258,11 +269,17 @@ test('rationale: fewest_nights claims are honest vs the pick-time median', async
 });
 
 test('fairness spread: nights differ by at most 2 across active soldiers', async () => {
+  // dedicated crews (חפק named seats, מגן continuity) never rotate into
+  // nights — measure the spread over the actual night-rotation pool
   const rows = await query(`
     select min(night_count_7d) lo, max(night_count_7d) hi
     from soldier_fairness($1) f
     join soldiers s on s.id = f.soldier_id
-    where s.is_schedulable and f.mission_hours_7d > 0`, ['2026-08-04']);
+    where s.is_schedulable and f.mission_hours_7d > 0
+      and s.id not in (
+        select da.soldier_id from day_assignments da
+        join positions p on p.id = da.position_id
+        where p.name in ('חפק', 'מגן'))`, ['2026-08-04']);
   assert.ok(Number(rows[0].hi) - Number(rows[0].lo) <= 2,
     `nights spread too wide: ${rows[0].lo}-${rows[0].hi}`);
 });

@@ -81,6 +81,8 @@ export interface Context {
   yesterdayPosition: Map<number, number>;
   /** consecutive static-only days ending yesterday, per soldier */
   staticStreak: Map<number, number>;
+  /** consecutive nights ending yesterday, per soldier (R6: max 2 in a row) */
+  nightStreak: Map<number, number>;
   /** soldiers unavailable (fully or partially) today: id -> blocked windows */
   blocked: Map<number, [Minutes, Minutes][]>;
   /** locked rows for this day already in DB (kept as-is) */

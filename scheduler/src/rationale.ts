@@ -21,6 +21,7 @@ export type RationaleCode =
   | 'commander_seat'        // seat requires a commander
   | 'pulled_from_rest'      // completed from the מנוחה pool
   | 'seat_rule'             // dedicated-candidate seat (H6b, e.g. חפק)
+  | 'role_crew'             // staff_all_roles position (חמל): the whole role staffs daily
   | 'chain'                 // T4 overlay: crew descends from a source shift
   | 'chain_min_tracker'     // chain pick rule: minimum tracker hours
   | 'chain_commander'       // chain commander slot: highest rifle level
@@ -31,6 +32,7 @@ export type RationaleCode =
   | 'caveat_same_position'  // T1: same position as yesterday
   | 'caveat_same_class'     // T2: same mission class as yesterday
   | 'caveat_static_streak'  // T3: 3rd+ consecutive static day
+  | 'caveat_third_night'    // R6: third consecutive night (max 2)
   | 'caveat_no_alternative';// the primary candidate list was empty
 
 export interface RationaleEntry {
@@ -52,6 +54,7 @@ export const TEMPLATES: Record<RationaleCode, string> = {
   commander_seat: 'מושב מפקד — נדרש מפקד למשמרת זו',
   pulled_from_rest: 'הושלם ממנוחה — לא נותר מועמד פנוי בקבוצת העמדה',
   seat_rule: 'מושב {seat} ב{position} — מועמד ייעודי (עדיפות {priority} ברשימה)',
+  role_crew: 'צוות {position} — כל חיילי {role} הנוכחים מאיישים יומית',
   chain: '{target}: ירד מ{source} של {sourceStart} (שרשור)',
   chain_min_tracker: 'נבחר מהצוות היורד עם מינימום שעות גשש',
   chain_commander: 'מפקד הכונן — הרובאי הבכיר בצוות',
@@ -61,6 +64,7 @@ export const TEMPLATES: Record<RationaleCode, string> = {
   caveat_same_position: 'אותה עמדה כמו אתמול ({position})',
   caveat_same_class: 'אותו סוג משימה כמו אתמול ({cls})',
   caveat_static_streak: 'יום סטטי {streak}+ ברצף',
+  caveat_third_night: 'לילה שלישי ברצף (מקסימום 2)',
   caveat_no_alternative: 'לא נמצא מועמד כשיר אחר — אחרת המושב היה נשאר ריק',
 };
 

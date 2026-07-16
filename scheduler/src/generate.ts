@@ -121,6 +121,10 @@ export async function generate(day: string): Promise<GenerateResult> {
     if (st.missionHoursToday + counted > DAILY_CAP + 0.01) {
       return { ok: false, fallback: false, reasons: ['מעל 8 שעות ביום'] };
     }
+    // R6: a third consecutive night is a violation — fallback-only
+    if (overlaps(slot, night) && (ctx.nightStreak.get(s.id) ?? 0) + (st.nightsToday > 0 ? 1 : 0) >= 2) {
+      return { ok: true, fallback: true, reasons: ['לילה שלישי ברצף'] };
+    }
     const rest = restBefore(st, slot[0]);
     if (rest < REST_MIN) return { ok: true, fallback: true, reasons: ['פחות מ-4 שעות מנוחה'] };
     if (rest < REST_IDEAL && hours(slot) > LONG_TASK / 60) {
@@ -296,6 +300,21 @@ export async function generate(day: string): Promise<GenerateResult> {
     }
   }
 
+  // staff_all_roles positions (חמל): every present soldier of the role staffs
+  // the position daily — variable crew size, no fixed demand.
+  for (const pos of ctx.positions.values()) {
+    const roles: string[] = pos.config?.staff_all_roles ?? [];
+    if (!roles.length || !slotsByPosition.has(pos.id)) continue;
+    const posSlots = slotsByPosition.get(pos.id)!;
+    for (const st of state.values()) {
+      if (st.level1 !== null || fullyBlocked(st.soldier.id)) continue;
+      if (!roles.some((r) => nrm(r) === nrm(st.soldier.role))) continue;
+      if (!posSlots.some((sl) => !isBlocked(st.soldier.id, sl.period))) continue;
+      st.level1 = pos.id; level1.set(st.soldier.id, pos.id);
+      st.level1Rationale.push({ code: 'role_crew', params: { position: pos.name, role: st.soldier.role } });
+    }
+  }
+
   // Continuity pre-pass (מגן): returning crew members are reserved BEFORE any
   // other position can grab them — the crew repeats day-to-day unless seats
   // shrink, a member is unavailable, or a manual/locked change intervenes.
@@ -321,7 +340,7 @@ export async function generate(day: string): Promise<GenerateResult> {
     const pid = ctx.positionByName.get(posName);
     if (pid === undefined || !slotsByPosition.has(pid)) continue;
     const pos = ctx.positions.get(pid)!;
-    if (pos.config?.seat_rules) continue;   // staffed by the seat-rule pre-pass only
+    if (pos.config?.seat_rules || pos.config?.staff_all_roles) continue;   // staffed by pre-pass only
     const slots = slotsByPosition.get(pid)!;
     const attached = attachedByHost.get(pid) ?? [];
     let need = demand(pid, slots) - [...level1.values()].filter((p) => p === pid).length;
@@ -478,6 +497,7 @@ export async function generate(day: string): Promise<GenerateResult> {
       for (const r of opts.fitReasons) {
         if (r.includes('פחות מ-4')) out.push({ code: 'caveat_rest_lt4' });
         else if (r.includes('פחות מ-8')) out.push({ code: 'caveat_rest_lt8_long' });
+        else if (r.includes('לילה שלישי')) out.push({ code: 'caveat_third_night' });
       }
       out.push({ code: 'caveat_no_alternative' });
     }
@@ -497,7 +517,10 @@ export async function generate(day: string): Promise<GenerateResult> {
     } else {
       st.intervals.push(slot.period);
       st.missionHoursToday += countedHours(slot.period);
-      if (overlaps(slot.period, night)) st.nightsToday++;
+      // night_exempt 24h duties (תורנים/קצין מוצב) span 00-06 but the soldier
+      // sleeps — they don't count toward P2 night fairness
+      if (overlaps(slot.period, night)
+        && !ctx.positions.get(slot.positionId)?.config?.night_exempt) st.nightsToday++;
     }
   }
 
@@ -524,6 +547,24 @@ export async function generate(day: string): Promise<GenerateResult> {
         });
         assign(st, slot, 1, ruleMap.get(subKey)?.commander ?? false,
           fit.fallback ? fit.reasons.map((r) => `בדוחק: ${r}`) : fit.reasons, 'auto', rationale);
+      }
+      continue;
+    }
+
+    // staff_all_roles crew (חמל): everyone in the group takes a seat, no demand math
+    if (ctx.positions.get(pid)!.config?.staff_all_roles) {
+      const crew = rank([...state.values()].filter((st) => st.level1 === pid), pid, false);
+      for (const slot of [...slots].sort((a, b) => a.period[0] - b.period[0])) {
+        let seat = 1;
+        for (const st of crew) {
+          if (seat > slot.seats) break;
+          const fit = fits(st, slot.period, false, true);
+          if (!fit.ok) continue;
+          assign(st, slot, seat++, false, [], 'auto', buildRationale(st, slot, pid, {
+            pickedFrom: 'primary', fitReasons: [], commanderSeat: false,
+            groupNights: [], groupLoads: [], myNights: 0, myLoad: 0,
+          }));
+        }
       }
       continue;
     }
