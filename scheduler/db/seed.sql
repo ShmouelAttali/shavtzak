@@ -7,7 +7,7 @@
 insert into positions (id, name, mission_class, is_scheduled, blocks_day, config) values
   ( 1, 'סיור',        'dynamic',   true,  false, '{}'),
   ( 2, 'עמדות הגנה',  'static',    true,  false, '{}'),
-  ( 3, 'מגן',  'other',     true,  true,  '{"package":"magen_tagbatz","continuity":true,"same_platoon":true}'),
+  ( 3, 'מגן',  'other',     true,  true,  '{"package":"magen_tagbatz","continuity":true,"same_platoon":true,"yomi_display":true}'),
   -- התקפי: standing 8-soldier readiness crew (14:00-14:00) that also staffs
   -- the תגבצ windows and executes ad-hoc attack missions
   ( 4, 'התקפי',       'readiness', true,  true,  '{"open_for_attack":true,"covers":["תגבצ"]}'),

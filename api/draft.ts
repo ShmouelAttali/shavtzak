@@ -51,7 +51,7 @@ async function getDrafts(from: string, to: string): Promise<DraftResponse> {
       `select day::text, status, generated_at, validation
        from schedule_days where day between $1 and $2 order by day`, [from, to]),
     pool.query(
-      `select sa.day::text, p.name pos_name, sp.name sub_name, s.full_name,
+      `select sa.day::text, p.name pos_name, p.config pos_config, sp.name sub_name, s.full_name,
               lower(sa.period) p_start, upper(sa.period) p_end,
               sa.source, sa.locked, sa.violations, sa.rationale, sa.seat_index
        from shift_assignments sa
@@ -87,7 +87,10 @@ async function getDrafts(from: string, to: string): Promise<DraftResponse> {
     // a shift starting on the next calendar day (tail of the 14:00→14:00
     // schedule day) is marked למחרת so the card reads unambiguously
     const startsNextDay = `${start.getFullYear()}-${String(start.getMonth() + 1).padStart(2, '0')}-${String(start.getDate()).padStart(2, '0')}` !== r.day;
-    const time = `${hm(start)}-${hm(end)}${startsNextDay ? ' (למחרת)' : ''}`;
+    // yomi_display positions (מגן) are daily crews — no shift times on the card
+    const time = r.pos_config?.yomi_display
+      ? 'יומי'
+      : `${hm(start)}-${hm(end)}${startsNextDay ? ' (למחרת)' : ''}`;
     const station = r.pos_name as string;
     const sug = (r.sub_name as string | null) ?? station;
     const gKey = `${r.day}|${station}`;
