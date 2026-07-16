@@ -12,7 +12,12 @@ insert into positions (id, name, mission_class, is_scheduled, blocks_day, config
   -- the תגבצ windows and executes ad-hoc attack missions
   ( 4, 'התקפי',       'readiness', true,  true,  '{"open_for_attack":true,"covers":["תגבצ"]}'),
   ( 5, 'תגבצ',        'dynamic',   true,  false, '{"staffed_by":"התקפי"}'),
-  ( 6, 'חפק',         'other',     true,  true,  '{}'),
+  ( 6, 'חפק',         'other',     true,  true,  '{"seat_rules": [
+      {"sub": "מפקד", "roles": ["מ\"פ", "סמ\"פ"], "commander": true},
+      {"sub": "קשר",  "soldiers": ["יהודה חושן", "אור חיים בלונדר", "יחיעם אושפיזאי"], "ordered": true, "release_unpicked": true},
+      {"sub": "חובש", "soldiers": ["כפיר לנדסמן", "שחר מיכאלי"]},
+      {"sub": "נהג",  "soldiers": ["אמיר יונייב", "יאיר מובשוביץ"]}
+    ]}'),
   ( 7, 'תורנים',      'static',    true,  true,  '{}'),
   ( 8, 'כונן גשש',    'readiness', true,  false, '{"tracker":true}'),
   ( 9, 'קצין מוצב',   'other',     true,  true,  '{}'),
@@ -27,7 +32,11 @@ insert into sub_positions (id, position_id, name, required_role) values
   ( 3,  2, 'מזרחית',            null),
   ( 4,  2, 'דרומית',            null),
   ( 5, 10, 'כרמל חטיבה',        null),
-  ( 6, 10, 'מפקד כרמל חטיבה',   null);   -- commander chosen by highest רובאי (chain rule)
+  ( 6, 10, 'מפקד כרמל חטיבה',   null),   -- commander chosen by highest רובאי (chain rule)
+  ( 7,  6, 'מפקד',              null),   -- חפק seats (H6b seat_rules on the position config)
+  ( 8,  6, 'קשר',               null),
+  ( 9,  6, 'חובש',              null),
+  (10,  6, 'נהג',               null);
 
 -- ── Slot templates (valid from 2026-07-15) ──────────────────────────────────
 -- סיור: 3 shifts × 8h × 4 seats, first seat = commander
@@ -57,9 +66,9 @@ values
   (5, '06:30', 150, 8, true, '2026-07-15'),
   (5, '17:00', 300, 8, true, '2026-07-15');
 
--- חפק: 4 seats, 06:00–22:00
-insert into slot_templates (position_id, start_time, duration_minutes, seats, valid_from)
-values (6, '06:00', 960, 4, '2026-07-15');
+-- חפק: 4 named seats (מפקד/קשר/חובש/נהג), 06:00–22:00, 1 seat each
+insert into slot_templates (position_id, sub_position_id, start_time, duration_minutes, seats, valid_from)
+select 6, v.sp, '06:00', 960, 1, date '2026-07-15' from (values (7),(8),(9),(10)) v(sp);
 
 -- תורנים: 2 seats, 07:30–22:00
 insert into slot_templates (position_id, start_time, duration_minutes, seats, valid_from)

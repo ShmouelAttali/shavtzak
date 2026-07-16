@@ -71,8 +71,10 @@ export async function loadContext(day: string): Promise<Context> {
     soldiers.set(r.id, {
       id: r.id, name: r.full_name, platoon: r.platoon, role: r.role, rifle: r.rifle,
       quals, ...flags,
-      isDudDriver: quals.some((q) => strip(q).includes('נהג דוד')),
-      isTigerDriver: quals.some((q) => strip(q).includes('נהג טיגריס')),
+      // the roster sheet has no qualifications column — driver info arrives as
+      // the role (תפקיד), so check both the quals table and the role itself
+      isDudDriver: [...quals, r.role].some((q) => strip(q).includes('נהג דוד')),
+      isTigerDriver: [...quals, r.role].some((q) => strip(q).includes('נהג טיגריס')),
     });
   }
 

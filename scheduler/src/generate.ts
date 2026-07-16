@@ -229,6 +229,59 @@ export async function generate(day: string): Promise<GenerateResult> {
   const level1 = new Map<number, number>();
   for (const [sid, pid] of ctx.lockedDay) level1.set(sid, pid);
 
+  // Seat-rule pre-pass (H6b, e.g. חפק): each sub-position seat has a dedicated
+  // candidate list — named soldiers or roles, in priority order. Candidates are
+  // reserved for this position only (they never fill other positions); a rule
+  // with release_unpicked frees the unchosen candidates back to the pool. A
+  // seat with no available candidate stays EMPTY (issue raised, no substitute).
+  interface SeatRule {
+    sub: string; soldiers?: string[]; roles?: string[];
+    ordered?: boolean; release_unpicked?: boolean; commander?: boolean;
+  }
+  const nrm = (s: string) => s.replace(/[״"׳']/g, '').trim();
+  const seatPlan = new Map<number, Map<string, SoldierState>>();   // pid -> sub -> chosen
+  const seatRuleBySub = new Map<number, Map<string, SeatRule>>();
+  const seatReserved = new Set<number>();
+  {
+    const byName = new Map([...state.values()].map((st) => [nrm(st.soldier.name), st]));
+    for (const pos of ctx.positions.values()) {
+      const rules: SeatRule[] = pos.config?.seat_rules ?? [];
+      if (!rules.length || !slotsByPosition.has(pos.id)) continue;
+      const plan = new Map<string, SoldierState>();
+      const ruleMap = new Map<string, SeatRule>();
+      for (const rule of rules) {
+        ruleMap.set(nrm(rule.sub), rule);
+        // candidates in priority order: explicit list, or role matches ordered
+        // by the roles list (e.g. מ"פ before סמ"פ)
+        const cands = rule.soldiers
+          ? rule.soldiers.map((n) => byName.get(nrm(n))).filter((x): x is SoldierState => !!x)
+          : [...state.values()]
+              .filter((st) => (rule.roles ?? []).some((r) => nrm(r) === nrm(st.soldier.role)))
+              .sort((a, b) =>
+                rule.roles!.findIndex((r) => nrm(r) === nrm(a.soldier.role))
+                - rule.roles!.findIndex((r) => nrm(r) === nrm(b.soldier.role)));
+        for (const c of cands) seatReserved.add(c.soldier.id);
+        const avail = cands.filter((st) =>
+          (st.level1 === null || st.level1 === pos.id) && !fullyBlocked(st.soldier.id));
+        // ordered/role rules take the first available; unordered pairs rotate by fairness
+        const chosen = (rule.ordered || rule.roles) ? avail[0] : rank(avail, pos.id, false)[0];
+        if (!chosen) {
+          issues.push(`${pos.name}: אין מועמד זמין למושב ${rule.sub} — המושב יישאר ריק`);
+          continue;
+        }
+        if (chosen.level1 === null) { chosen.level1 = pos.id; level1.set(chosen.soldier.id, pos.id); }
+        chosen.level1Rationale.push({
+          code: 'seat_rule',
+          params: { seat: rule.sub, position: pos.name, priority: cands.indexOf(chosen) + 1 },
+        });
+        plan.set(nrm(rule.sub), chosen);
+        if (rule.release_unpicked) for (const c of cands) if (c !== chosen) seatReserved.delete(c.soldier.id);
+      }
+      seatPlan.set(pos.id, plan);
+      seatRuleBySub.set(pos.id, ruleMap);
+    }
+  }
+
   // Continuity pre-pass (מגן): returning crew members are reserved BEFORE any
   // other position can grab them — the crew repeats day-to-day unless seats
   // shrink, a member is unavailable, or a manual/locked change intervenes.
@@ -237,7 +290,7 @@ export async function generate(day: string): Promise<GenerateResult> {
     let room = demand(pos.id, slotsByPosition.get(pos.id)!)
       - [...level1.values()].filter((p) => p === pos.id).length;
     const returning = [...state.values()].filter((st) =>
-      st.level1 === null && !fullyBlocked(st.soldier.id)
+      st.level1 === null && !fullyBlocked(st.soldier.id) && !seatReserved.has(st.soldier.id)
       && ctx.yesterdayPosition.get(st.soldier.id) === pos.id);
     for (const st of rank(returning, pos.id, false)) {
       if (room <= 0) break;
@@ -250,6 +303,7 @@ export async function generate(day: string): Promise<GenerateResult> {
     const pid = ctx.positionByName.get(posName);
     if (pid === undefined || !slotsByPosition.has(pid)) continue;
     const pos = ctx.positions.get(pid)!;
+    if (pos.config?.seat_rules) continue;   // staffed by the seat-rule pre-pass only
     const slots = slotsByPosition.get(pid)!;
     const attached = attachedByHost.get(pid) ?? [];
     let need = demand(pid, slots) - [...level1.values()].filter((p) => p === pid).length;
@@ -258,6 +312,7 @@ export async function generate(day: string): Promise<GenerateResult> {
     const eligible = (st: SoldierState) => {
       const s = st.soldier;
       if (st.level1 !== null || fullyBlocked(s.id)) return false;
+      if (seatReserved.has(s.id)) return false;                                  // H6b: dedicated seats only
       if (posName === 'קצין מוצב' && !s.isSeniorCommander) return false;         // H6
       if (posName === 'עמדות הגנה' && s.isSeniorCommander) return false;         // H6
       // boundary rule: heavily occupied by yesterday's tail -> rest today.
@@ -422,6 +477,31 @@ export async function generate(day: string): Promise<GenerateResult> {
 
   for (const [pid, slots] of slotsByPosition) {
     const posName = ctx.positions.get(pid)!.name;
+
+    // Seat-rule positions: each sub-position slot goes to its planned candidate;
+    // an unplanned seat stays empty (never completed from מנוחה or fallback).
+    const plan = seatPlan.get(pid);
+    if (plan) {
+      const ruleMap = seatRuleBySub.get(pid)!;
+      for (const slot of [...slots].sort((a, b) => a.period[0] - b.period[0])) {
+        const subKey = nrm(slot.subName ?? '');
+        const st = plan.get(subKey);
+        if (!st) continue;   // empty seat — issue already raised in the pre-pass
+        const fit = fits(st, slot.period, false, false);
+        if (!fit.ok) {
+          issues.push(`${posName} ${slot.subName}: ${st.soldier.name} חסום (${fit.reasons.join(', ')}) — המושב נשאר ריק`);
+          continue;
+        }
+        const rationale = buildRationale(st, slot, pid, {
+          pickedFrom: 'primary', fitReasons: fit.reasons, commanderSeat: false,
+          groupNights: [], groupLoads: [], myNights: 0, myLoad: 0,
+        });
+        assign(st, slot, 1, ruleMap.get(subKey)?.commander ?? false,
+          fit.fallback ? fit.reasons.map((r) => `בדוחק: ${r}`) : fit.reasons, 'auto', rationale);
+      }
+      continue;
+    }
+
     const group = [...state.values()].filter((st) => st.level1 === pid);
     // attached slots (e.g. תגבצ windows) are filled from the host's crew
     const sorted = [...slots, ...(attachedByHost.get(pid) ?? [])]
@@ -449,6 +529,7 @@ export async function generate(day: string): Promise<GenerateResult> {
         if (!picked) {
           // prefer a fully-rested soldier from מנוחה over an in-group בדוחק pick
           const resters = [...state.values()].filter((st) => st.level1 === restId
+            && !seatReserved.has(st.soldier.id)
             && (!commanderSeat || st.soldier.isCommander));
           const fitting = resters.filter((st) => {
             const f = fits(st, slot.period, commanderSeat, slotReadiness);

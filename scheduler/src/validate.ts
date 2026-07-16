@@ -33,7 +33,7 @@ const DAILY_CAP = 8;
 export async function validateDay(day: string): Promise<Finding[]> {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) throw new Error(`bad day: ${day}`);
   const yesterday = addDays(day, -1);
-  const [rows, prevRows, unavailRows, dayAssignRows, soldierRows, chainRows] = await multiQuery([
+  const [rows, prevRows, unavailRows, dayAssignRows, soldierRows, chainRows, seatRulePosRows, daySlotRows] = await multiQuery([
     ...[day, yesterday].map((d) => `
       select sa.soldier_id, s.full_name, sa.position_id, p.name pos_name, p.mission_class,
              sp.name sub_name, sa.period::text, sa.blocks_overlap
@@ -46,10 +46,13 @@ export async function validateDay(day: string): Promise<Finding[]> {
      where period && tsrange(day_start('${day}'), day_start('${day}') + interval '1 day')`,
     `select da.soldier_id, p.name pos_name from day_assignments da
      join positions p on p.id = da.position_id where da.day = '${day}'`,
-    `select id, full_name, is_schedulable from soldiers`,
+    `select id, full_name, is_schedulable, coalesce(role,'') role from soldiers`,
     `select cr.*, tp.name target_name, sp2.name source_name from chain_rules cr
      join positions tp on tp.id = cr.target_position
      join positions sp2 on sp2.id = cr.source_position order by cr.id`,
+    `select id, name, config from positions where config ? 'seat_rules'`,
+    `select ds.position_id, sp.name sub_name from day_slots ds
+     left join sub_positions sp on sp.id = ds.sub_position_id where ds.day = '${day}'`,
   ]);
 
   const toRow = (r: any): Row => ({
@@ -219,6 +222,58 @@ export async function validateDay(day: string): Promise<Finding[]> {
         severity: 'warning', rule: 'unknown_soldier', soldierId: r.soldierId,
         message: `${s.name} משובץ אך מסומן לא-לשיבוץ (מפלג/חמ"ל)`,
       });
+    }
+  }
+
+  // ── 9: seat-rule positions (H6b, e.g. חפק) ───────────────────────────────
+  const nrm = (s: string) => s.replace(/[״"׳']/g, '').trim();
+  for (const p of seatRulePosRows as any[]) {
+    const rules: { sub: string; soldiers?: string[]; roles?: string[]; release_unpicked?: boolean }[] =
+      p.config?.seat_rules ?? [];
+    const posSubs = new Set((daySlotRows as any[])
+      .filter((s) => s.position_id === p.id).map((s) => nrm(s.sub_name ?? '')));
+    if (!posSubs.size) continue;   // position has no slots this day
+    for (const rule of rules) {
+      if (!posSubs.has(nrm(rule.sub))) continue;   // seat not in effect this day
+      const candIds = rule.soldiers
+        ? (soldierRows as any[])
+            .filter((s) => rule.soldiers!.some((n) => nrm(n) === nrm(s.full_name)))
+            .map((s) => s.id as number)
+        : (soldierRows as any[])
+            .filter((s) => (rule.roles ?? []).some((r) => nrm(r) === nrm(s.role)))
+            .map((s) => s.id as number);
+      const candSet = new Set(candIds);
+      const seatRows = today.filter((r) => r.positionId === p.id && nrm(r.subName ?? '') === nrm(rule.sub));
+      if (!seatRows.length) {
+        findings.push({
+          severity: 'warning', rule: 'seat_rules',
+          message: `מושב ${rule.sub} ב${p.name} לא מאויש`,
+        });
+      }
+      for (const r of seatRows) {
+        if (!candSet.has(r.soldierId)) {
+          findings.push({
+            severity: 'error', rule: 'seat_rules', soldierId: r.soldierId,
+            message: `${r.soldierName} במושב ${rule.sub} ב${p.name} אך אינו ברשימת המועמדים`,
+          });
+        }
+      }
+      // exclusivity: candidates serve only in this position; a release rule
+      // frees the unchosen candidates once the seat is covered by someone else
+      const seatFilled = seatRows.length > 0;
+      for (const cid of candIds) {
+        const isChosen = seatRows.some((sr) => sr.soldierId === cid);
+        const allowedElsewhere = !!rule.release_unpicked && seatFilled && !isChosen;
+        if (allowedElsewhere) continue;
+        const elsewhere = today.filter((r) => r.soldierId === cid
+          && r.positionId !== p.id && r.missionClass !== 'rest');
+        for (const e of elsewhere) {
+          findings.push({
+            severity: 'error', rule: 'seat_rules', soldierId: cid,
+            message: `${e.soldierName} שמור למושב ${rule.sub} ב${p.name} אך משובץ ל${e.positionName} ${fmtHM(e.period[0])}`,
+          });
+        }
+      }
     }
   }
 

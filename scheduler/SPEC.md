@@ -34,7 +34,7 @@ History shows 39 distinct position names over 20 days; templates change mid-depl
 | מגן | 10 seats, 06:00–22:00 | daily; **continuity crew, one מחלקה** (kept day-to-day unless seat count or a manual change intervenes) |
 | התקפי | 8 seats | **14:00–14:00** standing readiness crew; also **staffs the תגבצ windows** and executes ad-hoc attack missions |
 | תגבצ | 8 × 06:30–09:00, 8 × 17:00–22:00 | staffed by the התקפי crew (`staffed_by`) — no own Level-1 crew |
-| חפק | 4 seats, 06:00–22:00 | daily |
+| חפק | 4 named seats (מפקד/קשר/חובש/נהג), 06:00–22:00 | daily; **dedicated candidates per seat — see H6b** |
 | תורנים | 2 seats, 07:30–22:00 | daily |
 | כונן גשש | chained to סיור — see T4c | windows: 22–07, 07–14, 14–22 |
 | קצין מוצב | 1 seat, 06:00–22:00 | blocks whole day |
@@ -60,6 +60,19 @@ assigns them מנוחה on D+1.
 - **H4 One position per schedule day**: exactly one Level-1 position (or מנוחה) per soldier per 14:00–14:00 day.
 - **H5 Full-day blockers**: קצין מוצב and "יומי" tasks block the soldier for the rest of the schedule day. התקפי (14:00–14:00 readiness) blocks regular missions all day; its own תגבצ windows and attack missions are exempt.
 - **H6 Role gates**: קצין מוצב → סמל/מ"מ only. First seat of סיור/תגבצ/התקפי crew → commander. מ"מ/סמל never on עמדות הגנה.
+- **H6b Named-seat positions** (`seat_rules` on the position config; currently חפק):
+  each sub-position seat is filled only from its dedicated candidate list, in
+  priority order —
+  מפקד: role מ"פ, else סמ"פ; קשר: יהודה חושן → אור חיים בלונדר → יחיעם אושפיזאי
+  (ordered); חובש: כפיר לנדסמן / שחר מיכאלי; נהג: אמיר יונייב / יאיר מובשוביץ
+  (unordered pairs rotate by fairness P2-P6).
+  **No substitutes**: if no candidate is available the seat stays EMPTY and an
+  issue + validation warning is raised (never completed from מנוחה or בדוחק).
+  **Exclusivity**: candidates (incl. role matches מ"פ/סמ"פ) serve ONLY in their
+  seat-rule position — the generator reserves them and the validator errors on
+  any other assignment. Exception (`release_unpicked`, the קשר rule): once the
+  seat is covered, the unchosen candidates return to the general pool for that
+  day. Unchosen candidates of non-release rules go to מנוחה.
 - **H7 Crew integrity**: no duplicate soldier in a crew/slot. (The former
   מגן+תגבצ package rule is obsolete: תגבצ is staffed by the התקפי crew, and מגן
   is a standalone continuity crew.)

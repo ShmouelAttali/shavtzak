@@ -20,6 +20,7 @@ export type RationaleCode =
   | 'low_load'              // at/below the candidate group's load median (P3)
   | 'commander_seat'        // seat requires a commander
   | 'pulled_from_rest'      // completed from the מנוחה pool
+  | 'seat_rule'             // dedicated-candidate seat (H6b, e.g. חפק)
   | 'chain'                 // T4 overlay: crew descends from a source shift
   | 'chain_min_tracker'     // chain pick rule: minimum tracker hours
   | 'chain_commander'       // chain commander slot: highest rifle level
@@ -50,6 +51,7 @@ export const TEMPLATES: Record<RationaleCode, string> = {
   low_load: 'עומס שבועי נמוך בקבוצה: {hours} שעות משוקללות (חציון הקבוצה: {median})',
   commander_seat: 'מושב מפקד — נדרש מפקד למשמרת זו',
   pulled_from_rest: 'הושלם ממנוחה — לא נותר מועמד פנוי בקבוצת העמדה',
+  seat_rule: 'מושב {seat} ב{position} — מועמד ייעודי (עדיפות {priority} ברשימה)',
   chain: '{target}: ירד מ{source} של {sourceStart} (שרשור)',
   chain_min_tracker: 'נבחר מהצוות היורד עם מינימום שעות גשש',
   chain_commander: 'מפקד הכונן — הרובאי הבכיר בצוות',
