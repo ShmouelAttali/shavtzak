@@ -160,9 +160,17 @@ async function getDrafts(from: string, to: string): Promise<DraftResponse> {
   for (const [gKey, bySug] of grouping) {
     const [dayKey, station] = gKey.split('|');
     const day = days.get(dayKey)!;
+    // schedule-day order: 14:00 first, hours before 14:00 are the day's tail
+    const timeVal = (t: string) => {
+      if (!t || t === 'יומי') return 9999;
+      const h = parseInt(t.split(':')[0] ?? '0', 10);
+      return h < 14 ? h + 24 : h;   // mirrors the UI's timeToVal
+    };
     const subTypes: SubType[] = [...bySug.entries()].map(([sug, byTime]) => ({
       sug,
-      times: [...byTime.entries()].map(([time, soldiers]): TimeSlot => ({ time, soldiers })),
+      times: [...byTime.entries()]
+        .sort((a, b) => timeVal(a[0]) - timeVal(b[0]))
+        .map(([time, soldiers]): TimeSlot => ({ time, soldiers })),
     }));
     day.groups.push({ name: station, subTypes } as StationGroup);
   }
