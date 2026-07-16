@@ -46,14 +46,13 @@ Everything connects through one env var:
 export SCHEDULER_DATABASE_URL='postgres://USER:PASSWORD@HOST:5432/postgres'
 ```
 
-- **Supabase (shared/production)**: account **shavtzakshilo@gmail.com** (password:
-  ask Elyashiv Lavi). Project `shavtzak-scheduler`, region eu-central-1:
-  https://supabase.com/dashboard/project/yoaymfryftsqqjjyvwym
-  Session-pooler URI:
-  `postgres://postgres.yoaymfryftsqqjjyvwym:<DB_PASSWORD>@aws-0-eu-central-1.pooler.supabase.com:5432/postgres`
-  — DB password from Dashboard → Project Settings → Database, or on Elyashiv's Mac:
+- **Supabase (shared/production)**: see the **`supabase-access` skill**
+  (`.claude/skills/supabase-access/SKILL.md`) for credentials, the
+  psql-via-Docker pattern (no host psql), applying migrations, and the
+  sheet-import pipeline with its gotchas (float personal numbers, readiness-row
+  duplication, 14:00 boundary). Quick ref: project `shavtzak-scheduler`
+  (yoaymfryftsqqjjyvwym, eu-central-1), password
   `security find-generic-password -s supabase-shavtzak-db -w`.
-  Schema + seed + history already applied (2026-07-15: 133 soldiers, 1,786 rows).
 - **Local dev** (default when the env var is unset —
   `postgres://postgres:test@localhost:55432/postgres`):
 
