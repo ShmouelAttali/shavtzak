@@ -9,8 +9,9 @@ and live against the shared Supabase project:
   seed in `db/seed.sql` — the **consolidated baseline**; historical migrations
   are archived in `db/migrations/archive/` and must NEVER be replayed onto a
   schema.sql-built DB). One-off live-DB deltas go in standalone files like
-  `db/consolidation-2026-07-17.sql`. Real history imported (1,836 rows,
-  24/6–14/7) + `unavailability` built from the roster matrix. Positions model:
+  `db/consolidation-2026-07-17.sql`. Real history fully re-imported 2026-07-17
+  (2,214 rows, 24/6–18/7, correct חפק/תורנים attribution) + `unavailability`
+  rebuilt from the roster matrix. Positions model:
   **מגן** (10, continuity crew, one מחלקה), **התקפי** (8, standing readiness
   14:00–14:00 + ad-hoc attacks as separate non-overlapping rows), כרמל/גשש are
   chained overlays, seat counts per date via `seat_overrides`. Daily duties
@@ -38,6 +39,9 @@ and live against the shared Supabase project:
   to the remote either.
 - **Read `scheduler/SPEC.md` before touching scheduling logic** — every rule
   (H/R/T/P), the 14:00 day anchor, and the positions catalog live there.
+- **Every rule change updates BOTH docs**: `scheduler/SPEC.md` (technical) and
+  `scheduler/LOGIC.he.md` (pure-Hebrew rules for the officers — no field names
+  or implementation detail). The owner checks they match exactly.
 
 Next candidates: approval flow + sheet sync-out (`כל השבצק` append), lock/edit
 from UI, server-side Clerk auth on the API, מגן internal shift scheduling.
@@ -61,9 +65,10 @@ export SCHEDULER_DATABASE_URL='postgres://USER:PASSWORD@HOST:5432/postgres'
 
 - **Supabase (shared/production)**: see the **`supabase-access` skill**
   (`.claude/skills/supabase-access/SKILL.md`) for credentials, the
-  psql-via-Docker pattern (no host psql), applying migrations, and the
-  sheet-import pipeline with its gotchas (float personal numbers, readiness-row
-  duplication, 14:00 boundary). Quick ref: project `shavtzak-scheduler`
+  psql-via-Docker pattern (no host psql), applying schema changes (consolidated
+  baseline — the migrations dir is archived, never replay it), and the
+  sheet-import pipeline with its gotchas (readiness-row duplication, 14:00
+  boundary, reverse-diff for sheet edits). Quick ref: project `shavtzak-scheduler`
   (yoaymfryftsqqjjyvwym, eu-central-1), password
   `security find-generic-password -s supabase-shavtzak-db -w`.
 - **Local dev** (default when the env var is unset —
@@ -103,8 +108,9 @@ against Supabase**). Pattern: unit-test pure helpers directly; integration-test
 generator/validator changes by asserting SPEC invariants over generated days
 (see `tests/generator.test.ts`); add a negative case per new validation rule.
 New API endpoints: add handler-level tests (invoke the handler with a mock
-req/res like `scripts/dev-api.ts` does). Run the relevant suite before
-committing.
+req/res like `scripts/dev-api.ts` does). In test fixtures, resolve positions /
+sub-positions by **name lookup**, never by hardcoded seed ids (seed renumbering
+silently breaks id-coupled tests). Run the relevant suite before committing.
 
 ## Conventions & gotchas
 

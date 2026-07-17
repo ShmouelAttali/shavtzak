@@ -31,12 +31,27 @@ docker exec shavtzak-pg psql "$URI" -c "select ..."      # one-liner
   **overwrites** `process.env` — a shell-exported `SCHEDULER_DATABASE_URL` does NOT
   reach the dev API. To point it elsewhere, edit `.env.local` or use a wrapper that
   resets the var after importing the script (handlers + pg pool load lazily per request).
+- **Gotcha — killed `docker exec` ≠ killed query:** a host-side timeout/kill of
+  `docker exec ... psql` does NOT kill psql inside the container — the statement
+  (even a whole transaction) may complete and COMMIT after the "timeout". Before
+  retrying anything, query the DB to see what actually happened; a retry that
+  assumes rollback can double-apply or conflict.
+- **Batch writes over the WAN pooler:** row-by-row inserts cost ~100ms+ each
+  through the pooler (880 single inserts blew a 2-minute timeout). For anything
+  beyond a few dozen rows, emit one multi-row `insert ... values (...),(...)`
+  statement (same pattern `persist()` uses).
 
-## Applying migrations
+## Applying schema changes
 
-Migrations live in `scheduler/db/migrations/`. Apply to Supabase with the file-run
-pattern above, and keep `scheduler/db/schema.sql` in sync (tests rebuild from it).
-Local Docker first, then Supabase.
+`scheduler/db/schema.sql` + `db/seed.sql` are the **consolidated baseline** —
+tests and fresh builds use only them. `db/migrations/` is **archived**
+(`db/migrations/archive/` + README): those files were applied to Supabase
+historically and must **NEVER be replayed** onto a schema.sql-built DB (the
+id-13 reuse would delete the live בבית position). New live-DB deltas go in a
+standalone, idempotent, one-off file (e.g. `db/consolidation-2026-07-17.sql`):
+edit schema.sql/seed.sql first (tests rebuild from them), mirror the delta in
+the one-off file, apply to local Docker, run the test suite, then apply to
+Supabase with the file-run pattern above.
 
 ## Importing real assignments from the Google Sheet
 
@@ -53,13 +68,13 @@ Pipeline: fetch tabs → filter dates → `import_history.py` → SQL → psql.
    errors — that re-runs it).
 3. Generate SQL:
    `python3 scheduler/import/import_history.py --roster roster.csv --history filtered.csv > import.sql`
-4. **Strip the `insert into soldiers` lines** before running against Supabase,
-   keeping only genuinely new names. Reason: the original import came from CSV
-   *downloads* where personal numbers were floats (`7569145.0`); the values API
-   yields clean ints (`7569145`), so `on conflict (personal_number) do nothing`
-   does NOT match and every soldier duplicates (131/133 PNs in prod are the `.0`
-   form). Assignment inserts then resolve `(select id from soldiers where
-   full_name=... limit 1)` nondeterministically.
+4. **Verify every soldier name resolves before importing** (normalize with
+   `import_history.nkey` and diff against `select full_name from soldiers`) —
+   assignment inserts resolve soldiers by `full_name ... limit 1`, so an
+   unknown/misspelled name silently drops or misattributes rows. The historical
+   float-PN duplication trap is RESOLVED (2026-07-17): prod personal numbers
+   were normalized and `import_history.py` strips trailing `.0`, so soldier
+   inserts now no-op cleanly via `on conflict` — stripping them is optional.
 5. If a day being imported already exists as a draft, **delete its unlocked draft
    rows first** (locked/manual survive):
 
@@ -89,11 +104,30 @@ covers whole schedule days and doesn't re-import already-covered sheet dates.
 
 ### Known import mappings
 
-- `חפק` and `תורנים נוספים` map to position `אחר` (id 99) — no keyword match
-  (`תורן` ≠ substring of `תורנים` due to final-nun). Consistent with history;
-  hours still count for fairness.
+- FIXED 2026-07-17: `חפק` and `תורנים נוספים` now map to their real positions
+  (POSITION_MAP gained `חפק`; the final-nun `תורן`/`תורני` mismatch is fixed),
+  and a full re-import was done — history attribution is correct. `אחר` (id 99)
+  remains the catch-all for genuinely unmapped names only.
 - After importing real data over former draft days, later drafts (generated
   against the draft fairness picture) are stale — regenerate them.
+- After importing over days that already carry a stored validation snapshot,
+  **refresh it** (`npx tsx src/cli.ts validate <day>`) — the draft tab
+  validates live, but the stored `schedule_days.validation` column doesn't
+  update itself. Expect historical days to flag "errors" against rules that
+  postdate them (e.g. the removed attack↔readiness exception) — that's the
+  validator judging old reality by current rules, not a data problem.
+
+### Reconciling sheet edits (the sheet is edited retroactively)
+
+`cleanup.py`'s diff only finds rows MISSING from the DB — it never detects DB
+rows the sheet no longer has (a swapped/edited shift leaves a stale row behind).
+When counts look off, also run the **reverse diff**: recompute the want-set with
+`cleanup.py`'s exact key construction (`infer_period(date, position, typ,
+time_text, canon)` — mind the argument order — and `ts()` formatting) and list
+`have − want`. Wholesale re-import of the affected dates is often simpler and
+is safe: delete those days' `source='import'` rows first, re-import, then
+re-run `cleanup.py` (its overlap pass re-adds the ~40 known
+`blocks_overlap=false` rows the EXCLUDE constraint rejects row-by-row).
 
 ## Safety
 
