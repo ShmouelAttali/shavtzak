@@ -77,10 +77,11 @@ cross the boundary).
   handover (so the DB overlap constraint and the validator see real,
   non-overlapping intervals), and each half counts hours/nights by its real
   period. Pairs are NOT applied to readiness slots, chained overlays (T4), or
-  seat-rule / staff_all_roles positions — H6b keeps its no-substitute,
-  single-candidate semantics. The validator's slot-coverage check counts a
-  split-covered seat as fully staffed and still flags a partially-covered
-  one (see §8).
+  staff_all_roles positions. Seat-rule positions get a restricted variant:
+  a pair may split a named seat only when BOTH members come from that seat's
+  own candidate list (see H6b) — never as a substitute from outside it. The
+  validator's slot-coverage check counts a split-covered seat as fully
+  staffed and still flags a partially-covered one (see §8).
 - **H2 Excluded pools**: מפלג / חמ"ל members not scheduled (flag on soldier).
 - **H3 No overlap**: no two time-overlapping assignments per soldier — **no
   exceptions**: a soldier is either on an active mission or on כוננות, never
@@ -101,8 +102,13 @@ cross the boundary).
   (ordered); חובש: כפיר לנדסמן / שחר מיכאלי; נהג: אמיר יונייב / יאיר מובשוביץ
   (unordered pairs rotate by fairness P2-P6).
   **No substitutes**: if no candidate is available the seat stays EMPTY and an
-  issue + validation warning is raised (never completed from מנוחה or בדוחק,
-  and never by an H1 replacement pair — seat-rule seats stay single-candidate).
+  issue + validation warning is raised (never completed from מנוחה or בדוחק).
+  **In-list pair handover**: when no single candidate covers the whole window
+  but a departing candidate and an arriving candidate from the SAME list
+  together do, they split the seat at the handover (H1 pair semantics, bus at
+  10:00). Both come from the seat's own list, so "no substitutes" holds;
+  ordered rules pick the pair by list priority, unordered by fairness. A
+  single fully-available candidate always wins over a pair.
   **Exclusivity**: candidates (incl. role matches מ"פ/סמ"פ) serve ONLY in their
   seat-rule position — the generator reserves them and the validator errors on
   any other assignment. Exception (`release_unpicked`, the קשר rule): once the
@@ -124,8 +130,10 @@ cross the boundary).
 - **R1** — two regimes, both configurable:
   - *Generation* (candidate filtering): < 4h rest → blocked (H8, fallback-only);
     4–8h rest → allowed with warning for tasks ≤ 4h, fallback-only for tasks > 4h.
-  - *Validation* (post-hoc): any gap < 8h between timed shifts (incl. vs previous day)
-    is reported as an error — the generator should normally never produce one.
+  - *Validation* (post-hoc): a gap < 4h between timed shifts (incl. vs previous
+    day) is an **error**; 4–8h is a **warning** (a hard-8h error rule would
+    flag every legal short-task pick the generation regime allows). R5-exempt
+    14:00-boundary starts are skipped.
 - **R2**: readiness (התקפי/כרמל/כונן גשש) is **rest-transparent** (assumed sleeping) and its hours are counted separately from mission hours.
 - **R3 כונן גשש**: the demanding part is the morning departure (~05:30–07:00); rest check for the night window uses effective duration ~1.5h; prefer soldiers who slept the night.
 - **R4 Daily cap**: ≤ 8 mission-hours per schedule day (readiness hours excluded). >8h = error; available soldier with 0 missions and not in מנוחה bucket = warning.
@@ -186,6 +194,15 @@ rule decides unless it ties, then the next rule breaks the tie:
 | P4 | Rotation compliance: T3 streak-breakers first, then T2 class alternation, then T1 not-same-position | vs yesterday/streak |
 | P5 | Role fit: commander where needed; נהג טיגריס on attack; נהג דוד on night patrol; מ"כ spread (avoid 2 static-commanders same hour); same-platoon-as-commander | current crew |
 | P6 | Most rest since last shift | — |
+
+Implementation notes on the ranking tuple: (a) when ranking for a concrete
+slot start, candidates with a full 8h rest before it sort before all others
+(R1 quasi-constraint — this is what spaces a soldier's two 4h shifts 8h
+apart); (b) the T5 weekly-תורנות demotion key sits right after it; (c) P3
+compares weighted hours in **8-hour buckets** (one duty-day) so small
+differences don't override rotation (P4); exact hours only break remaining
+ties. P5 is currently implemented as the commander quota + same-platoon
+(מגן) only; the driver-fit and מ"כ-spread clauses are not yet wired in.
 
 ### 6.2 Fallback — compact scoring
 

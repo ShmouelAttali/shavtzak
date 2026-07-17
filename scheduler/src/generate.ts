@@ -271,14 +271,19 @@ export async function generate(day: string): Promise<GenerateResult> {
     if (reserved !== undefined && nrm(reserved) !== nrm(posName)) return false;
     return !s.allowedPositions || s.allowedPositions.some((p) => nrm(p) === nrm(posName));
   };
-  const seatPlan = new Map<number, Map<string, SoldierState>>();   // pid -> sub -> chosen
+  // A planned seat is one candidate, or (H6b pair handover) two candidates
+  // from the SAME dedicated list splitting the window at the handover.
+  type SeatPair = { pair: true; d: SoldierState; a: SoldierState; handover: Minutes };
+  type SeatPick = SoldierState | SeatPair;
+  const isSeatPair = (p: SeatPick): p is SeatPair => 'pair' in p;
+  const seatPlan = new Map<number, Map<string, SeatPick>>();   // pid -> sub -> chosen
   const seatRuleBySub = new Map<number, Map<string, SeatRule>>();
   {
     const byName = new Map([...state.values()].map((st) => [nrm(st.soldier.name), st]));
     for (const pos of ctx.positions.values()) {
       const rules: SeatRule[] = pos.config?.seat_rules ?? [];
       if (!rules.length || !slotsByPosition.has(pos.id)) continue;
-      const plan = new Map<string, SoldierState>();
+      const plan = new Map<string, SeatPick>();
       const ruleMap = new Map<string, SeatRule>();
       const subPeriod = new Map(slotsByPosition.get(pos.id)!
         .map((sl) => [nrm(sl.subName ?? ''), sl.period] as const));
@@ -300,6 +305,42 @@ export async function generate(day: string): Promise<GenerateResult> {
         // ordered/role rules take the first available; unordered pairs rotate by fairness
         const chosen = (rule.ordered || rule.roles) ? avail[0] : rank(avail, pos.id, false)[0];
         if (!chosen) {
+          // H6b pair handover: when no candidate covers the whole window, a
+          // departing candidate (available until his leave time) and an
+          // arriving one (available from it) may split the seat — both from
+          // the seat's OWN list, so "no substitutes" holds. Bus-at-10:00
+          // blocks meet exactly at the handover.
+          const dep = new Map<SoldierState, Minutes>();
+          const arr = new Map<SoldierState, Minutes>();
+          for (const c of cands) {
+            if (c.level1 !== null && c.level1 !== pos.id) continue;
+            const w = partialWindow(c.soldier.id, window);
+            if (w?.kind === 'departing') dep.set(c, w.at);
+            else if (w?.kind === 'arriving') arr.set(c, w.at);
+          }
+          const order = (xs: SoldierState[]) => (rule.ordered || rule.roles)
+            ? [...xs].sort((x, y) => cands.indexOf(x) - cands.indexOf(y))
+            : rank(xs, pos.id, false);
+          let pairPick: SeatPair | undefined;
+          for (const d of order([...dep.keys()])) {
+            const handover = dep.get(d)!;
+            const a = order([...arr.keys()].filter((x) => x !== d && arr.get(x)! <= handover))[0];
+            if (a) { pairPick = { pair: true, d, a, handover }; break; }
+          }
+          if (pairPick) {
+            for (const m of [pairPick.d, pairPick.a]) {
+              if (m.level1 === null) { m.level1 = pos.id; level1.set(m.soldier.id, pos.id); }
+              m.level1Rationale.push({
+                code: 'seat_rule',
+                params: { seat: rule.sub, position: pos.name, priority: cands.indexOf(m) + 1 },
+              });
+            }
+            plan.set(nrm(rule.sub), pairPick);
+            if (rule.release_unpicked) {
+              for (const c of cands) if (c !== pairPick.d && c !== pairPick.a) seatRestrict.delete(c.soldier.id);
+            }
+            continue;
+          }
           issues.push(`${pos.name}: אין מועמד זמין למושב ${rule.sub} — המושב יישאר ריק`);
           // nothing to protect — free the (blocked) candidates for other positions
           for (const c of cands) seatRestrict.delete(c.soldier.id);
@@ -547,10 +588,37 @@ export async function generate(day: string): Promise<GenerateResult> {
       const ruleMap = seatRuleBySub.get(pid)!;
       for (const slot of [...slots].sort((a, b) => a.period[0] - b.period[0])) {
         const subKey = nrm(slot.subName ?? '');
-        const st = plan.get(subKey);
-        if (!st) continue;   // empty seat — issue already raised in the pre-pass
-        const fit = fits(st, slot.period, false, false,
-          ctx.positions.get(pid)?.config?.night_exempt ?? false);
+        const pick = plan.get(subKey);
+        if (!pick) continue;   // empty seat — issue already raised in the pre-pass
+        const nightExempt = ctx.positions.get(pid)?.config?.night_exempt ?? false;
+        const isCmd = ruleMap.get(subKey)?.commander ?? false;
+        if (isSeatPair(pick)) {
+          const { d, a, handover } = pick;
+          const firstHalf: [Minutes, Minutes] = [slot.period[0], handover];
+          const secondHalf: [Minutes, Minutes] = [handover, slot.period[1]];
+          const fd = fits(d, firstHalf, false, false, nightExempt);
+          const fa = fits(a, secondHalf, false, false, nightExempt);
+          if (!fd.ok || !fa.ok) {
+            const bad = !fd.ok ? d : a;
+            const reasons = (!fd.ok ? fd : fa).reasons.join(', ');
+            issues.push(`${posName} ${slot.subName}: ${bad.soldier.name} חסום (${reasons}) — המושב נשאר ריק`);
+            continue;
+          }
+          const note = `זוג מתחלף: החלפה ב-${fmtHM(handover)}`;
+          assign(d, { ...slot, period: firstHalf }, 1, isCmd, [note], 'auto',
+            [...buildRationale(d, { ...slot, period: firstHalf }, pid, {
+              pickedFrom: 'primary', fitReasons: fd.reasons, commanderSeat: false,
+              groupNights: [], groupLoads: [], myNights: 0, myLoad: 0,
+            }), { code: 'handover_out', params: { handover: fmtHM(handover), partner: a.soldier.name } }]);
+          assign(a, { ...slot, period: secondHalf }, 1, isCmd, [note], 'auto',
+            [...buildRationale(a, { ...slot, period: secondHalf }, pid, {
+              pickedFrom: 'primary', fitReasons: fa.reasons, commanderSeat: false,
+              groupNights: [], groupLoads: [], myNights: 0, myLoad: 0,
+            }), { code: 'handover_in', params: { handover: fmtHM(handover), partner: d.soldier.name } }]);
+          continue;
+        }
+        const st = pick;
+        const fit = fits(st, slot.period, false, false, nightExempt);
         if (!fit.ok) {
           issues.push(`${posName} ${slot.subName}: ${st.soldier.name} חסום (${fit.reasons.join(', ')}) — המושב נשאר ריק`);
           continue;
@@ -559,7 +627,7 @@ export async function generate(day: string): Promise<GenerateResult> {
           pickedFrom: 'primary', fitReasons: fit.reasons, commanderSeat: false,
           groupNights: [], groupLoads: [], myNights: 0, myLoad: 0,
         });
-        assign(st, slot, 1, ruleMap.get(subKey)?.commander ?? false,
+        assign(st, slot, 1, isCmd,
           fit.fallback ? fit.reasons.map((r) => `בדוחק: ${r}`) : fit.reasons, 'auto', rationale);
       }
       continue;
