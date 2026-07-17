@@ -7,3 +7,11 @@
 export function normalizeName(s: string | null | undefined): string {
   return (s ?? '').replace(/[״"׳'`]/g, '').replace(/\s+/g, ' ').trim();
 }
+
+/** Qualification match (H6b `qual`, P5 driver fit): the roster records
+ *  driver/medic qualifications either in soldier_qualifications or inside the
+ *  free-text role (תפקיד), so both are checked, normalized, by containment. */
+export function hasQualification(quals: string[], role: string, qual: string): boolean {
+  const q = normalizeName(qual);
+  return [...quals, role].some((x) => normalizeName(x).includes(q));
+}

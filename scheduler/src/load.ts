@@ -5,7 +5,8 @@ import { normalizeName } from './text.js';
 import { isCountedNight } from './rest.js';
 import { loadTunables, effectiveConfig } from './config.js';
 
-function roleFlags(role: string) {
+/** H6 role parsing: מ"מ/סמל = senior commander; מ"כ/מ"ח = static commander. */
+export function roleFlags(role: string) {
   const r = normalizeName(role);
   const has = (...kw: string[]) => kw.some((k) => r.includes(k));
   const isSenior = has('ממ', 'מ״מ', 'סמל') || /(^|\s)מ מ(\s|$)/.test(r);

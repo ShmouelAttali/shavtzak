@@ -15,6 +15,9 @@ export interface Tunables {
   dailyCapH: number;
   /** P3: readiness hours weight vs mission hours (applied in soldier_fairness SQL) */
   readinessHourWeight: number;
+  /** R3: effective work hours of a כונן גשש night window (22:00–07:00) —
+   *  rest before a subsequent task is measured from window start + this */
+  gashashEffectiveHours: number;
 }
 
 /** Build tunables from the `config` table rows (key -> jsonb value). */
@@ -26,6 +29,7 @@ export function loadTunables(config: Record<string, any>): Tunables {
     longTaskH: Number(rest.long_task_hours ?? 4),
     dailyCapH: Number(config.daily_cap_hours ?? 8),
     readinessHourWeight: Number(config.readiness_hour_weight ?? 0.25),
+    gashashEffectiveHours: Number(rest.gashash_effective_hours ?? 1.5),
   };
 }
 

@@ -5,9 +5,9 @@ import { Soldier, Slot, Assignment, Fairness, SeatRule } from './model.js';
 import { RationaleCode, RationaleEntry } from './rationale.js';
 import {
   Minutes, dayStart, dayEnd, addDays, slotStart, overlaps, hours,
-  minToIso, fmtHM, nightRange,
+  minToIso, fmtHM, nightRange, nightRangeAt,
 } from './time.js';
-import { normalizeName as nrm } from './text.js';
+import { normalizeName as nrm, hasQualification } from './text.js';
 import { isFullRestExempt, isCountedNight } from './rest.js';
 
 // Rest/cap thresholds come from ctx.tunables (config table; src/config.ts).
@@ -63,6 +63,10 @@ interface SoldierState {
   missionHoursToday: number;
   nightsToday: number;
   trackerMinutes: number;
+  /** R3: effective work ends of כונן גשש NIGHT windows (window start +
+   *  gashash_effective_hours) — participate in the rest-gap search even
+   *  though readiness is otherwise rest-transparent */
+  gashashNightEnds: Minutes[];
   level1: number | null;      // position id
   /** why this soldier landed in their Level-1 group (continuity/commander quota) */
   level1Rationale: RationaleEntry[];
@@ -80,6 +84,21 @@ const nightsOf = (st: SoldierState, forNight: boolean): number =>
 /** P3: weighted mission hours incl. today's fresh assignments. */
 const loadOf = (st: SoldierState): number =>
   st.fairness.weightedHours7d + st.missionHoursToday;
+
+/** T4c pick ordering for `min_tracker_hours` chains (R3): for the NIGHT
+ *  window prefer crew members who slept the previous night, then lowest
+ *  cumulative tracker hours, then fairness order. Pure — unit-tested. */
+export function trackerPickOrder<T>(pool: T[], opts: {
+  nightWindow: boolean;
+  slept: (t: T) => boolean;
+  trackerH: (t: T) => number;
+  fairIndex: (t: T) => number;
+}): T[] {
+  return [...pool].sort((a, b) =>
+    (opts.nightWindow ? Number(!opts.slept(a)) - Number(!opts.slept(b)) : 0)
+    || opts.trackerH(a) - opts.trackerH(b)
+    || opts.fairIndex(a) - opts.fairIndex(b));
+}
 
 export interface GenerateResult {
   day: string;
@@ -102,6 +121,12 @@ export async function generate(day: string): Promise<GenerateResult> {
   const countedHours = (p: [Minutes, Minutes]) => Math.min(hours(p), DAILY_CAP);
 
   // ── per-soldier state ────────────────────────────────────────────────────
+  const gashashId = ctx.positionByName.get('כונן גשש');
+  /** R3: effective end of a גשש night window = start + gashash_effective_hours */
+  const gashashEffEnd = (a: { period: [Minutes, Minutes] }) =>
+    a.period[0] + ctx.tunables.gashashEffectiveHours * 60;
+  const isGashashNight = (a: { positionId: number; period: [Minutes, Minutes] }) =>
+    a.positionId === gashashId && overlaps(a.period, nightRangeAt(a.period[0]));
   const state = new Map<number, SoldierState>();
   for (const s of ctx.soldiers.values()) {
     const ex = ctx.existing.get(s.id) ?? [];
@@ -120,6 +145,7 @@ export async function generate(day: string): Promise<GenerateResult> {
         .reduce((h, a) => h + countedHours(a.period), 0),
       nightsToday: 0,
       trackerMinutes: 0,
+      gashashNightEnds: ex.filter(isGashashNight).map(gashashEffEnd),
       level1: null,
       level1Rationale: [],
     };
@@ -144,6 +170,12 @@ export async function generate(day: string): Promise<GenerateResult> {
     for (const iv of st.intervals) {
       if (iv[1] <= start && iv[1] > prevEnd) prevEnd = iv[1];
     }
+    // R3: a כונן גשש night window counts as ~1.5h of effective work (the
+    // morning departure) — its effective end joins the prevEnd search even
+    // though readiness is otherwise rest-transparent (R2)
+    for (const e of st.gashashNightEnds) {
+      if (e <= start && e > prevEnd) prevEnd = e;
+    }
     if (prevEnd === -Infinity) return { gap: Infinity, prevEnd: null, dutyRest: false };
     const gap = start - prevEnd;
     if (gap < REST_IDEAL) {
@@ -160,6 +192,10 @@ export async function generate(day: string): Promise<GenerateResult> {
     return { gap, prevEnd, dutyRest: false };
   }
   const restBefore = (st: SoldierState, start: Minutes): number => restInfo(st, start).gap;
+
+  // declared before rank(): the P5 מ"כ-spread key inspects already-made
+  // assignments (empty during Level-1 pre-passes, filled during Level 2)
+  const assignments: Assignment[] = [];
 
   type Fit = { ok: boolean; fallback: boolean; reasons: FitReason[] };
   function fits(st: SoldierState, slot: [Minutes, Minutes], commanderSeat: boolean,
@@ -248,7 +284,8 @@ export async function generate(day: string): Promise<GenerateResult> {
    *  full 8h rest before it win over short-rest ones (keeps 4h shifts spaced
    *  8h apart: 06&18, 10&22, 14&02). */
   function rank(candidates: SoldierState[], positionId: number, forNight: boolean, atStart?: Minutes): SoldierState[] {
-    const posName = ctx.positions.get(positionId)!.name;
+    const pos = ctx.positions.get(positionId)!;
+    const posName = pos.name;
     return [...candidates].sort((a, b) => {
       const ka = key(a), kb = key(b);
       for (let i = 0; i < ka.length; i++) if (ka[i] !== kb[i]) return ka[i] - kb[i];
@@ -267,10 +304,26 @@ export async function generate(day: string): Promise<GenerateResult> {
         Math.floor(loadOf(st) / DAILY_CAP),                                    // P3
         rotationPenalty(st, positionId).penalty,                               // P4
         st.fairness.positionCounts[posName] ?? 0,                              // P4 (L1 balance)
+        // P5 role fit (after P4 — ties only): נהג טיגריס for the התקפי crew;
+        // נהג דוד for a patrol slot overlapping the night window
+        posName === 'התקפי' && !st.soldier.isTigerDriver ? 1 : 0,              // P5
+        posName === 'סיור' && forNight && !st.soldier.isDudDriver ? 1 : 0,     // P5
+        // P5 מ"כ spread: when ranking for a concrete static slot, a commander
+        // is demoted if a commander already mans a static post at that hour
+        // (the defense/carmel grids share start hours, so start == same hour)
+        atStart !== undefined && pos.missionClass === 'static'
+          && st.soldier.isCommander && staticCommanderAt(atStart) ? 1 : 0,     // P5
         loadOf(st),                                                            // P3 fine tie-break
         -Math.min(restAt, P6_REST_CLAMP),                                      // P6
       ];
     }
+  }
+
+  /** P5 מ"כ spread: is a commander already assigned to a static post starting at `start`? */
+  function staticCommanderAt(start: Minutes): boolean {
+    return assignments.some((a) => a.period[0] === start
+      && ctx.positions.get(a.positionId)?.missionClass === 'static'
+      && state.get(a.soldierId)?.soldier.isCommander);
   }
 
   // ── Level 1: partition into positions ───────────────────────────────────
@@ -319,14 +372,28 @@ export async function generate(day: string): Promise<GenerateResult> {
   // reserved for this position only (they never fill other positions); a rule
   // with release_unpicked frees the unchosen candidates back to the pool. A
   // seat with no available candidate stays EMPTY (issue raised, no substitute).
-  /** One position-whitelist mechanism for both restriction sources:
-   *  H6c allowed_positions (DB column) and H6b seat-rule reservation
-   *  (candidates of a seat-rule position serve only there; a release rule
-   *  removes its unchosen candidates from this map again). */
+  /** One position-whitelist mechanism for all three restriction sources:
+   *  H6c allowed_positions (DB column, per-soldier cases like אריאל ביר),
+   *  H6b seat-rule reservation (candidates of a seat-rule position serve only
+   *  there; a release rule removes its unchosen candidates from this map
+   *  again), and the staff_all_roles derivation below. */
   const seatRestrict = new Map<number, string>();   // soldier id -> position name
+  // staff_all_roles derivation (חמל): a soldier whose role matches a
+  // staff_all_roles position may serve ONLY there — the implicit equivalent
+  // of an explicit allowed_positions=[position] row.
+  const roleRestrict = new Map<number, string>();   // soldier id -> position name
+  for (const pos of ctx.positions.values()) {
+    const roles: string[] = pos.config?.staff_all_roles ?? [];
+    if (!roles.length) continue;
+    for (const st of state.values()) {
+      if (roles.some((r) => nrm(r) === nrm(st.soldier.role))) roleRestrict.set(st.soldier.id, pos.name);
+    }
+  }
   const allowedIn = (s: Soldier, posName: string) => {
     const reserved = seatRestrict.get(s.id);
     if (reserved !== undefined && nrm(reserved) !== nrm(posName)) return false;
+    const roleHome = roleRestrict.get(s.id);
+    if (roleHome !== undefined && nrm(roleHome) !== nrm(posName)) return false;
     return !s.allowedPositions || s.allowedPositions.some((p) => nrm(p) === nrm(posName));
   };
   // A planned seat is one candidate, or (H6b pair handover) two candidates
@@ -345,6 +412,14 @@ export async function generate(day: string): Promise<GenerateResult> {
       const ruleMap = new Map<string, SeatRule>();
       const subPeriod = new Map(slotsByPosition.get(pos.id)!
         .map((sl) => [nrm(sl.subName ?? ''), sl.period] as const));
+      // H6b qual guard: the named lists stay authoritative, but a pick that
+      // lacks the seat's expected qualification is flagged (issue here +
+      // validator warning `seat_qualification`)
+      const qualCheck = (st: SoldierState, rule: SeatRule) => {
+        if (rule.qual && !hasQualification(st.soldier.quals, st.soldier.role, rule.qual)) {
+          issues.push(`${pos.name} ${rule.sub}: ${st.soldier.name} ללא הסמכת ${rule.qual}`);
+        }
+      };
       for (const rule of rules) {
         ruleMap.set(nrm(rule.sub), rule);
         const window = subPeriod.get(nrm(rule.sub)) ?? dRange;
@@ -388,6 +463,7 @@ export async function generate(day: string): Promise<GenerateResult> {
           if (pairPick) {
             for (const m of [pairPick.d, pairPick.a]) {
               if (m.level1 === null) { m.level1 = pos.id; level1.set(m.soldier.id, pos.id); }
+              qualCheck(m, rule);
               m.level1Rationale.push({
                 code: 'seat_rule',
                 params: { seat: rule.sub, position: pos.name, priority: cands.indexOf(m) + 1 },
@@ -405,6 +481,7 @@ export async function generate(day: string): Promise<GenerateResult> {
           continue;
         }
         if (chosen.level1 === null) { chosen.level1 = pos.id; level1.set(chosen.soldier.id, pos.id); }
+        qualCheck(chosen, rule);
         chosen.level1Rationale.push({
           code: 'seat_rule',
           params: { seat: rule.sub, position: pos.name, priority: cands.indexOf(chosen) + 1 },
@@ -537,7 +614,6 @@ export async function generate(day: string): Promise<GenerateResult> {
   }
 
   // ── Level 2: fill slots within each position group ──────────────────────
-  const assignments: Assignment[] = [];
 
   const CLASS_HE: Record<string, string> = {
     static: 'סטטית', dynamic: 'דינמית', readiness: 'כוננות', rest: 'מנוחה', other: 'אחרת',
@@ -637,6 +713,7 @@ export async function generate(day: string): Promise<GenerateResult> {
     }
   }
 
+  function fillLevel2() {
   for (const [pid, slots] of slotsByPosition) {
     const posName = ctx.positions.get(pid)!.name;
 
@@ -830,12 +907,23 @@ export async function generate(day: string): Promise<GenerateResult> {
       }
     }
   }
+  }   // end fillLevel2()
 
   // ── Chains (T4): overlay readiness rows from descending crews ───────────
+  // Two passes around Level 2: a rule whose source crew descended on a
+  // PREVIOUS day (sourceDayOffset < 0) is fully determined before Level 2
+  // runs, so it is applied FIRST — the standby row is reserved (H3/H3b) and
+  // the general fill schedules around it instead of booking the whole
+  // descending crew during the window. Same-day rules need Level 2's fresh
+  // patrol/defense rows and run after it.
   const newByPosStart = (pid: number, startMin: Minutes) =>
     assignments.filter((a) => a.positionId === pid && a.period[0] === startMin);
 
-  for (const rule of ctx.chainRules) {
+  for (const rule of ctx.chainRules.filter((r) => r.sourceDayOffset < 0)) runChain(rule);
+  fillLevel2();
+  for (const rule of ctx.chainRules.filter((r) => r.sourceDayOffset >= 0)) runChain(rule);
+
+  function runChain(rule: typeof ctx.chainRules[number]) {
     const srcDay = addDays(day, rule.sourceDayOffset);
     const srcStart = slotStart(srcDay, rule.sourceStart);
     // source crew: today's fresh assignments, or history/locked rows for offset days
@@ -850,7 +938,7 @@ export async function generate(day: string): Promise<GenerateResult> {
     const sourceName = ctx.positions.get(rule.sourcePosition)!.name;
     if (crew.length === 0) {
       issues.push(`שרשור ${targetName} ${rule.targetStart}: לא נמצא צוות מקור`);
-      continue;
+      return;
     }
 
     const tStart = slotStart(day, rule.targetStart);
@@ -874,9 +962,22 @@ export async function generate(day: string): Promise<GenerateResult> {
       .filter((st) => allowedIn(st.soldier, targetName));
 
     if (rule.pick === 'min_tracker_hours') {
-      pool.sort((a, b) => (a.fairness.trackerHoursTotal + a.trackerMinutes / 60)
-        - (b.fairness.trackerHoursTotal + b.trackerMinutes / 60));
-      pool = pool.slice(0, 1);
+      // T4c selection (R3): for the night window (22:00–07:00) prefer crew
+      // members who SLEPT the previous night (no counted-night assignment in
+      // [D 00:00, D 06:00]), then minimize cumulative tracker hours, then
+      // fairness order.
+      const window = targetSlots[0].period;
+      const prevNight = nightRange(addDays(day, -1));
+      const sleptPrevNight = (st: SoldierState) => !(ctx.existing.get(st.soldier.id) ?? [])
+        .some((a) => overlaps(a.period, prevNight)
+          && isCountedNight(a.missionClass, ctx.positions.get(a.positionId)?.config?.night_exempt));
+      const fair = rank(pool, rule.targetPosition, false);
+      pool = trackerPickOrder(pool, {
+        nightWindow: overlaps(window, nightRangeAt(window[0])),
+        slept: sleptPrevNight,
+        trackerH: (st) => st.fairness.trackerHoursTotal + st.trackerMinutes / 60,
+        fairIndex: (st) => fair.indexOf(st),
+      }).slice(0, 1);
     }
 
     let commanderAssigned = false;
@@ -893,7 +994,14 @@ export async function generate(day: string): Promise<GenerateResult> {
         if (rule.pick === 'min_tracker_hours') rationale.push({ code: 'chain_min_tracker' });
         if (isCmdSlot) rationale.push({ code: 'chain_commander' });
         assign(st, slot, i + 1, isCmdSlot, [], 'chain', rationale);
-        if (st.trackerMinutes === 0 && targetName === 'כונן גשש') st.trackerMinutes += slot.period[1] - slot.period[0];
+        if (targetName === 'כונן גשש') {
+          if (st.trackerMinutes === 0) st.trackerMinutes += slot.period[1] - slot.period[0];
+          // R3: a fresh גשש night window contributes its effective end to
+          // same-day rest checks (tasks starting 07:00–14:00 next morning)
+          if (isGashashNight({ positionId: slot.positionId, period: slot.period })) {
+            st.gashashNightEnds.push(gashashEffEnd({ period: slot.period }));
+          }
+        }
         if (isCmdSlot) commanderAssigned = true;
       });
       if (take.length < slot.seats) {

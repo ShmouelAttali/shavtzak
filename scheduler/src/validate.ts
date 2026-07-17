@@ -1,11 +1,12 @@
 import { multiQuery, query } from './db.js';
 import {
   Minutes, parseRange, dayStart, dayEnd, addDays, slotStart,
-  overlaps, hours, fmtHM, nightRange,
+  overlaps, hours, fmtHM, nightRange, nightRangeAt,
 } from './time.js';
-import { normalizeName as nrm } from './text.js';
+import { normalizeName as nrm, hasQualification } from './text.js';
 import { isFullRestExempt, isCountedNight } from './rest.js';
 import { loadTunables, effectiveConfig } from './config.js';
+import { roleFlags } from './load.js';
 import type { SeatRule } from './model.js';
 
 export interface Finding {
@@ -24,6 +25,8 @@ interface Row {
   subName: string | null;
   period: [Minutes, Minutes];
   blocksOverlap: boolean;
+  isCommanderSeat: boolean;
+  source: string;
 }
 
 /**
@@ -34,10 +37,10 @@ interface Row {
 export async function validateDay(day: string): Promise<Finding[]> {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) throw new Error(`bad day: ${day}`);
   const yesterday = addDays(day, -1);
-  const [rows, prevRows, unavailRows, dayAssignRows, soldierRows, chainRows, seatRulePosRows, daySlotRows, posRows, historyRows, configRows] = await multiQuery([
+  const [rows, prevRows, unavailRows, dayAssignRows, soldierRows, chainRows, seatRulePosRows, daySlotRows, posRows, historyRows, configRows, qualRows] = await multiQuery([
     ...[day, yesterday].map((d) => `
       select sa.soldier_id, s.full_name, sa.position_id, p.name pos_name, p.mission_class,
-             sp.name sub_name, sa.period::text, sa.blocks_overlap
+             sp.name sub_name, sa.period::text, sa.blocks_overlap, sa.is_commander_seat, sa.source
       from shift_assignments sa
       join positions p on p.id = sa.position_id
       left join sub_positions sp on sp.id = sa.sub_position_id
@@ -52,7 +55,8 @@ export async function validateDay(day: string): Promise<Finding[]> {
      join positions tp on tp.id = cr.target_position
      join positions sp2 on sp2.id = cr.source_position order by cr.id`,
     `select id, name, config from positions where config ? 'seat_rules'`,
-    `select ds.position_id, sp.name sub_name, ds.period::text, ds.seats from day_slots ds
+    `select ds.position_id, sp.name sub_name, ds.period::text, ds.seats, ds.commander_first_seat
+     from day_slots ds
      left join sub_positions sp on sp.id = ds.sub_position_id where ds.day = '${day}'`,
     `select id, name, is_scheduled, mission_class, config from positions`,
     // 7-day lookback for streak rules (consecutive nights R6, static streak
@@ -66,6 +70,7 @@ export async function validateDay(day: string): Promise<Finding[]> {
      where sa.period && tsrange(day_start('${addDays(day, -7)}'), day_start('${day}') + interval '1 day')
        and p.mission_class <> 'rest'`,
     `select key, value from config`,
+    `select soldier_id, qualification from soldier_qualifications`,
   ]);
 
   const config: Record<string, any> = {};
@@ -79,6 +84,7 @@ export async function validateDay(day: string): Promise<Finding[]> {
     soldierId: r.soldier_id, soldierName: r.full_name ?? `#${r.soldier_id}`,
     positionId: r.position_id, positionName: r.pos_name, missionClass: r.mission_class,
     subName: r.sub_name, period: parseRange(r.period), blocksOverlap: r.blocks_overlap,
+    isCommanderSeat: r.is_commander_seat, source: r.source,
   });
   const today = (rows as any[]).map(toRow);
   const prev = (prevRows as any[]).map(toRow);
@@ -90,6 +96,15 @@ export async function validateDay(day: string): Promise<Finding[]> {
   const posConfig = new Map((posRows as any[]).map((p) => [p.id as number, effectiveConfig(p.config)]));
 
   // ── 1+2: rest & overlap over consecutive blocking, non-readiness shifts ──
+  // R3: a כונן גשש NIGHT window (22:00–07:00) counts as ~gashash_effective_hours
+  // of work — its effective end (window start + 1.5h) joins the rest-gap
+  // search even though readiness is otherwise rest-transparent (R2).
+  const gashashEnds = new Map<number, Minutes[]>();
+  for (const r of [...prev, ...today]) {
+    if (r.positionName !== 'כונן גשש' || !overlaps(r.period, nightRangeAt(r.period[0]))) continue;
+    (gashashEnds.get(r.soldierId) ?? gashashEnds.set(r.soldierId, []).get(r.soldierId)!)
+      .push(r.period[0] + tunables.gashashEffectiveHours * 60);
+  }
   const bySoldier = new Map<number, Row[]>();
   for (const r of [...prev, ...today]) {
     if (!r.blocksOverlap || r.missionClass === 'readiness' || r.missionClass === 'rest') continue;
@@ -97,20 +112,28 @@ export async function validateDay(day: string): Promise<Finding[]> {
   }
   for (const [sid, list] of bySoldier) {
     list.sort((a, b) => a.period[0] - b.period[0]);
-    for (let i = 1; i < list.length; i++) {
-      const a = list[i - 1], b = list[i];
+    for (let i = 0; i < list.length; i++) {
+      const b = list[i];
       if (b.period[0] < dRange[0]) continue; // only judge gaps ending today
-      if (overlaps(a.period, b.period)) {
+      const a = i > 0 ? list[i - 1] : null;
+      if (a && overlaps(a.period, b.period)) {
         findings.push({
           severity: 'error', rule: 'overlap', soldierId: sid,
           message: `${b.soldierName}: חפיפה בין ${a.positionName} ${fmtHM(a.period[0])}-${fmtHM(a.period[1])} לבין ${b.positionName} ${fmtHM(b.period[0])}-${fmtHM(b.period[1])}`,
         });
         continue;
       }
+      let prevEnd = -Infinity;
       // R5 (generalized): finishing a daily task counts as full rest for
       // starts at/after 14:00 of the schedule day following the task's own day
-      if (isFullRestExempt(posConfig.get(a.positionId), a.period[0], b.period[0])) continue;
-      const gap = b.period[0] - a.period[1];
+      if (a && !isFullRestExempt(posConfig.get(a.positionId), a.period[0], b.period[0])) {
+        prevEnd = a.period[1];
+      }
+      for (const e of gashashEnds.get(sid) ?? []) {
+        if (e <= b.period[0] && e > prevEnd) prevEnd = e;   // R3 effective end
+      }
+      if (prevEnd === -Infinity) continue;
+      const gap = b.period[0] - prevEnd;
       if (gap < REST_MIN) {
         findings.push({
           severity: 'error', rule: 'rest', soldierId: sid,
@@ -267,6 +290,12 @@ export async function validateDay(day: string): Promise<Finding[]> {
   }
 
   // ── 9: seat-rule positions (H6b, e.g. חפק) ───────────────────────────────
+  const soldierInfo = new Map((soldierRows as any[]).map((s) => [s.id as number, s]));
+  const qualsBySoldier = new Map<number, string[]>();
+  for (const q of qualRows as any[]) {
+    (qualsBySoldier.get(q.soldier_id) ?? qualsBySoldier.set(q.soldier_id, []).get(q.soldier_id)!)
+      .push(q.qualification);
+  }
   for (const p of seatRulePosRows as any[]) {
     const rules: SeatRule[] = p.config?.seat_rules ?? [];
     const posSubs = new Set((daySlotRows as any[])
@@ -294,6 +323,24 @@ export async function validateDay(day: string): Promise<Finding[]> {
           findings.push({
             severity: 'error', rule: 'seat_rules', soldierId: r.soldierId,
             message: `${r.soldierName} במושב ${rule.sub} ב${p.name} אך אינו ברשימת המועמדים`,
+          });
+        }
+        // H6b qual guard (warning): the named list stays authoritative, but a
+        // seat with an expected qualification flags a mismatched occupant
+        if (rule.qual) {
+          const info = soldierInfo.get(r.soldierId);
+          if (info && !hasQualification(qualsBySoldier.get(r.soldierId) ?? [], info.role, rule.qual)) {
+            findings.push({
+              severity: 'warning', rule: 'seat_qualification', soldierId: r.soldierId,
+              message: `${r.soldierName} במושב ${rule.sub} ב${p.name} ללא הסמכת ${rule.qual}`,
+            });
+          }
+        }
+        // H6b commander seat: a commander:true rule must yield commander-seat rows
+        if (rule.commander && !r.isCommanderSeat) {
+          findings.push({
+            severity: 'error', rule: 'seat_rules', soldierId: r.soldierId,
+            message: `מושב ${rule.sub} ב${p.name} הוא מושב מפקד אך ${r.soldierName} אינו מסומן כמושב מפקד`,
           });
         }
       }
@@ -353,8 +400,16 @@ export async function validateDay(day: string): Promise<Finding[]> {
   }
 
   // ── 11: per-soldier position whitelist (H6c) ─────────────────────────────
+  // staff_all_roles derivation: a soldier whose role matches a staff_all_roles
+  // position (חמל) may serve ONLY there — the implicit equivalent of an
+  // explicit allowed_positions row (which, when present, still wins).
+  const roleHome = new Map<string, string>();   // normalized role -> position name
+  for (const p of posRows as any[]) {
+    for (const role of (p.config?.staff_all_roles ?? []) as string[]) roleHome.set(nrm(role), p.name);
+  }
   for (const s of soldierRows as any[]) {
-    const allowed: string[] | null = s.allowed_positions;
+    const home = roleHome.get(nrm(s.role));
+    const allowed: string[] | null = s.allowed_positions ?? (home ? [home] : null);
     if (!allowed) continue;
     const allowedSet = new Set(allowed.map(nrm));
     for (const r of today) {
@@ -365,6 +420,54 @@ export async function validateDay(day: string): Promise<Finding[]> {
           message: `${r.soldierName} מוגבל ל${allowed.join('/')} אך משובץ ל${r.positionName} ${fmtHM(r.period[0])}`,
         });
       }
+    }
+  }
+
+  // ── 11b: H6 role gates ────────────────────────────────────────────────────
+  const flagsBySoldier = new Map((soldierRows as any[]).map((s) => [s.id as number, roleFlags(s.role)]));
+  for (const r of today) {
+    if (r.missionClass === 'rest') continue;
+    const f = flagsBySoldier.get(r.soldierId);
+    if (!f) continue;
+    if (r.positionName === 'קצין מוצב' && !f.isSeniorCommander) {
+      findings.push({
+        severity: 'error', rule: 'role_gate', soldierId: r.soldierId,
+        message: `${r.soldierName} משובץ לקצין מוצב אך אינו סמל/מ"מ`,
+      });
+    }
+    if (r.positionName === 'עמדות הגנה' && f.isSeniorCommander) {
+      findings.push({
+        severity: 'error', rule: 'role_gate', soldierId: r.soldierId,
+        message: `${r.soldierName} משובץ לעמדות הגנה אך מ"מ/סמל אינם מאיישים עמדות (H6)`,
+      });
+    }
+  }
+  // commander-first-seat slots (סיור/התקפי): the commander seat is ROLE-based
+  // there — a commander-seat row held by a non-commander is an error, and the
+  // slot must actually carry a commander-seat row. Deliberately NOT applied
+  // per-row globally: the כרמל commander seat is rifle-based (T4a) and the
+  // חפק מפקד seat is gated by its own H6b role list (מ"פ/סמ"פ), which
+  // roleFlags doesn't classify. Skipped when every covering row is an
+  // imported history row (imports carry no seat metadata) or the slot is
+  // entirely unstaffed (coverage flags that already).
+  for (const ds of daySlotRows as any[]) {
+    if (!ds.commander_first_seat) continue;
+    const period = parseRange(ds.period);
+    const covering = today.filter((r) => r.positionId === ds.position_id && overlaps(r.period, period));
+    if (!covering.length || covering.every((r) => r.source === 'import')) continue;
+    for (const r of covering) {
+      if (r.isCommanderSeat && !flagsBySoldier.get(r.soldierId)?.isCommander) {
+        findings.push({
+          severity: 'error', rule: 'role_gate', soldierId: r.soldierId,
+          message: `${r.soldierName} במושב מפקד ב${r.positionName} ${fmtHM(r.period[0])} אך אינו מפקד`,
+        });
+      }
+    }
+    if (!covering.some((r) => r.isCommanderSeat)) {
+      findings.push({
+        severity: 'error', rule: 'role_gate',
+        message: `${posInfo.get(ds.position_id)?.name ?? ds.position_id} ${fmtHM(period[0])}: אין מפקד במשמרת (המושב הראשון הוא מושב מפקד)`,
+      });
     }
   }
 

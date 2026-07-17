@@ -45,6 +45,13 @@ where name = 'קצין מוצב';
 -- dead config keys: tracker (כונן גשש) was never read
 update positions set config = config - 'tracker' where name = 'כונן גשש';
 
+-- role-חמל whitelist is now DERIVED from the חמל position's staff_all_roles
+-- config (same allowedIn mechanism + validator rule) — the explicit rows are
+-- redundant. H6c allowed_positions stays for genuine per-soldier cases
+-- (e.g. אריאל ביר → סיור).
+update soldiers set allowed_positions = null
+where translate(coalesce(role,''),'"״','') = 'חמל';
+
 -- ── 2. tombstones documented in the seed ────────────────────────────────────
 -- תגבצ stays only as a history tombstone; אחר is the import catch-all —
 -- neither is schedulable

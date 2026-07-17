@@ -54,6 +54,13 @@ export function nightRange(day: string): [Minutes, Minutes] {
   return [toMin(day) + DAY, toMin(day) + DAY + 6 * 60];
 }
 
+/** Night window of the schedule day containing minute `m`
+ *  (14:00 anchor + 10h = 00:00, + 16h = 06:00 of the following morning). */
+export function nightRangeAt(m: Minutes): [Minutes, Minutes] {
+  const sds = scheduleDayStart(m);
+  return [sds + 10 * 60, sds + 16 * 60];
+}
+
 /** Calendar timestamp of a template time inside schedule day D:
  *  times >= 14:00 fall on D itself, earlier times on the next morning. */
 export function slotStart(day: string, time: string): Minutes {

@@ -129,7 +129,9 @@ test('allowed_positions (H6c): whitelisted soldier serves only there, incl. chai
 
 test('staff_all_roles (חמל): every present role soldier staffs daily, absent -> בבית', async () => {
   const a = await soldierId('חייל 40'), b = await soldierId('חייל 41');
-  await query(`update soldiers set role = 'חמל', allowed_positions = array['חמל'] where id in ($1, $2)`, [a, b]);
+  // NO explicit allowed_positions — the חמל-only restriction is DERIVED from
+  // the position's staff_all_roles config (implicit H6c whitelist)
+  await query(`update soldiers set role = 'חמל' where id in ($1, $2)`, [a, b]);
   const D7 = '2026-08-07';
   await query(`insert into unavailability (soldier_id, period, kind)
                values ($1, tsrange(day_start($2), day_start($2) + interval '1 day'), 'חופש')`, [b, D7]);
@@ -144,8 +146,26 @@ test('staff_all_roles (חמל): every present role soldier staffs daily, absent 
   assert.equal(shift.length, 1, 'present חמל soldier must hold the 24h חמל row');
   const errs = (await validateDay(D7)).filter((f) => f.severity === 'error');
   assert.deepEqual(errs, [], JSON.stringify(errs));
+  // no other assignment anywhere that day — the derived whitelist held
+  const elsewhere = await query(`
+    select p.name from shift_assignments sa join positions p on p.id = sa.position_id
+    where sa.day = $1 and sa.soldier_id = $2 and p.name <> 'חמל'`, [D7, a]);
+  assert.deepEqual(elsewhere, []);
   await query(`delete from unavailability where soldier_id = $1`, [b]);
-  await query(`update soldiers set role = 'לוחם', allowed_positions = null where id in ($1, $2)`, [a, b]);
+  await query(`update soldiers set role = 'לוחם' where id in ($1, $2)`, [a, b]);
+});
+
+test('derived whitelist: role-חמל soldier manually assigned elsewhere → allowed_positions error', async () => {
+  const sid = await soldierId('חייל 42');
+  await query(`update soldiers set role = 'חמל' where id = $1`, [sid]);
+  await query(`insert into shift_assignments (day, position_id, soldier_id, period, source, blocks_overlap)
+               values ($1, 1, $2, tsrange(day_start($1) + interval '8 hours', day_start($1) + interval '16 hours'), 'manual', false)`,
+    [D2, sid]);
+  const findings = await validateDay(D2);
+  assert.ok(findings.some((f) => f.rule === 'allowed_positions' && f.severity === 'error' && f.soldierId === sid),
+    JSON.stringify(findings.filter((f) => f.rule === 'allowed_positions')));
+  await query(`delete from shift_assignments where soldier_id = $1 and source = 'manual'`, [sid]);
+  await query(`update soldiers set role = 'לוחם' where id = $1`, [sid]);
 });
 
 test('allowed_positions: validator errors on out-of-whitelist assignment', async () => {

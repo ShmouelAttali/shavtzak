@@ -41,6 +41,10 @@ export interface SeatRule {
   release_unpicked?: boolean;
   /** the seat's rows are commander seats (is_commander_seat) */
   commander?: boolean;
+  /** expected qualification for the seat (e.g. 'חובש', 'נהג דוד'): the named
+   *  lists stay authoritative, but a mismatch is flagged (generation issue +
+   *  validator warning `seat_qualification`) */
+  qual?: string;
 }
 
 export interface Slot {
