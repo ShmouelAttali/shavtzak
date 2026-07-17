@@ -1,12 +1,14 @@
 import { pool } from './db.js';
 import { loadContext } from './load.js';
 import { validateAndStore, Finding } from './validate.js';
-import { Soldier, Slot, Assignment, Fairness } from './model.js';
-import { RationaleEntry } from './rationale.js';
+import { Soldier, Slot, Assignment, Fairness, SeatRule } from './model.js';
+import { RationaleCode, RationaleEntry } from './rationale.js';
 import {
-  Minutes, DAY, dayStart, dayEnd, addDays, slotStart, scheduleDayStart, overlaps, hours,
+  Minutes, dayStart, dayEnd, addDays, slotStart, overlaps, hours,
   minToIso, fmtHM, nightRange,
 } from './time.js';
+import { normalizeName as nrm } from './text.js';
+import { isFullRestExempt, isCountedNight } from './rest.js';
 
 const REST_MIN = 4 * 60;          // H8 hard floor
 const REST_IDEAL = 8 * 60;        // R1
@@ -20,6 +22,38 @@ const EMPTY_FAIRNESS: Fairness = {
 
 /** Hours a slot contributes to the daily cap: daily missions count as 8h (R4). */
 const countedHours = (p: [Minutes, Minutes]) => Math.min(hours(p), DAILY_CAP);
+
+// ── fit reasons ─────────────────────────────────────────────────────────────
+// fits() reports WHY a candidate is rejected / fallback-only as codes, not
+// prose: one lookup table renders the Hebrew violation text, and a second maps
+// fallback codes to structured rationale caveats (no substring matching).
+
+export type FitCode =
+  | 'not_commander' | 'unavailable' | 'overlap' | 'readiness_overlap'
+  | 'over_daily_cap' | 'third_night' | 'rest_lt4' | 'rest_lt8_long' | 'short_rest';
+export interface FitReason { code: FitCode; restH?: string }
+
+const FIT_TEXT: Record<FitCode, string> = {
+  not_commander: 'לא מפקד',
+  unavailable: 'לא זמין',
+  overlap: 'חפיפה',
+  readiness_overlap: 'חפיפה עם כוננות',
+  over_daily_cap: 'מעל 8 שעות ביום',
+  third_night: 'לילה שלישי ברצף',
+  rest_lt4: 'פחות מ-4 שעות מנוחה',
+  rest_lt8_long: 'פחות מ-8 שעות מנוחה למשימה ארוכה',
+  short_rest: 'מנוחה קצרה: {restH}ש',
+};
+export const fitText = (r: FitReason): string =>
+  FIT_TEXT[r.code].replace('{restH}', r.restH ?? '?');
+const fitTexts = (rs: FitReason[]): string[] => rs.map(fitText);
+
+/** fallback fit codes -> rationale caveat codes (buildRationale) */
+const FIT_RATIONALE: Partial<Record<FitCode, RationaleCode>> = {
+  rest_lt4: 'caveat_rest_lt4',
+  rest_lt8_long: 'caveat_rest_lt8_long',
+  third_night: 'caveat_third_night',
+};
 
 interface SoldierState {
   soldier: Soldier;
@@ -35,6 +69,19 @@ interface SoldierState {
   /** why this soldier landed in their Level-1 group (continuity/commander quota) */
   level1Rationale: RationaleEntry[];
 }
+
+// ── fairness keys ───────────────────────────────────────────────────────────
+// One formula each for the P2/P3 keys — used by rank()'s priority tuple AND by
+// the Level-2 rationale snapshot, so the "why picked" claims can't drift from
+// what the ranking actually compared.
+
+/** P2: nights in the rolling window; today's fresh nights count when ranking a night slot. */
+const nightsOf = (st: SoldierState, forNight: boolean): number =>
+  st.fairness.nightCount7d + (forNight ? st.nightsToday : 0);
+
+/** P3: weighted mission hours incl. today's fresh assignments. */
+const loadOf = (st: SoldierState): number =>
+  st.fairness.weightedHours7d + st.missionHoursToday;
 
 export interface GenerateResult {
   day: string;
@@ -97,8 +144,8 @@ export async function generate(day: string): Promise<GenerateResult> {
     if (gap < REST_IDEAL) {
       const ex = ctx.existing.get(st.soldier.id) ?? [];
       const duty = ex.find((a) => a.period[1] === prevEnd
-        && ctx.positions.get(a.positionId)?.config?.full_rest_after);
-      if (duty && start >= scheduleDayStart(duty.period[0]) + DAY) {
+        && isFullRestExempt(ctx.positions.get(a.positionId)?.config, a.period[0], start));
+      if (duty) {
         return {
           gap: REST_IDEAL, prevEnd, dutyRest: true,
           dutyPosition: ctx.positions.get(duty.positionId)?.name,
@@ -109,35 +156,34 @@ export async function generate(day: string): Promise<GenerateResult> {
   }
   const restBefore = (st: SoldierState, start: Minutes): number => restInfo(st, start).gap;
 
-  type Fit = { ok: boolean; fallback: boolean; reasons: string[] };
+  type Fit = { ok: boolean; fallback: boolean; reasons: FitReason[] };
   function fits(st: SoldierState, slot: [Minutes, Minutes], commanderSeat: boolean,
                 isReadiness = false, nightExempt = false): Fit {
     const s = st.soldier;
-    const reasons: string[] = [];
-    if (commanderSeat && !s.isCommander) return { ok: false, fallback: false, reasons: ['לא מפקד'] };
-    if (isBlocked(s.id, slot)) return { ok: false, fallback: false, reasons: ['לא זמין'] };
+    const reasons: FitReason[] = [];
+    const no = (code: FitCode): Fit => ({ ok: false, fallback: false, reasons: [{ code }] });
+    if (commanderSeat && !s.isCommander) return no('not_commander');
+    if (isBlocked(s.id, slot)) return no('unavailable');
     // H3 strict: a soldier is either on an active mission or on כוננות — no
     // overlap in either direction (the attack↔readiness exception is removed)
-    if (st.intervals.some((iv) => overlaps(iv, slot))) return { ok: false, fallback: false, reasons: ['חפיפה'] };
-    if (st.readiness.some((iv) => overlaps(iv, slot))) return { ok: false, fallback: false, reasons: ['חפיפה עם כוננות'] };
+    if (st.intervals.some((iv) => overlaps(iv, slot))) return no('overlap');
+    if (st.readiness.some((iv) => overlaps(iv, slot))) return no('readiness_overlap');
     if (isReadiness) return { ok: true, fallback: false, reasons: [] }; // R2: rest-transparent, uncapped
     const counted = countedHours(slot);
-    if (st.missionHoursToday + counted > DAILY_CAP + 0.01) {
-      return { ok: false, fallback: false, reasons: ['מעל 8 שעות ביום'] };
-    }
+    if (st.missionHoursToday + counted > DAILY_CAP + 0.01) return no('over_daily_cap');
     // R6: a third consecutive night is a violation — fallback-only.
-    // night_exempt 24h duties span 00-06 but the soldier sleeps — they are
-    // not nights (consistent with P2 fairness and the validator).
-    if (!nightExempt && overlaps(slot, night)
+    // (isReadiness returned above, so isCountedNight only gates on night_exempt:
+    // exempt 24h duties span 00-06 but the soldier sleeps — not nights.)
+    if (isCountedNight('other', nightExempt) && overlaps(slot, night)
       && (ctx.nightStreak.get(s.id) ?? 0) + (st.nightsToday > 0 ? 1 : 0) >= 2) {
-      return { ok: true, fallback: true, reasons: ['לילה שלישי ברצף'] };
+      return { ok: true, fallback: true, reasons: [{ code: 'third_night' }] };
     }
     const rest = restBefore(st, slot[0]);
-    if (rest < REST_MIN) return { ok: true, fallback: true, reasons: ['פחות מ-4 שעות מנוחה'] };
+    if (rest < REST_MIN) return { ok: true, fallback: true, reasons: [{ code: 'rest_lt4' }] };
     if (rest < REST_IDEAL && hours(slot) > LONG_TASK / 60) {
-      return { ok: true, fallback: true, reasons: ['פחות מ-8 שעות מנוחה למשימה ארוכה'] };
+      return { ok: true, fallback: true, reasons: [{ code: 'rest_lt8_long' }] };
     }
-    if (rest < REST_IDEAL) reasons.push(`מנוחה קצרה: ${(rest / 60).toFixed(1)}ש`);
+    if (rest < REST_IDEAL) reasons.push({ code: 'short_rest', restH: (rest / 60).toFixed(1) });
     return { ok: true, fallback: false, reasons };
   }
 
@@ -165,19 +211,22 @@ export async function generate(day: string): Promise<GenerateResult> {
   }
 
   /** Rotation penalty per T1-T3 (lower = better). Continuity positions
-   *  (e.g. מגן) invert T1: staying in the same position is preferred. */
-  function rotationPenalty(st: SoldierState, positionId: number): number {
+   *  (e.g. מגן) invert T1: staying in the same position is preferred.
+   *  Returns the dominant T-rule as a tag so buildRationale can report the
+   *  same cascade without re-deriving it. */
+  type RotationTag = 'continuity' | 'static_streak' | 'same_position' | 'same_class' | 'break_static' | null;
+  function rotationPenalty(st: SoldierState, positionId: number): { penalty: number; tag: RotationTag } {
     const pos = ctx.positions.get(positionId);
     const cls = pos?.missionClass;
     const yPos = ctx.yesterdayPosition.get(st.soldier.id);
     const yCls = yPos !== undefined ? ctx.positions.get(yPos)?.missionClass : undefined;
     const streak = ctx.staticStreak.get(st.soldier.id) ?? 0;
-    if (pos?.config?.continuity) return yPos === positionId ? -2 : 0;
-    if (streak >= 2 && cls === 'static') return 3;                 // T3 violation
-    if (yPos === positionId) return 2;                             // T1
-    if (yCls && cls && yCls === cls && cls !== 'other') return 1;  // T2
-    if (streak >= 2 && cls === 'dynamic') return -1;               // T3 break bonus
-    return 0;
+    if (pos?.config?.continuity) return { penalty: yPos === positionId ? -2 : 0, tag: 'continuity' };
+    if (streak >= 2 && cls === 'static') return { penalty: 3, tag: 'static_streak' };   // T3 violation
+    if (yPos === positionId) return { penalty: 2, tag: 'same_position' };               // T1
+    if (yCls && cls && yCls === cls && cls !== 'other') return { penalty: 1, tag: 'same_class' }; // T2
+    if (streak >= 2 && cls === 'dynamic') return { penalty: -1, tag: 'break_static' };  // T3 break bonus
+    return { penalty: 0, tag: null };
   }
 
   /** Priority-list comparator (SPEC §6.1) for position/slot selection.
@@ -198,13 +247,13 @@ export async function generate(day: string): Promise<GenerateResult> {
         // T5 (soft): at most one תורנות per rolling 7 days — anyone with a
         // recent תורנות sorts after everyone without one (never a hard block)
         posName === 'תורנים' && (ctx.toranutCount7d.get(st.soldier.id) ?? 0) > 0 ? 1 : 0,
-        st.fairness.nightCount7d + st.nightsToday * (forNight ? 1 : 0),        // P2
+        nightsOf(st, forNight),                                                // P2
         // P3 bucketed to one duty-day (8h): soldiers within the same load
         // bucket are equal, letting rotation (P4) actually decide.
-        Math.floor((st.fairness.weightedHours7d + st.missionHoursToday) / 8),  // P3
-        rotationPenalty(st, positionId),                                       // P4
+        Math.floor(loadOf(st) / 8),                                            // P3
+        rotationPenalty(st, positionId).penalty,                               // P4
         st.fairness.positionCounts[posName] ?? 0,                              // P4 (L1 balance)
-        st.fairness.weightedHours7d + st.missionHoursToday,                    // P3 fine tie-break
+        loadOf(st),                                                            // P3 fine tie-break
         -Math.min(restAt, 48 * 60),                                            // P6
       ];
     }
@@ -256,11 +305,6 @@ export async function generate(day: string): Promise<GenerateResult> {
   // reserved for this position only (they never fill other positions); a rule
   // with release_unpicked frees the unchosen candidates back to the pool. A
   // seat with no available candidate stays EMPTY (issue raised, no substitute).
-  interface SeatRule {
-    sub: string; soldiers?: string[]; roles?: string[];
-    ordered?: boolean; release_unpicked?: boolean; commander?: boolean;
-  }
-  const nrm = (s: string) => s.replace(/[״"׳']/g, '').trim();
   /** One position-whitelist mechanism for both restriction sources:
    *  H6c allowed_positions (DB column) and H6b seat-rule reservation
    *  (candidates of a seat-rule position serve only there; a release rule
@@ -494,7 +538,7 @@ export async function generate(day: string): Promise<GenerateResult> {
    *  state. Comparative claims use the primary candidate group at pick time. */
   function buildRationale(st: SoldierState, slot: Slot, pid: number, opts: {
     pickedFrom: 'primary' | 'rest' | 'fallback';
-    fitReasons: string[];
+    fitReasons: FitReason[];
     commanderSeat: boolean;
     groupNights: number[]; groupLoads: number[];   // pre-pick primary snapshot
     myNights: number; myLoad: number;
@@ -514,21 +558,22 @@ export async function generate(day: string): Promise<GenerateResult> {
       out.push({ code: 'caveat_short_rest', params: { restH: (ri.gap / 60).toFixed(1) } });
     }
 
-    // rotation facts — same order of dominance as rotationPenalty() (T1-T3)
+    // rotation facts — the dominant T-rule comes straight from rotationPenalty()
     const pos = ctx.positions.get(pid);
-    const cls = pos?.missionClass;
+    const cls = pos?.missionClass ?? '';
     const yPos = ctx.yesterdayPosition.get(st.soldier.id);
     const yName = yPos !== undefined ? ctx.positions.get(yPos)?.name : undefined;
-    const yCls = yPos !== undefined ? ctx.positions.get(yPos)?.missionClass : undefined;
     const streak = ctx.staticStreak.get(st.soldier.id) ?? 0;
-    if (pos?.config?.continuity) { /* staying put is the point — continuity_crew covers it */ }
-    else if (streak >= 2 && cls === 'static') out.push({ code: 'caveat_static_streak', params: { streak } });
-    else if (yPos === pid) out.push({ code: 'caveat_same_position', params: { position: yName ?? pos?.name ?? '' } });
-    else if (yCls && cls && yCls === cls && cls !== 'other') {
-      out.push({ code: 'caveat_same_class', params: { cls: CLASS_HE[cls] ?? cls } });
-    } else if (streak >= 2 && cls === 'dynamic') out.push({ code: 'rotation_break_static', params: { streak } });
-    else if (yName && yName !== pos?.name) {
-      out.push({ code: 'rotation_switch', params: { yesterday: yName, today: pos?.name ?? '' } });
+    switch (rotationPenalty(st, pid).tag) {
+      case 'continuity': break;   // staying put is the point — continuity_crew covers it
+      case 'static_streak': out.push({ code: 'caveat_static_streak', params: { streak } }); break;
+      case 'same_position': out.push({ code: 'caveat_same_position', params: { position: yName ?? pos?.name ?? '' } }); break;
+      case 'same_class': out.push({ code: 'caveat_same_class', params: { cls: CLASS_HE[cls] ?? cls } }); break;
+      case 'break_static': out.push({ code: 'rotation_break_static', params: { streak } }); break;
+      default:
+        if (yName && yName !== pos?.name) {
+          out.push({ code: 'rotation_switch', params: { yesterday: yName, today: pos?.name ?? '' } });
+        }
     }
 
     // one comparative fairness claim, only against a real group (>1 candidate)
@@ -549,9 +594,8 @@ export async function generate(day: string): Promise<GenerateResult> {
       out.push({ code: 'pulled_from_rest' }, { code: 'caveat_no_alternative' });
     } else if (opts.pickedFrom === 'fallback') {
       for (const r of opts.fitReasons) {
-        if (r.includes('פחות מ-4')) out.push({ code: 'caveat_rest_lt4' });
-        else if (r.includes('פחות מ-8')) out.push({ code: 'caveat_rest_lt8_long' });
-        else if (r.includes('לילה שלישי')) out.push({ code: 'caveat_third_night' });
+        const code = FIT_RATIONALE[r.code];
+        if (code) out.push({ code });
       }
       out.push({ code: 'caveat_no_alternative' });
     }
@@ -573,8 +617,9 @@ export async function generate(day: string): Promise<GenerateResult> {
       st.missionHoursToday += countedHours(slot.period);
       // night_exempt 24h duties (תורנים/קצין מוצב) span 00-06 but the soldier
       // sleeps — they don't count toward P2 night fairness
+      const pos = ctx.positions.get(slot.positionId);
       if (overlaps(slot.period, night)
-        && !ctx.positions.get(slot.positionId)?.config?.night_exempt) st.nightsToday++;
+        && isCountedNight(pos?.missionClass ?? '', pos?.config?.night_exempt)) st.nightsToday++;
     }
   }
 
@@ -600,7 +645,7 @@ export async function generate(day: string): Promise<GenerateResult> {
           const fa = fits(a, secondHalf, false, false, nightExempt);
           if (!fd.ok || !fa.ok) {
             const bad = !fd.ok ? d : a;
-            const reasons = (!fd.ok ? fd : fa).reasons.join(', ');
+            const reasons = fitTexts((!fd.ok ? fd : fa).reasons).join(', ');
             issues.push(`${posName} ${slot.subName}: ${bad.soldier.name} חסום (${reasons}) — המושב נשאר ריק`);
             continue;
           }
@@ -620,7 +665,7 @@ export async function generate(day: string): Promise<GenerateResult> {
         const st = pick;
         const fit = fits(st, slot.period, false, false, nightExempt);
         if (!fit.ok) {
-          issues.push(`${posName} ${slot.subName}: ${st.soldier.name} חסום (${fit.reasons.join(', ')}) — המושב נשאר ריק`);
+          issues.push(`${posName} ${slot.subName}: ${st.soldier.name} חסום (${fitTexts(fit.reasons).join(', ')}) — המושב נשאר ריק`);
           continue;
         }
         const rationale = buildRationale(st, slot, pid, {
@@ -628,7 +673,7 @@ export async function generate(day: string): Promise<GenerateResult> {
           groupNights: [], groupLoads: [], myNights: 0, myLoad: 0,
         });
         assign(st, slot, 1, isCmd,
-          fit.fallback ? fit.reasons.map((r) => `בדוחק: ${r}`) : fit.reasons, 'auto', rationale);
+          fit.reasons.map((r) => fit.fallback ? `בדוחק: ${fitText(r)}` : fitText(r)), 'auto', rationale);
       }
       continue;
     }
@@ -665,11 +710,10 @@ export async function generate(day: string): Promise<GenerateResult> {
           .map((st) => ({ st, fit: fits(st, slot.period, commanderSeat, slotReadiness, slotNightExempt) }));
         const primary = evals.filter((e) => e.fit.ok && !e.fit.fallback).map((e) => e.st);
         const fallback = evals.filter((e) => e.fit.ok && e.fit.fallback);
-        // pre-pick snapshot of the primary group's fairness keys (same formulas
-        // rank() uses) — comparative rationale must not drift with later state
-        const nightsOf = (st: SoldierState) => st.fairness.nightCount7d + st.nightsToday * (forNight ? 1 : 0);
-        const loadOf = (st: SoldierState) => st.fairness.weightedHours7d + st.missionHoursToday;
-        const groupNights = primary.map(nightsOf);
+        // pre-pick snapshot of the primary group's fairness keys (the exact
+        // formulas rank() uses) — comparative rationale must not drift with
+        // later state
+        const groupNights = primary.map((st) => nightsOf(st, forNight));
         const groupLoads = primary.map(loadOf);
         let picked = rank(primary, pid, forNight, slot.period[0])[0];
         let pickedFrom: 'primary' | 'rest' | 'fallback' = 'primary';
@@ -755,7 +799,7 @@ export async function generate(day: string): Promise<GenerateResult> {
           const f = rank(fallback.map((e) => e.st), pid, forNight, slot.period[0])[0];
           const fe = fallback.find((e) => e.st === f)!;
           picked = f; pickedFrom = 'fallback';
-          viol = fe.fit.reasons.map((r) => `בדוחק: ${r}`);
+          viol = fe.fit.reasons.map((r) => `בדוחק: ${fitText(r)}`);
         }
         if (!picked) {
           issues.push(`${posName} ${fmtHM(slot.period[0])}-${fmtHM(slot.period[1])} מושב ${seat}${commanderSeat ? ' (מפקד)' : ''}: לא אויש`);
@@ -765,9 +809,10 @@ export async function generate(day: string): Promise<GenerateResult> {
         const fit = fits(picked, slot.period, commanderSeat, slotReadiness, slotNightExempt);
         const rationale = buildRationale(picked, slot, pid, {
           pickedFrom, fitReasons: fit.reasons, commanderSeat, groupNights, groupLoads,
-          myNights: nightsOf(picked), myLoad: loadOf(picked),
+          myNights: nightsOf(picked, forNight), myLoad: loadOf(picked),
         });
-        assign(picked, slot, seat, commanderSeat, [...viol, ...(viol.length ? [] : fit.reasons)], 'auto', rationale);
+        assign(picked, slot, seat, commanderSeat,
+          [...viol, ...(viol.length ? [] : fitTexts(fit.reasons))], 'auto', rationale);
       }
     }
   }

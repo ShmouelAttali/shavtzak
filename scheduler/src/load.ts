@@ -1,11 +1,11 @@
 import { multiQuery } from './db.js';
 import { Context, Soldier, Position, Slot, Fairness, ChainRule } from './model.js';
 import { parseRange, dayStart, dayEnd, addDays, overlaps, nightRange, Minutes } from './time.js';
-
-const strip = (s: string) => (s ?? '').replace(/[״"'׳`]/g, '').trim();
+import { normalizeName } from './text.js';
+import { isCountedNight } from './rest.js';
 
 function roleFlags(role: string) {
-  const r = strip(role);
+  const r = normalizeName(role);
   const has = (...kw: string[]) => kw.some((k) => r.includes(k));
   const isSenior = has('ממ', 'מ״מ', 'סמל') || /(^|\s)מ מ(\s|$)/.test(r);
   const isStaticCmd = has('מכ', 'מח');
@@ -73,8 +73,8 @@ export async function loadContext(day: string): Promise<Context> {
       quals, ...flags,
       // the roster sheet has no qualifications column — driver info arrives as
       // the role (תפקיד), so check both the quals table and the role itself
-      isDudDriver: [...quals, r.role].some((q) => strip(q).includes('נהג דוד')),
-      isTigerDriver: [...quals, r.role].some((q) => strip(q).includes('נהג טיגריס')),
+      isDudDriver: [...quals, r.role].some((q) => normalizeName(q).includes('נהג דוד')),
+      isTigerDriver: [...quals, r.role].some((q) => normalizeName(q).includes('נהג טיגריס')),
       allowedPositions: r.allowed_positions ?? null,
     });
   }
@@ -147,7 +147,7 @@ export async function loadContext(day: string): Promise<Context> {
   // night_exempt 24h duties (מגן/חפק/תורנים/קצין מוצב — the soldier sleeps)
   // span 00-06 but do not count as nights.
   const isNight = (a: { positionId: number; missionClass: string }) =>
-    a.missionClass !== 'readiness' && !positions.get(a.positionId)?.config?.night_exempt;
+    isCountedNight(a.missionClass, positions.get(a.positionId)?.config?.night_exempt);
   const nightStreak = new Map<number, number>();
   for (const [sid, list] of existing) {
     let streak = 0;

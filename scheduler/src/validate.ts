@@ -1,8 +1,11 @@
 import { multiQuery, query } from './db.js';
 import {
-  Minutes, DAY, parseRange, dayStart, dayEnd, addDays, slotStart, scheduleDayStart,
+  Minutes, parseRange, dayStart, dayEnd, addDays, slotStart,
   overlaps, hours, fmtHM, nightRange,
 } from './time.js';
+import { normalizeName as nrm } from './text.js';
+import { isFullRestExempt, isCountedNight } from './rest.js';
+import type { SeatRule } from './model.js';
 
 export interface Finding {
   severity: 'error' | 'warning';
@@ -78,8 +81,7 @@ export async function validateDay(day: string): Promise<Finding[]> {
   // R5 (generalized): daily-task positions whose completion grants full rest
   // for starts at/after 14:00 of the following schedule day (חפק/התקפי/קצין
   // מוצב carry full_rest_after; תורנים deliberately does not — R1 applies)
-  const fullRestAfter = new Set((posRows as any[])
-    .filter((p) => p.config?.full_rest_after).map((p) => p.id as number));
+  const posConfig = new Map((posRows as any[]).map((p) => [p.id as number, p.config ?? {}]));
 
   // ── 1+2: rest & overlap over consecutive blocking, non-readiness shifts ──
   const bySoldier = new Map<number, Row[]>();
@@ -101,8 +103,7 @@ export async function validateDay(day: string): Promise<Finding[]> {
       }
       // R5 (generalized): finishing a daily task counts as full rest for
       // starts at/after 14:00 of the schedule day following the task's own day
-      if (fullRestAfter.has(a.positionId)
-        && b.period[0] >= scheduleDayStart(a.period[0]) + DAY) continue;
+      if (isFullRestExempt(posConfig.get(a.positionId), a.period[0], b.period[0])) continue;
       const gap = b.period[0] - a.period[1];
       if (gap < REST_MIN) {
         findings.push({
@@ -260,10 +261,8 @@ export async function validateDay(day: string): Promise<Finding[]> {
   }
 
   // ── 9: seat-rule positions (H6b, e.g. חפק) ───────────────────────────────
-  const nrm = (s: string) => s.replace(/[״"׳']/g, '').trim();
   for (const p of seatRulePosRows as any[]) {
-    const rules: { sub: string; soldiers?: string[]; roles?: string[]; release_unpicked?: boolean }[] =
-      p.config?.seat_rules ?? [];
+    const rules: SeatRule[] = p.config?.seat_rules ?? [];
     const posSubs = new Set((daySlotRows as any[])
       .filter((s) => s.position_id === p.id).map((s) => nrm(s.sub_name ?? '')));
     if (!posSubs.size) continue;   // position has no slots this day
@@ -375,7 +374,7 @@ export async function validateDay(day: string): Promise<Finding[]> {
     period: parseRange(r.period) as [Minutes, Minutes],
   }));
   const countsAsNight = (h: { missionClass: string; nightExempt: boolean }) =>
-    h.missionClass !== 'readiness' && !h.nightExempt;
+    isCountedNight(h.missionClass, h.nightExempt);
   const hasNight = (sid: number, d: string) => history.some((h) =>
     h.soldierId === sid && countsAsNight(h) && overlaps(h.period, nightRange(d)));
   const tonight = new Map<number, string>();

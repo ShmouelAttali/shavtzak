@@ -26,6 +26,21 @@ export interface Position {
   config: Record<string, any>;
 }
 
+/** H6b named-seat rule (positions.config.seat_rules, e.g. חפק): each
+ *  sub-position seat is filled only from its dedicated candidate list. */
+export interface SeatRule {
+  sub: string;
+  /** explicit candidate names, in priority order when `ordered` */
+  soldiers?: string[];
+  /** role-based candidates, ordered by this list (e.g. מ"פ before סמ"פ) */
+  roles?: string[];
+  ordered?: boolean;
+  /** once the seat is covered, unchosen candidates return to the general pool */
+  release_unpicked?: boolean;
+  /** the seat's rows are commander seats (is_commander_seat) */
+  commander?: boolean;
+}
+
 export interface Slot {
   positionId: number;
   subPositionId: number | null;

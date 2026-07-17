@@ -44,6 +44,16 @@ export interface GenerateResponse {
 const hm = (d: Date) =>
   `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
 
+/** Time label for an assignment/slot row. yomi_display positions (מגן/חפק)
+ *  are daily crews — no shift times on the card; a shift starting on the next
+ *  calendar day (tail of the 14:00→14:00 schedule day) is marked למחרת so the
+ *  card reads unambiguously. */
+function labelSlot(day: string, pStart: Date, pEnd: Date, posConfig: Record<string, any> | null): string {
+  if (posConfig?.yomi_display) return 'יומי';
+  const startDay = `${pStart.getFullYear()}-${String(pStart.getMonth() + 1).padStart(2, '0')}-${String(pStart.getDate()).padStart(2, '0')}`;
+  return `${hm(pStart)}-${hm(pEnd)}${startDay !== day ? ' (למחרת)' : ''}`;
+}
+
 /** placeholder soldier name for an empty seat (rendered as a red badge by SoldierName) */
 const UNFILLED = 'לא מאויש';
 
@@ -95,14 +105,7 @@ async function getDrafts(from: string, to: string): Promise<DraftResponse> {
   for (const r of rowsRes.rows) {
     const day = days.get(r.day);
     if (!day) continue;
-    const start = new Date(r.p_start), end = new Date(r.p_end);
-    // a shift starting on the next calendar day (tail of the 14:00→14:00
-    // schedule day) is marked למחרת so the card reads unambiguously
-    const startsNextDay = `${start.getFullYear()}-${String(start.getMonth() + 1).padStart(2, '0')}-${String(start.getDate()).padStart(2, '0')}` !== r.day;
-    // yomi_display positions (מגן) are daily crews — no shift times on the card
-    const time = r.pos_config?.yomi_display
-      ? 'יומי'
-      : `${hm(start)}-${hm(end)}${startsNextDay ? ' (למחרת)' : ''}`;
+    const time = labelSlot(r.day, new Date(r.p_start), new Date(r.p_end), r.pos_config);
     const station = r.pos_name as string;
     const sug = (r.sub_name as string | null) ?? station;
     const gKey = `${r.day}|${station}`;
@@ -135,11 +138,7 @@ async function getDrafts(from: string, to: string): Promise<DraftResponse> {
   for (const sl of slotsRes.rows) {
     const day = days.get(sl.day);
     if (!day || day.status === 'draft') continue;   // never-generated days stay empty
-    const start = new Date(sl.p_start), end = new Date(sl.p_end);
-    const startsNextDay = `${start.getFullYear()}-${String(start.getMonth() + 1).padStart(2, '0')}-${String(start.getDate()).padStart(2, '0')}` !== sl.day;
-    const time = sl.pos_config?.yomi_display
-      ? 'יומי'
-      : `${hm(start)}-${hm(end)}${startsNextDay ? ' (למחרת)' : ''}`;
+    const time = labelSlot(sl.day, new Date(sl.p_start), new Date(sl.p_end), sl.pos_config);
     const station = sl.pos_name as string;
     const sug = (sl.sub_name as string | null) ?? station;
     const gKey = `${sl.day}|${station}`;
