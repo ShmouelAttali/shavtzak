@@ -252,6 +252,11 @@ night_count first, weighted_hours second, per-position counts third.
   (T4 sources from yesterday's/today's patrol & defense groups), and the priority list.
 - **Level 2**: fill concrete slots inside each position (hours, seats, night rotation
   within group by night_count, commander first-seat) honoring H/R/T rules.
+- **Chain ordering**: T4 rules whose source crew descended on a *previous* day
+  (`source_day_offset < 0`) are applied **before** Level 2 — the standby row is
+  reserved (H3/H3b) so the general fill can't book the whole descending crew
+  during the window; same-day rules run after Level 2 (they need its fresh
+  patrol/defense rows).
 - Human can lock any row at either level; the generator schedules around locks; any
   forced violation is recorded on the row (`violations` jsonb) and surfaced.
 - Multi-day: generate sequentially; each day sees previous drafts' counters.
@@ -276,7 +281,10 @@ assignment rows over each slot window, so a seat covered by an H1 replacement pa
 (two rows splitting at the handover) is fully staffed, while a partially-covered
 seat is flagged. Results snapshot stored on
 `schedule_days.validation` (jsonb) — written automatically after every generation
-(`persist`) and available via CLI `validate <day>`.
+(`persist`) and available via CLI `validate <day>`. The viewer endpoints
+(`api/draft.ts`, `api/fairness.ts`) do NOT read the snapshot — they run
+`validateDay` live per requested day, since manual edits make the stored
+snapshot stale; the snapshot remains a generation-time record.
 
 ## 9. Database design
 

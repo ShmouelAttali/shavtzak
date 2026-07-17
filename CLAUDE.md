@@ -1,21 +1,31 @@
 # shavtzak — project guide
 
-## Current state (2026-07-15)
+## Current state (2026-07-17)
 
-Everything below is implemented, tested (34 tests: `scheduler/` 29 + root 5),
+Everything below is implemented, tested (125 tests: `scheduler/` 110 + root 15),
 and live against the shared Supabase project:
 
 - **Scheduler DB** on Supabase (schema in `scheduler/db/schema.sql`, template
-  seed in `db/seed.sql`, applied migrations in `db/migrations/`). Real history
-  imported (1,836 rows, 24/6–14/7) + `unavailability` built from the roster
-  matrix. Positions model after rework: **מגן** (10, continuity crew, one
-  מחלקה), **התקפי** (8, standing readiness 14:00–14:00 + ad-hoc attacks as
-  separate non-overlapping rows), כרמל/גשש are chained overlays, seat counts
-  per date via `seat_overrides`. Daily duties (מגן/חפק/תורנים/קצין מוצב) all
-  run 14:00–14:00.
+  seed in `db/seed.sql` — the **consolidated baseline**; historical migrations
+  are archived in `db/migrations/archive/` and must NEVER be replayed onto a
+  schema.sql-built DB). One-off live-DB deltas go in standalone files like
+  `db/consolidation-2026-07-17.sql`. Real history imported (1,836 rows,
+  24/6–14/7) + `unavailability` built from the roster matrix. Positions model:
+  **מגן** (10, continuity crew, one מחלקה), **התקפי** (8, standing readiness
+  14:00–14:00 + ad-hoc attacks as separate non-overlapping rows), כרמל/גשש are
+  chained overlays, seat counts per date via `seat_overrides`. Daily duties
+  (מגן/חפק/תורנים/קצין מוצב) carry `config.daily: true` (implies night_exempt
+  + full_rest_after + yomi_display; explicit keys override — תורנים opts out
+  of full_rest_after). Tunables genuinely read from `config`: `rest_rules`,
+  `daily_cap_hours`, `readiness_hour_weight` (`src/config.ts`).
 - **Generator + validator** (`scheduler/src/`): two-level generation per
-  SPEC §6-7, CLI `generate`/`validate`, drafts 15–19/7 generated (draft-only —
-  approval + sheet sync-out NOT built, by design).
+  SPEC §6-7, CLI `generate`/`validate` (draft-only — approval + sheet sync-out
+  NOT built, by design). Module layout: `generate.ts` is a thin pipeline over
+  `load.ts` (read SQL) → `state.ts` (SoldierState + Gen bag + assign) →
+  `level1.ts` (partition) → `chains.ts` (T4, two passes around Level 2) →
+  `level2.ts` (slot fill + rationale) → `persist.ts` (write SQL), with shared
+  primitives in `rank.ts` / `rest.ts` / `pairs.ts` / `text.ts` / `config.ts`.
+  P5 driver-fit + מ"כ spread and R3 גשש effective-rest are implemented.
 - **Viewer app**: two officer-only tabs — שבצק חדש (טיוטה) (date range +
   צור שבצ"ק button → `api/draft.ts`) and הוגנות (Sunday-anchored week,
   compliance dashboard: one exceptions-only card per SPEC rule fed by running
