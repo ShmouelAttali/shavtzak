@@ -74,12 +74,14 @@ create table unavailability (
 );
 create index unavailability_soldier_period on unavailability using gist (soldier_id, period);
 
+-- NB: no blocks_day column — H5 (daily duties occupy the whole schedule day)
+-- is enforced by construction: daily slots span 14:00–14:00, H4 gives one
+-- Level-1 position per day, and H3's overlap exclusion blocks anything else.
 create table positions (
   id            smallint primary key,
   name          text unique not null,     -- 'סיור','עמדות הגנה','כוננות','מנוחה',...
   mission_class text not null check (mission_class in ('static','dynamic','readiness','rest','other')),
   is_scheduled  boolean not null default true,   -- חמל => false
-  blocks_day    boolean not null default false,  -- H5: קצין מוצב, משימות יומי
   config        jsonb not null default '{}'
 );
 
@@ -87,7 +89,6 @@ create table sub_positions (
   id            smallint primary key,
   position_id   smallint not null references positions,
   name          text not null,            -- 'שג','בונקר','מזרחית','דרומית','מפקד כרמל חטיבה',...
-  required_role text,                     -- 'commander' | 'senior_commander' | null (H6)
   unique (position_id, name)
 );
 
@@ -124,11 +125,14 @@ create table chain_rules (
   source_start     time not null,
   source_day_offset int not null default 0,                 -- -1 = source shift from previous schedule day
   pick             text not null default 'all'
-                   check (pick in ('all','highest_rifle','min_tracker_hours'))
+                   check (pick in ('all','min_tracker_hours'))
 );
 
--- All tunables: night window, day anchor, rest thresholds, scoring weights,
--- priority list, readiness hour weight, excluded keywords...
+-- Tunables actually read by the code (src/config.ts loadTunables):
+-- rest_rules, daily_cap_hours, readiness_hour_weight. The 14:00 day anchor
+-- and the 00:00-06:00 night window are hardcoded mirrors in time.ts + the
+-- helper functions above BY DESIGN (changing them mid-deployment would
+-- silently reinterpret all stored data).
 create table config (
   key   text primary key,
   value jsonb not null
@@ -250,8 +254,11 @@ language sql stable as $$
     select day_start(as_of) as t_end, day_start(as_of) - interval '7 days' as t_start
   ),
   base as (
+    -- daily:true implies night_exempt (src/config.ts effectiveConfig);
+    -- an explicit night_exempt key wins over the implied value
     select sa.soldier_id, sa.period, sa.day, p.mission_class, p.name as position_name,
-           coalesce((p.config->>'night_exempt')::boolean, false) as night_exempt
+           coalesce((p.config->>'night_exempt')::boolean,
+                    (p.config->>'daily')::boolean, false) as night_exempt
     from shift_assignments sa
     join positions p on p.id = sa.position_id
     where p.mission_class <> 'rest'

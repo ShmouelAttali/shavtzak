@@ -49,7 +49,8 @@ const hm = (d: Date) =>
  *  calendar day (tail of the 14:00→14:00 schedule day) is marked למחרת so the
  *  card reads unambiguously. */
 function labelSlot(day: string, pStart: Date, pEnd: Date, posConfig: Record<string, any> | null): string {
-  if (posConfig?.yomi_display) return 'יומי';
+  // daily:true implies yomi_display (scheduler/src/config.ts); explicit key wins
+  if (posConfig?.yomi_display ?? posConfig?.daily) return 'יומי';
   const startDay = `${pStart.getFullYear()}-${String(pStart.getMonth() + 1).padStart(2, '0')}-${String(pStart.getDate()).padStart(2, '0')}`;
   return `${hm(pStart)}-${hm(pEnd)}${startDay !== day ? ' (למחרת)' : ''}`;
 }

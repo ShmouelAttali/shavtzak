@@ -5,6 +5,7 @@ import {
 } from './time.js';
 import { normalizeName as nrm } from './text.js';
 import { isFullRestExempt, isCountedNight } from './rest.js';
+import { loadTunables, effectiveConfig } from './config.js';
 import type { SeatRule } from './model.js';
 
 export interface Finding {
@@ -25,10 +26,6 @@ interface Row {
   blocksOverlap: boolean;
 }
 
-const REST_MIN = 4 * 60;
-const REST_IDEAL = 8 * 60;
-const DAILY_CAP = 8;
-
 /**
  * Post-hoc validation of one schedule day (SPEC §8). Rest regime follows R1:
  * < 4h gap = error, 4–8h = warning (the generation regime; a hard-8h error rule
@@ -37,7 +34,7 @@ const DAILY_CAP = 8;
 export async function validateDay(day: string): Promise<Finding[]> {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) throw new Error(`bad day: ${day}`);
   const yesterday = addDays(day, -1);
-  const [rows, prevRows, unavailRows, dayAssignRows, soldierRows, chainRows, seatRulePosRows, daySlotRows, posRows, historyRows] = await multiQuery([
+  const [rows, prevRows, unavailRows, dayAssignRows, soldierRows, chainRows, seatRulePosRows, daySlotRows, posRows, historyRows, configRows] = await multiQuery([
     ...[day, yesterday].map((d) => `
       select sa.soldier_id, s.full_name, sa.position_id, p.name pos_name, p.mission_class,
              sp.name sub_name, sa.period::text, sa.blocks_overlap
@@ -61,13 +58,22 @@ export async function validateDay(day: string): Promise<Finding[]> {
     // 7-day lookback for streak rules (consecutive nights R6, static streak
     // T3, weekly תורנות T5)
     `select sa.soldier_id, s.full_name, sa.period::text, p.mission_class, p.name pos_name,
-            coalesce((p.config->>'night_exempt')::boolean, false) night_exempt
+            coalesce((p.config->>'night_exempt')::boolean,
+                     (p.config->>'daily')::boolean, false) night_exempt
      from shift_assignments sa
      join positions p on p.id = sa.position_id
      left join soldiers s on s.id = sa.soldier_id
      where sa.period && tsrange(day_start('${addDays(day, -7)}'), day_start('${day}') + interval '1 day')
        and p.mission_class <> 'rest'`,
+    `select key, value from config`,
   ]);
+
+  const config: Record<string, any> = {};
+  for (const c of configRows as any[]) config[c.key] = c.value;
+  const tunables = loadTunables(config);
+  const REST_MIN = tunables.restMinH * 60;
+  const REST_IDEAL = tunables.restIdealH * 60;
+  const DAILY_CAP = tunables.dailyCapH;
 
   const toRow = (r: any): Row => ({
     soldierId: r.soldier_id, soldierName: r.full_name ?? `#${r.soldier_id}`,
@@ -81,7 +87,7 @@ export async function validateDay(day: string): Promise<Finding[]> {
   // R5 (generalized): daily-task positions whose completion grants full rest
   // for starts at/after 14:00 of the following schedule day (חפק/התקפי/קצין
   // מוצב carry full_rest_after; תורנים deliberately does not — R1 applies)
-  const posConfig = new Map((posRows as any[]).map((p) => [p.id as number, p.config ?? {}]));
+  const posConfig = new Map((posRows as any[]).map((p) => [p.id as number, effectiveConfig(p.config)]));
 
   // ── 1+2: rest & overlap over consecutive blocking, non-readiness shifts ──
   const bySoldier = new Map<number, Row[]>();
@@ -108,7 +114,7 @@ export async function validateDay(day: string): Promise<Finding[]> {
       if (gap < REST_MIN) {
         findings.push({
           severity: 'error', rule: 'rest', soldierId: sid,
-          message: `${b.soldierName}: מנוחה ${(gap / 60).toFixed(1)}ש׳ לפני ${b.positionName} ${fmtHM(b.period[0])} (מינימום 4)`,
+          message: `${b.soldierName}: מנוחה ${(gap / 60).toFixed(1)}ש׳ לפני ${b.positionName} ${fmtHM(b.period[0])} (מינימום ${tunables.restMinH})`,
         });
       } else if (gap < REST_IDEAL) {
         findings.push({

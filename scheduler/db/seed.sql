@@ -4,45 +4,55 @@
 -- ============================================================================
 
 -- ── Positions ───────────────────────────────────────────────────────────────
-insert into positions (id, name, mission_class, is_scheduled, blocks_day, config) values
-  ( 1, 'סיור',        'dynamic',   true,  false, '{}'),
-  ( 2, 'עמדות הגנה',  'static',    true,  false, '{}'),
-  ( 3, 'מגן',  'other',     true,  true,  '{"continuity":true,"same_platoon":true,"yomi_display":true,"night_exempt":true,"full_rest_after":true}'),
+-- config key `daily: true` = sleeping 14:00–14:00 day duty; it IMPLIES
+-- night_exempt + full_rest_after + yomi_display (src/config.ts
+-- effectiveConfig). An explicit key overrides the implied value
+-- (e.g. תורנים opts out of full_rest_after).
+insert into positions (id, name, mission_class, is_scheduled, config) values
+  ( 1, 'סיור',        'dynamic',   true,  '{}'),
+  ( 2, 'עמדות הגנה',  'static',    true,  '{}'),
+  ( 3, 'מגן',         'other',     true,  '{"daily":true,"continuity":true,"same_platoon":true}'),
   -- התקפי: standing 8-soldier readiness crew (14:00-14:00); ad-hoc attack
-  -- missions are separate rows and may not overlap the readiness (H3 strict)
-  ( 4, 'התקפי',       'readiness', true,  true,  '{"open_for_attack":true,"full_rest_after":true}'),
-  ( 6, 'חפק',         'other',     true,  true,  '{"seat_rules": [
+  -- missions are separate rows and may not overlap the readiness (H3 strict).
+  -- Explicit full_rest_after (NOT daily): readiness class, not a yomi duty.
+  ( 4, 'התקפי',       'readiness', true,  '{"full_rest_after":true}'),
+  -- תגבצ: history tombstone (owner decision 2026-07-17) — imported rows
+  -- (24/6–16/7) reference it; never scheduled again, no slot templates
+  ( 5, 'תגבצ',        'other',     false, '{}'),
+  ( 6, 'חפק',         'other',     true,  '{"daily": true, "seat_rules": [
       {"sub": "מפקד", "roles": ["מ\"פ", "סמ\"פ"], "commander": true},
       {"sub": "קשר",  "soldiers": ["יהודה חושן", "אור חיים בלונדר", "יחיעם אושפיזאי"], "ordered": true, "release_unpicked": true},
-      {"sub": "חובש", "soldiers": ["כפיר לנדסמן", "שחר מיכאלי"]},
-      {"sub": "נהג",  "soldiers": ["אמיר יונייב", "יאיר מובשוביץ"]}
-    ], "yomi_display": true, "night_exempt": true, "full_rest_after": true}'),
+      {"sub": "חובש", "soldiers": ["כפיר לנדסמן", "שחר מיכאלי"], "qual": "חובש"},
+      {"sub": "נהג",  "soldiers": ["אמיר יונייב", "יאיר מובשוביץ"], "qual": "נהג דוד"}
+    ]}'),
   -- תורנים: mission_class 'other' — outside T2/T3 rotation; soft rule T5:
   -- at most one תורנות per rolling 7 days (ranking preference + validator
-  -- warning). Deliberately NO full_rest_after — finishing at 14:00 grants no
+  -- warning). Explicit full_rest_after:false — finishing at 14:00 grants no
   -- R5 exemption; the normal R1 regime applies (>= 4h rest, earliest 18:00)
-  ( 7, 'תורנים',      'other',     true,  true,  '{"night_exempt":true}'),
-  ( 8, 'כונן גשש',    'readiness', true,  false, '{"tracker":true}'),
-  ( 9, 'קצין מוצב',   'other',     true,  true,  '{"night_exempt":true,"full_rest_after":true}'),
-  (10, 'כרמל חטיבה',  'readiness', true,  false, '{}'),
+  ( 7, 'תורנים',      'other',     true,  '{"daily":true,"full_rest_after":false}'),
+  ( 8, 'כונן גשש',    'readiness', true,  '{}'),
+  ( 9, 'קצין מוצב',   'other',     true,  '{"daily":true}'),
+  (10, 'כרמל חטיבה',  'readiness', true,  '{}'),
   -- חמל: standing crew — every present role-חמל soldier staffs it daily,
   -- full schedule day; readiness class = rest-transparent (internal shifts)
-  (11, 'חמל',         'readiness', true,  false, '{"staff_all_roles":["חמל"]}'),
-  (12, 'מנוחה',       'rest',      true,  false, '{}'),
-  (13, 'בבית',        'rest',      true,  false, '{}');  -- fully unavailable (H1) — not on base
+  (11, 'חמל',         'readiness', true,  '{"staff_all_roles":["חמל"]}'),
+  (12, 'מנוחה',       'rest',      true,  '{}'),
+  (13, 'בבית',        'rest',      true,  '{}'),  -- fully unavailable (H1) — not on base
+  -- אחר: catch-all for imported history rows whose position no longer exists
+  (99, 'אחר',         'other',     false, '{}');
 
 -- ── Sub-positions ───────────────────────────────────────────────────────────
-insert into sub_positions (id, position_id, name, required_role) values
-  ( 1,  2, 'שג',                null),
-  ( 2,  2, 'בונקר',             null),
-  ( 3,  2, 'מזרחית',            null),
-  ( 4,  2, 'דרומית',            null),
-  ( 5, 10, 'כרמל חטיבה',        null),
-  ( 6, 10, 'מפקד כרמל חטיבה',   null),   -- commander chosen by highest רובאי (chain rule)
-  ( 7,  6, 'מפקד',              null),   -- חפק seats (H6b seat_rules on the position config)
-  ( 8,  6, 'קשר',               null),
-  ( 9,  6, 'חובש',              null),
-  (10,  6, 'נהג',               null);
+insert into sub_positions (id, position_id, name) values
+  ( 1,  2, 'שג'),
+  ( 2,  2, 'בונקר'),
+  ( 3,  2, 'מזרחית'),
+  ( 4,  2, 'דרומית'),
+  ( 5, 10, 'כרמל חטיבה'),
+  ( 6, 10, 'מפקד כרמל חטיבה'),   -- commander chosen by highest רובאי (chain rule)
+  ( 7,  6, 'מפקד'),              -- חפק seats (H6b seat_rules on the position config)
+  ( 8,  6, 'קשר'),
+  ( 9,  6, 'חובש'),
+  (10,  6, 'נהג');
 
 -- ── Slot templates (valid from 2026-07-15) ──────────────────────────────────
 -- סיור: 3 shifts × 8h × 4 seats, first seat = commander
@@ -115,32 +125,14 @@ insert into chain_rules (id, target_position, target_start, source_position, sou
   (11,  8, '14:00', 1, '06:00', -1, 'min_tracker_hours');  -- ירד ב-14:00 → 14:00–22:00
 
 -- Note: carmel rules keep pick='all' (whole descending crew fills the shift);
--- the commander seat is then chosen by highest רובאי — see config key
--- 'carmel_commander_rule' below.
+-- the commander seat is then chosen by highest רובאי (generator T4a logic).
 
--- ── Config defaults ─────────────────────────────────────────────────────────
+-- ── Config ──────────────────────────────────────────────────────────────────
+-- ONLY keys the code actually reads (src/config.ts loadTunables +
+-- soldier_fairness's readiness_hour_weight). The 14:00 day anchor and the
+-- 00:00-06:00 night window are hardcoded mirrors in src/time.ts +
+-- db/schema.sql helper functions BY DESIGN — not config rows.
 insert into config (key, value) values
-  ('day_anchor',            '"14:00"'),
-  ('night_window',          '{"start":"00:00","end":"06:00"}'),
   ('readiness_hour_weight', '0.25'),
   ('daily_cap_hours',       '8'),
-  ('rest_rules',            '{"minimum_hours":4,"ideal_hours":8,"long_task_hours":4,"tracker_effective_hours":1.5}'),
-  ('blocking_kinds',        '["חופש","לא מגויס","יציאה","מחלה","שחרור"]'),
-  ('excluded_keywords',     '["מפלג","חמל"]'),
-  ('carmel_commander_rule', '"highest_rifle"'),
-  ('carmel_min_staffing',   '{"regular":3,"commander":1}'),
-  ('priority_list',         '["hard_constraints","night_count_7d","weighted_hours_7d","rotation","role_fit","rest_since_last"]'),
-  ('scoring_weights',       '{
-      "weekly_weighted_hours": 1.4,
-      "weekly_night_count":    7,
-      "short_rest":            28,
-      "same_class_yesterday":  18,
-      "static_streak_penalty": 55,
-      "static_streak_break_bonus": -25,
-      "commander_needed_bonus": -26,
-      "commander_missing_penalty": 90,
-      "tiger_driver_needed_bonus": -35,
-      "tiger_driver_missing_penalty": 100,
-      "dud_driver_night_bonus": -16,
-      "fallback_base_penalty": 400
-   }');
+  ('rest_rules',            '{"minimum_hours":4,"ideal_hours":8,"long_task_hours":4,"gashash_effective_hours":1.5}');

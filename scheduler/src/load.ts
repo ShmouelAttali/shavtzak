@@ -3,6 +3,7 @@ import { Context, Soldier, Position, Slot, Fairness, ChainRule } from './model.j
 import { parseRange, dayStart, dayEnd, addDays, overlaps, nightRange, Minutes } from './time.js';
 import { normalizeName } from './text.js';
 import { isCountedNight } from './rest.js';
+import { loadTunables, effectiveConfig } from './config.js';
 
 function roleFlags(role: string) {
   const r = normalizeName(role);
@@ -24,7 +25,7 @@ export async function loadContext(day: string): Promise<Context> {
   const [, posRows, soldierRows, fairRows, slotRows, existRows, ydayRows,
     blockRows, lockShiftRows, lockDayRows, chainRows, configRows] = await multiQuery([
     `insert into schedule_days (day) values ('${day}') on conflict do nothing`,
-    `select id, name, mission_class, is_scheduled, blocks_day, config from positions`,
+    `select id, name, mission_class, is_scheduled, config from positions`,
     `select s.id, s.full_name, s.platoon, coalesce(s.role,'') role,
             coalesce(s.rifle_level,0) rifle, s.allowed_positions,
             coalesce(array_agg(q.qualification) filter (where q.qualification is not null), '{}') quals
@@ -58,8 +59,8 @@ export async function loadContext(day: string): Promise<Context> {
   for (const p of posRows) {
     positions.set(p.id, {
       id: p.id, name: p.name, missionClass: p.mission_class,
-      isScheduled: p.is_scheduled, blocksDay: p.blocks_day,
-      config: p.config ?? {},
+      isScheduled: p.is_scheduled,
+      config: effectiveConfig(p.config),   // daily:true implies its flag set
     });
     positionByName.set(p.name, p.id);
   }
@@ -198,6 +199,6 @@ export async function loadContext(day: string): Promise<Context> {
   return {
     day, soldiers, positions, positionByName, slots, fairness, existing,
     yesterdayPosition, staticStreak, nightStreak, toranutCount7d, blocked,
-    lockedShift, lockedDay, chainRules, config,
+    lockedShift, lockedDay, chainRules, config, tunables: loadTunables(config),
   };
 }

@@ -10,18 +10,16 @@ import {
 import { normalizeName as nrm } from './text.js';
 import { isFullRestExempt, isCountedNight } from './rest.js';
 
-const REST_MIN = 4 * 60;          // H8 hard floor
-const REST_IDEAL = 8 * 60;        // R1
-const LONG_TASK = 4 * 60;         // R1: tasks longer than this need ideal rest
-const DAILY_CAP = 8;              // R4 (counted hours)
+// Rest/cap thresholds come from ctx.tunables (config table; src/config.ts).
+/** P6 (most rest since last shift) is clamped at 48h: beyond two clear days
+ *  everyone is equally "fully rested" — an unbounded value would let one long
+ *  home stay dominate the final tie-break forever. NOT a DB tunable. */
+const P6_REST_CLAMP = 48 * 60;
 const OVERLAY = new Set(['כרמל חטיבה', 'כונן גשש']); // chained overlays, not Level-1
 const EMPTY_FAIRNESS: Fairness = {
   nightCount7d: 0, nightCountTotal: 0, missionHours7d: 0, weightedHours7d: 0,
   readinessHours7d: 0, trackerHoursTotal: 0, positionCounts: {},
 };
-
-/** Hours a slot contributes to the daily cap: daily missions count as 8h (R4). */
-const countedHours = (p: [Minutes, Minutes]) => Math.min(hours(p), DAILY_CAP);
 
 // ── fit reasons ─────────────────────────────────────────────────────────────
 // fits() reports WHY a candidate is rejected / fallback-only as codes, not
@@ -31,21 +29,21 @@ const countedHours = (p: [Minutes, Minutes]) => Math.min(hours(p), DAILY_CAP);
 export type FitCode =
   | 'not_commander' | 'unavailable' | 'overlap' | 'readiness_overlap'
   | 'over_daily_cap' | 'third_night' | 'rest_lt4' | 'rest_lt8_long' | 'short_rest';
-export interface FitReason { code: FitCode; restH?: string }
+export interface FitReason { code: FitCode; params?: Record<string, string> }
 
 const FIT_TEXT: Record<FitCode, string> = {
   not_commander: 'לא מפקד',
   unavailable: 'לא זמין',
   overlap: 'חפיפה',
   readiness_overlap: 'חפיפה עם כוננות',
-  over_daily_cap: 'מעל 8 שעות ביום',
+  over_daily_cap: 'מעל {capH} שעות ביום',
   third_night: 'לילה שלישי ברצף',
-  rest_lt4: 'פחות מ-4 שעות מנוחה',
-  rest_lt8_long: 'פחות מ-8 שעות מנוחה למשימה ארוכה',
+  rest_lt4: 'פחות מ-{minH} שעות מנוחה',
+  rest_lt8_long: 'פחות מ-{idealH} שעות מנוחה למשימה ארוכה',
   short_rest: 'מנוחה קצרה: {restH}ש',
 };
 export const fitText = (r: FitReason): string =>
-  FIT_TEXT[r.code].replace('{restH}', r.restH ?? '?');
+  FIT_TEXT[r.code].replace(/\{(\w+)\}/g, (_, k) => r.params?.[k] ?? '?');
 const fitTexts = (rs: FitReason[]): string[] => rs.map(fitText);
 
 /** fallback fit codes -> rationale caveat codes (buildRationale) */
@@ -95,6 +93,13 @@ export async function generate(day: string): Promise<GenerateResult> {
   const issues: string[] = [];
   const dRange: [Minutes, Minutes] = [dayStart(day), dayEnd(day)];
   const night = nightRange(day);
+
+  // resolved tunables (config table, src/config.ts) in the units used here
+  const { dailyCapH: DAILY_CAP, longTaskH } = ctx.tunables;
+  const REST_MIN = ctx.tunables.restMinH * 60;     // H8 hard floor
+  const REST_IDEAL = ctx.tunables.restIdealH * 60; // R1
+  /** Hours a slot contributes to the daily cap: daily missions count as one duty-day (R4). */
+  const countedHours = (p: [Minutes, Minutes]) => Math.min(hours(p), DAILY_CAP);
 
   // ── per-soldier state ────────────────────────────────────────────────────
   const state = new Map<number, SoldierState>();
@@ -170,7 +175,10 @@ export async function generate(day: string): Promise<GenerateResult> {
     if (st.readiness.some((iv) => overlaps(iv, slot))) return no('readiness_overlap');
     if (isReadiness) return { ok: true, fallback: false, reasons: [] }; // R2: rest-transparent, uncapped
     const counted = countedHours(slot);
-    if (st.missionHoursToday + counted > DAILY_CAP + 0.01) return no('over_daily_cap');
+    if (st.missionHoursToday + counted > DAILY_CAP + 0.01) {
+      return { ok: false, fallback: false,
+        reasons: [{ code: 'over_daily_cap', params: { capH: String(DAILY_CAP) } }] };
+    }
     // R6: a third consecutive night is a violation — fallback-only.
     // (isReadiness returned above, so isCountedNight only gates on night_exempt:
     // exempt 24h duties span 00-06 but the soldier sleeps — not nights.)
@@ -179,11 +187,17 @@ export async function generate(day: string): Promise<GenerateResult> {
       return { ok: true, fallback: true, reasons: [{ code: 'third_night' }] };
     }
     const rest = restBefore(st, slot[0]);
-    if (rest < REST_MIN) return { ok: true, fallback: true, reasons: [{ code: 'rest_lt4' }] };
-    if (rest < REST_IDEAL && hours(slot) > LONG_TASK / 60) {
-      return { ok: true, fallback: true, reasons: [{ code: 'rest_lt8_long' }] };
+    if (rest < REST_MIN) {
+      return { ok: true, fallback: true,
+        reasons: [{ code: 'rest_lt4', params: { minH: String(ctx.tunables.restMinH) } }] };
     }
-    if (rest < REST_IDEAL) reasons.push({ code: 'short_rest', restH: (rest / 60).toFixed(1) });
+    if (rest < REST_IDEAL && hours(slot) > longTaskH) {
+      return { ok: true, fallback: true,
+        reasons: [{ code: 'rest_lt8_long', params: { idealH: String(ctx.tunables.restIdealH) } }] };
+    }
+    if (rest < REST_IDEAL) {
+      reasons.push({ code: 'short_rest', params: { restH: (rest / 60).toFixed(1) } });
+    }
     return { ok: true, fallback: false, reasons };
   }
 
@@ -248,13 +262,13 @@ export async function generate(day: string): Promise<GenerateResult> {
         // recent תורנות sorts after everyone without one (never a hard block)
         posName === 'תורנים' && (ctx.toranutCount7d.get(st.soldier.id) ?? 0) > 0 ? 1 : 0,
         nightsOf(st, forNight),                                                // P2
-        // P3 bucketed to one duty-day (8h): soldiers within the same load
-        // bucket are equal, letting rotation (P4) actually decide.
-        Math.floor(loadOf(st) / 8),                                            // P3
+        // P3 bucketed to one duty-day (dailyCapH hours): soldiers within the
+        // same load bucket are equal, letting rotation (P4) actually decide.
+        Math.floor(loadOf(st) / DAILY_CAP),                                    // P3
         rotationPenalty(st, positionId).penalty,                               // P4
         st.fairness.positionCounts[posName] ?? 0,                              // P4 (L1 balance)
         loadOf(st),                                                            // P3 fine tie-break
-        -Math.min(restAt, 48 * 60),                                            // P6
+        -Math.min(restAt, P6_REST_CLAMP),                                      // P6
       ];
     }
   }

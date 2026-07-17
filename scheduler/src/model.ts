@@ -1,5 +1,6 @@
 import { Minutes } from './time.js';
 import type { RationaleEntry } from './rationale.js';
+import type { Tunables } from './config.js';
 
 export interface Soldier {
   id: number;
@@ -21,8 +22,9 @@ export interface Position {
   name: string;
   missionClass: 'static' | 'dynamic' | 'readiness' | 'rest' | 'other';
   isScheduled: boolean;
-  blocksDay: boolean;
-  /** jsonb flags: continuity, same_platoon, night_exempt, full_rest_after... */
+  /** EFFECTIVE jsonb flags (daily-implied keys resolved by effectiveConfig):
+   *  daily, continuity, same_platoon, night_exempt, full_rest_after,
+   *  yomi_display, seat_rules, staff_all_roles */
   config: Record<string, any>;
 }
 
@@ -80,7 +82,7 @@ export interface ChainRule {
   sourcePosition: number;
   sourceStart: string;
   sourceDayOffset: number;
-  pick: 'all' | 'highest_rifle' | 'min_tracker_hours';
+  pick: 'all' | 'min_tracker_hours';
 }
 
 export interface Context {
@@ -107,4 +109,6 @@ export interface Context {
   lockedDay: Map<number, number>; // soldier -> position
   chainRules: ChainRule[];
   config: Record<string, any>;
+  /** resolved numeric tunables from `config` (see src/config.ts) */
+  tunables: Tunables;
 }

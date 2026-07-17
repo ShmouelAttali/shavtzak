@@ -179,9 +179,9 @@ cross the boundary).
   tuple). When nobody else exists the repeat is allowed, and the validator
   reports a warning (`second_toranut_week`).
 
-## 6. Fairness & selection — priority list first, scoring fallback
+## 6. Fairness & selection — lexicographic priority list
 
-### 6.1 Primary mechanism — lexicographic priority list
+### 6.1 The priority list
 
 When choosing soldiers for a position/slot, order candidates by P1→P6; a lower-numbered
 rule decides unless it ties, then the next rule breaks the tie:
@@ -204,26 +204,13 @@ differences don't override rotation (P4); exact hours only break remaining
 ties. P5 is currently implemented as the commander quota + same-platoon
 (מגן) only; the driver-fit and מ"כ-spread clauses are not yet wired in.
 
-### 6.2 Fallback — compact scoring
+There is no scoring fallback: the priority list (with its deterministic
+Hebrew-name final tie-break) plus the explicit completion flow (pull from
+מנוחה → H1 replacement pair → flagged "בדוחק" fallback) IS the selection
+mechanism. (The former §6.2 compact-scoring table — engine v2.6 weights —
+was never implemented and was removed by owner decision, 2026-07-17.)
 
-If the priority list ties or is infeasible (e.g. crew needs conflicting P5 roles),
-score remaining candidates with a small weight set (configurable in DB `config`,
-defaults derived from engine v2.6, pruned of per-position weights):
-
-| Weight | Default (lower score = better) |
-|---|---|
-| weekly weighted-hours | 1.4/h |
-| weekly night count | 7 |
-| short rest 4–8h | 28 |
-| same class yesterday | 18; static-streak penalty 55 / break bonus −25 |
-| role needed/missing (commander / tiger driver) | −26/+90, −35/+100 |
-| fallback "בדוחק" base | +400 |
-
-Dropped from v2.6: per-position 7-day count weights (static ×5 / tour ×3 / attack ×8),
-same-position penalties (+24/+42) — replaced by P4 rotation rules and Level-1 position
-balancing.
-
-### 6.3 Level-1 position balance (across-position fairness)
+### 6.2 Level-1 position balance (across-position fairness)
 
 Per-soldier `position_count[p]` over the deployment; when forming daily groups, prefer
 soldiers with the lowest count for that position. Objective: minimize spread of
@@ -268,15 +255,26 @@ Principles:
   presence matrix and all fairness counters are views.
 - **Seat counts change over time via `seat_overrides`** (position, valid_from,
   seats-per-slot; latest wins) — resolved by the `day_slots` view, managed by hand.
-- **Position behavior flags live in `positions.config` jsonb**: `continuity`,
-  `same_platoon` (מגן), `night_exempt`, `full_rest_after`, `open_for_attack`.
+- **Position behavior flags live in `positions.config` jsonb**: `daily`
+  (sleeping 14:00–14:00 day duty — implies `night_exempt` + `full_rest_after`
+  + `yomi_display`, each overridable by an explicit key; e.g. תורנים sets
+  `full_rest_after: false`), `continuity`, `same_platoon` (מגן), `seat_rules`
+  (H6b), `staff_all_roles` (חמל). Resolution happens once per read boundary
+  (`effectiveConfig` in `src/config.ts`; mirrored by a `coalesce` in
+  `soldier_fairness`).
 - Facts (`shift_assignments`) and decisions (`day_assignments`, locks) are tables.
 - Double-booking is impossible at the DB level: `EXCLUDE USING gist
   (soldier_id WITH =, period WITH &&) WHERE (blocks_overlap)` on `shift_assignments`
   (readiness rows set `blocks_overlap=false`, implementing H3's exception).
 - T4 chain rules are rows in `chain_rules`, not code.
-- All tunables (night window, day anchor, rest thresholds, scoring weights, priority
-  list) live in `config` (key → jsonb).
+- **Tunables in `config` (key → jsonb) — the honest list**, i.e. exactly what
+  the code reads (`loadTunables` in `src/config.ts`): `rest_rules`
+  (`minimum_hours` 4, `ideal_hours` 8, `long_task_hours` 4,
+  `gashash_effective_hours` 1.5), `daily_cap_hours` (8),
+  `readiness_hour_weight` (0.25, also read by `soldier_fairness` in SQL).
+  The 14:00 day anchor and the 00:00–06:00 night window are **hardcoded
+  mirrors** in `src/time.ts` + `db/schema.sql` by design — changing them
+  mid-deployment would silently reinterpret all stored data.
 
 ### Import (one-time, from the sheet)
 

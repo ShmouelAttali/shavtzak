@@ -192,8 +192,7 @@ def main():
 
     # emit SQL (no wrapping transaction: genuine overlaps in manual history data
     # should fail row-by-row against no_double_booking, not abort the import)
-    print("insert into positions (id, name, mission_class) values (99,'אחר','other')"
-          ' on conflict do nothing;', file=out)
+    # NB: position 99 ('אחר') is part of the seed (db/seed.sql) — not created here.
     for idx, (name, pn, platoon, role, rifle, _quals) in enumerate(soldiers.values(), start=1):
         pn2 = pn or f'IMP{idx:04d}'
         print(f'insert into soldiers (personal_number, full_name, platoon, role, rifle_level)'
