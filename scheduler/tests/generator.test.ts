@@ -147,13 +147,6 @@ test('מגן continuity: same crew on consecutive days, all one platoon', async 
   for (const c of crews) assert.equal(Number(c.platoons), 1, 'crew must be one platoon');
 });
 
-test('תגבצ is disabled (is_scheduled=false) — no rows generated', async () => {
-  const rows = await query(`
-    select count(*) n from shift_assignments sa
-    where sa.position_id = (select id from positions where name = 'תגבצ')`);
-  assert.equal(Number(rows[0].n), 0);
-});
-
 test('תורנים and קצין מוצב run the full schedule day (14:00→14:00)', async () => {
   const rows = await query(`
     select p.name, lower(sa.period)::text lo,

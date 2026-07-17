@@ -3,7 +3,7 @@
 
 export type Minutes = number;
 
-const DAY = 24 * 60;
+export const DAY = 24 * 60;
 
 /** 'YYYY-MM-DD' + 'HH:MM' -> minutes since epoch (naive local). */
 export function toMin(date: string, time = '00:00'): Minutes {
@@ -40,6 +40,13 @@ export function addDays(date: string, n: number): string {
 
 /** Schedule day D = [D 14:00, D+1 14:00) */
 export function dayStart(day: string): Minutes { return toMin(day, '14:00'); }
+
+/** Start (14:00) of the schedule day containing minute `m` —
+ *  mirrors schedule_day_of() in db/schema.sql. */
+export function scheduleDayStart(m: Minutes): Minutes {
+  const anchor = 14 * 60;
+  return m - ((((m - anchor) % DAY) + DAY) % DAY);
+}
 export function dayEnd(day: string): Minutes { return dayStart(day) + DAY; }
 
 /** Night of schedule day D = [D+1 00:00, D+1 06:00) */

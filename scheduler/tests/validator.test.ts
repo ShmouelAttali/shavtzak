@@ -69,6 +69,14 @@ test('two simultaneous standbys reported (double_readiness)', async () => {
   assert.ok(f.some((x) => x.rule === 'double_readiness' && x.message.includes('חייל 36')), JSON.stringify(f));
 });
 
+test('readiness overlapping a mission reported as error (H3 strict)', async () => {
+  await manualRow('חייל 37', 'התקפי', '2026-09-01 14:00', '2026-09-02 14:00');
+  await manualRow('חייל 37', 'סיור', '2026-09-01 22:00', '2026-09-02 06:00');
+  const f = await validateDay(D);
+  assert.ok(f.some((x) => x.rule === 'readiness_overlap' && x.severity === 'error'
+    && x.message.includes('חייל 37')), JSON.stringify(f));
+});
+
 test('R5: post-attack morning counts as rest (no error for 14:00 start)', async () => {
   await manualRow('חייל 35', 'התקפי', '2026-09-01 22:00', '2026-09-02 06:00');
   await manualRow('חייל 35', 'סיור', '2026-09-02 22:00', '2026-09-03 06:00');

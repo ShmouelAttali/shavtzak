@@ -22,7 +22,7 @@ export interface Position {
   missionClass: 'static' | 'dynamic' | 'readiness' | 'rest' | 'other';
   isScheduled: boolean;
   blocksDay: boolean;
-  /** jsonb flags: continuity, same_platoon, staffed_by, open_for_attack... */
+  /** jsonb flags: continuity, same_platoon, night_exempt, full_rest_after... */
   config: Record<string, any>;
 }
 
@@ -83,6 +83,8 @@ export interface Context {
   staticStreak: Map<number, number>;
   /** consecutive nights ending yesterday, per soldier (R6: max 2 in a row) */
   nightStreak: Map<number, number>;
+  /** T5 (soft): תורנות count per soldier in the rolling 7 days before `day` */
+  toranutCount7d: Map<number, number>;
   /** soldiers unavailable (fully or partially) today: id -> blocked windows */
   blocked: Map<number, [Minutes, Minutes][]>;
   /** locked rows for this day already in DB (kept as-is) */

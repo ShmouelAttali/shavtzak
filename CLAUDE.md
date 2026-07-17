@@ -9,9 +9,10 @@ and live against the shared Supabase project:
   seed in `db/seed.sql`, applied migrations in `db/migrations/`). Real history
   imported (1,836 rows, 24/6–14/7) + `unavailability` built from the roster
   matrix. Positions model after rework: **מגן** (10, continuity crew, one
-  מחלקה), **התקפי** (8, standing readiness 14:00–14:00, staffs the תגבצ
-  windows + ad-hoc attacks), תגבצ has no own crew (`staffed_by`), כרמל/גשש are
-  chained overlays, seat counts per date via `seat_overrides`.
+  מחלקה), **התקפי** (8, standing readiness 14:00–14:00 + ad-hoc attacks as
+  separate non-overlapping rows), כרמל/גשש are chained overlays, seat counts
+  per date via `seat_overrides`. Daily duties (מגן/חפק/תורנים/קצין מוצב) all
+  run 14:00–14:00.
 - **Generator + validator** (`scheduler/src/`): two-level generation per
   SPEC §6-7, CLI `generate`/`validate`, drafts 15–19/7 generated (draft-only —
   approval + sheet sync-out NOT built, by design).

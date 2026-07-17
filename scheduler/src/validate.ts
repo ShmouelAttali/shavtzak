@@ -1,7 +1,7 @@
 import { multiQuery, query } from './db.js';
 import {
-  Minutes, parseRange, dayStart, dayEnd, addDays, slotStart, overlaps, hours, fmtHM,
-  nightRange,
+  Minutes, DAY, parseRange, dayStart, dayEnd, addDays, slotStart, scheduleDayStart,
+  overlaps, hours, fmtHM, nightRange,
 } from './time.js';
 
 export interface Finding {
@@ -55,8 +55,10 @@ export async function validateDay(day: string): Promise<Finding[]> {
     `select ds.position_id, sp.name sub_name, ds.period::text, ds.seats from day_slots ds
      left join sub_positions sp on sp.id = ds.sub_position_id where ds.day = '${day}'`,
     `select id, name, is_scheduled, mission_class, config from positions`,
-    // 7-day lookback for streak rules (consecutive nights R6, static streak T3)
-    `select sa.soldier_id, s.full_name, sa.period::text, p.mission_class
+    // 7-day lookback for streak rules (consecutive nights R6, static streak
+    // T3, weekly תורנות T5)
+    `select sa.soldier_id, s.full_name, sa.period::text, p.mission_class, p.name pos_name,
+            coalesce((p.config->>'night_exempt')::boolean, false) night_exempt
      from shift_assignments sa
      join positions p on p.id = sa.position_id
      left join soldiers s on s.id = sa.soldier_id
@@ -73,6 +75,11 @@ export async function validateDay(day: string): Promise<Finding[]> {
   const prev = (prevRows as any[]).map(toRow);
   const findings: Finding[] = [];
   const dRange: [Minutes, Minutes] = [dayStart(day), dayEnd(day)];
+  // R5 (generalized): daily-task positions whose completion grants full rest
+  // for starts at/after 14:00 of the following schedule day (חפק/התקפי/קצין
+  // מוצב carry full_rest_after; תורנים deliberately does not — R1 applies)
+  const fullRestAfter = new Set((posRows as any[])
+    .filter((p) => p.config?.full_rest_after).map((p) => p.id as number));
 
   // ── 1+2: rest & overlap over consecutive blocking, non-readiness shifts ──
   const bySoldier = new Map<number, Row[]>();
@@ -92,8 +99,10 @@ export async function validateDay(day: string): Promise<Finding[]> {
         });
         continue;
       }
-      // R5: attack ends by ~06:00 and counts as full rest for >= 14:00 starts
-      if (a.positionName === 'התקפי' && b.period[0] >= dRange[0]) continue;
+      // R5 (generalized): finishing a daily task counts as full rest for
+      // starts at/after 14:00 of the schedule day following the task's own day
+      if (fullRestAfter.has(a.positionId)
+        && b.period[0] >= scheduleDayStart(a.period[0]) + DAY) continue;
       const gap = b.period[0] - a.period[1];
       if (gap < REST_MIN) {
         findings.push({
@@ -125,6 +134,22 @@ export async function validateDay(day: string): Promise<Finding[]> {
         findings.push({
           severity: 'error', rule: 'double_readiness', soldierId: sid,
           message: `${b.soldierName}: שתי כוננויות במקביל — ${a.positionName} ${fmtHM(a.period[0])}-${fmtHM(a.period[1])} וגם ${b.positionName} ${fmtHM(b.period[0])}-${fmtHM(b.period[1])}`,
+        });
+      }
+    }
+  }
+
+  // ── 2c: readiness × mission overlap (H3 strict — the attack↔readiness
+  // exception was removed: a soldier is either on a mission or on כוננות) ───
+  for (const [sid, list] of readinessBySoldier) {
+    const missions = bySoldier.get(sid) ?? [];
+    for (const r of list) {
+      for (const m of missions) {
+        if (!overlaps(r.period, m.period)) continue;
+        if (Math.max(r.period[0], m.period[0]) < dRange[0]) continue; // judge today's overlaps only
+        findings.push({
+          severity: 'error', rule: 'readiness_overlap', soldierId: sid,
+          message: `${m.soldierName}: כוננות ${r.positionName} ${fmtHM(r.period[0])}-${fmtHM(r.period[1])} חופפת משימה ${m.positionName} ${fmtHM(m.period[0])}-${fmtHM(m.period[1])}`,
         });
       }
     }
@@ -300,11 +325,20 @@ export async function validateDay(day: string): Promise<Finding[]> {
     if (p.config?.staff_all_roles) continue;   // variable crew — seats is a cap, not demand
     const period = parseRange(ds.period);
     // draft rows carry the sub-position; imported history rows don't — count
-    // null-sub rows toward any sub-slot with the same start so published
-    // days aren't falsely flagged
-    const n = today.filter((r) => r.positionId === ds.position_id
-      && r.period[0] === period[0]
-      && (r.subName === null || nrm(r.subName) === nrm(ds.sub_name ?? '') || ds.sub_name === null)).length;
+    // null-sub rows toward any sub-slot they overlap so published days aren't
+    // falsely flagged. A seat may be covered by a replacement PAIR (H1) — two
+    // rows splitting the slot at the handover — so staffing is the MINIMUM
+    // concurrent row count over the slot window (a split-covered seat counts
+    // as staffed; a partially-covered one does not).
+    const covering = today
+      .filter((r) => r.positionId === ds.position_id
+        && overlaps(r.period, period)
+        && (r.subName === null || nrm(r.subName) === nrm(ds.sub_name ?? '') || ds.sub_name === null))
+      .map((r) => [Math.max(r.period[0], period[0]), Math.min(r.period[1], period[1])] as [Minutes, Minutes]);
+    const points = [...new Set([period[0], ...covering.flat()])]
+      .filter((t) => t >= period[0] && t < period[1]);
+    const n = Math.min(...points.map((t) =>
+      covering.filter((c) => c[0] <= t && t < c[1]).length));
     if (n < ds.seats) {
       findings.push({
         severity: 'error', rule: 'coverage',
@@ -329,18 +363,24 @@ export async function validateDay(day: string): Promise<Finding[]> {
     }
   }
 
-  // ── 12: consecutive nights (R6): 2 in a row = warning, 3+ = error ────────
+  // ── 12: consecutive nights (R6): 2 in a row = warning, 3+ = error.
+  // night_exempt 24h duties (מגן/חפק/תורנים/קצין מוצב) span 00-06 but the
+  // soldier sleeps — they do not count as nights (same exemption as P2). ────
   const history = (historyRows as any[]).map((r) => ({
     soldierId: r.soldier_id as number,
     name: (r.full_name ?? `#${r.soldier_id}`) as string,
     missionClass: r.mission_class as string,
+    positionName: r.pos_name as string,
+    nightExempt: r.night_exempt as boolean,
     period: parseRange(r.period) as [Minutes, Minutes],
   }));
+  const countsAsNight = (h: { missionClass: string; nightExempt: boolean }) =>
+    h.missionClass !== 'readiness' && !h.nightExempt;
   const hasNight = (sid: number, d: string) => history.some((h) =>
-    h.soldierId === sid && h.missionClass !== 'readiness' && overlaps(h.period, nightRange(d)));
+    h.soldierId === sid && countsAsNight(h) && overlaps(h.period, nightRange(d)));
   const tonight = new Map<number, string>();
   for (const h of history) {
-    if (h.missionClass !== 'readiness' && overlaps(h.period, nightRange(day))) tonight.set(h.soldierId, h.name);
+    if (countsAsNight(h) && overlaps(h.period, nightRange(day))) tonight.set(h.soldierId, h.name);
   }
   for (const [sid, name] of tonight) {
     let run = 1;
@@ -381,6 +421,24 @@ export async function validateDay(day: string): Promise<Finding[]> {
       findings.push({
         severity: 'warning', rule: 'static_streak', soldierId: sid,
         message: `${name}: ${streak + 1} ימי עמדה ברצף ללא יום דינמי`,
+      });
+    }
+  }
+
+  // ── 14: weekly תורנות (T5, soft): 2+ תורנות days within 7 days = warning ──
+  const toranToday = new Map<number, string>();
+  for (const h of history) {
+    if (h.positionName === 'תורנים' && overlaps(h.period, dRange)) toranToday.set(h.soldierId, h.name);
+  }
+  for (const [sid, name] of toranToday) {
+    const hadPrior = [1, 2, 3, 4, 5, 6].some((d) => {
+      const dr: [Minutes, Minutes] = [dayStart(addDays(day, -d)), dayEnd(addDays(day, -d))];
+      return history.some((h) => h.soldierId === sid && h.positionName === 'תורנים' && overlaps(h.period, dr));
+    });
+    if (hadPrior) {
+      findings.push({
+        severity: 'warning', rule: 'second_toranut_week', soldierId: sid,
+        message: `${name}: תורנות שנייה בתוך 7 ימים`,
       });
     }
   }

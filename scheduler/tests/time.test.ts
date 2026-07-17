@@ -3,8 +3,16 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   toMin, minToIso, minToDate, parseRange, addDays, dayStart, dayEnd,
-  nightRange, slotStart, overlaps, hours, fmtHM,
+  nightRange, slotStart, scheduleDayStart, overlaps, hours, fmtHM,
 } from '../src/time.js';
+
+test('scheduleDayStart: 14:00-anchored floor of the containing schedule day', () => {
+  assert.equal(minToIso(scheduleDayStart(toMin('2026-07-15', '14:00'))), '2026-07-15 14:00:00');
+  assert.equal(minToIso(scheduleDayStart(toMin('2026-07-15', '22:00'))), '2026-07-15 14:00:00');
+  assert.equal(minToIso(scheduleDayStart(toMin('2026-07-16', '06:00'))), '2026-07-15 14:00:00');
+  assert.equal(minToIso(scheduleDayStart(toMin('2026-07-16', '13:59'))), '2026-07-15 14:00:00');
+  assert.equal(minToIso(scheduleDayStart(toMin('2026-07-16', '14:00'))), '2026-07-16 14:00:00');
+});
 
 test('toMin/minToIso round trip', () => {
   const m = toMin('2026-07-15', '14:30');

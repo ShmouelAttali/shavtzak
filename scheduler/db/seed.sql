@@ -7,20 +7,23 @@
 insert into positions (id, name, mission_class, is_scheduled, blocks_day, config) values
   ( 1, 'סיור',        'dynamic',   true,  false, '{}'),
   ( 2, 'עמדות הגנה',  'static',    true,  false, '{}'),
-  ( 3, 'מגן',  'other',     true,  true,  '{"package":"magen_tagbatz","continuity":true,"same_platoon":true,"yomi_display":true}'),
-  -- התקפי: standing 8-soldier readiness crew (14:00-14:00) that also staffs
-  -- the תגבצ windows and executes ad-hoc attack missions
-  ( 4, 'התקפי',       'readiness', true,  true,  '{"open_for_attack":true,"covers":["תגבצ"]}'),
-  ( 5, 'תגבצ',        'dynamic',   false, false, '{"staffed_by":"התקפי"}'),  -- disabled for now (is_scheduled=false)
+  ( 3, 'מגן',  'other',     true,  true,  '{"continuity":true,"same_platoon":true,"yomi_display":true,"night_exempt":true,"full_rest_after":true}'),
+  -- התקפי: standing 8-soldier readiness crew (14:00-14:00); ad-hoc attack
+  -- missions are separate rows and may not overlap the readiness (H3 strict)
+  ( 4, 'התקפי',       'readiness', true,  true,  '{"open_for_attack":true,"full_rest_after":true}'),
   ( 6, 'חפק',         'other',     true,  true,  '{"seat_rules": [
       {"sub": "מפקד", "roles": ["מ\"פ", "סמ\"פ"], "commander": true},
       {"sub": "קשר",  "soldiers": ["יהודה חושן", "אור חיים בלונדר", "יחיעם אושפיזאי"], "ordered": true, "release_unpicked": true},
       {"sub": "חובש", "soldiers": ["כפיר לנדסמן", "שחר מיכאלי"]},
       {"sub": "נהג",  "soldiers": ["אמיר יונייב", "יאיר מובשוביץ"]}
-    ], "yomi_display": true}'),
-  ( 7, 'תורנים',      'static',    true,  true,  '{"night_exempt":true}'),
+    ], "yomi_display": true, "night_exempt": true, "full_rest_after": true}'),
+  -- תורנים: mission_class 'other' — outside T2/T3 rotation; soft rule T5:
+  -- at most one תורנות per rolling 7 days (ranking preference + validator
+  -- warning). Deliberately NO full_rest_after — finishing at 14:00 grants no
+  -- R5 exemption; the normal R1 regime applies (>= 4h rest, earliest 18:00)
+  ( 7, 'תורנים',      'other',     true,  true,  '{"night_exempt":true}'),
   ( 8, 'כונן גשש',    'readiness', true,  false, '{"tracker":true}'),
-  ( 9, 'קצין מוצב',   'other',     true,  true,  '{"night_exempt":true}'),
+  ( 9, 'קצין מוצב',   'other',     true,  true,  '{"night_exempt":true,"full_rest_after":true}'),
   (10, 'כרמל חטיבה',  'readiness', true,  false, '{}'),
   -- חמל: standing crew — every present role-חמל soldier staffs it daily,
   -- full schedule day; readiness class = rest-transparent (internal shifts)
@@ -55,23 +58,20 @@ select 2, sp.id, t.start_time, 240, 1, false, date '2026-07-15'
 from (values (1),(2),(3),(4)) sp(id)
 cross join (values (time '06:00'),('10:00'),('14:00'),('18:00'),('22:00'),('02:00')) t(start_time);
 
--- מגן: 10 seats, 06:00–22:00
+-- מגן: 10 seats, full schedule day 14:00–14:00 (re-anchored effective
+-- 2026-07-19 — history days before that ran 06:00–22:00; nothing crosses the
+-- day boundary — the continuity crew repeats back-to-back, R5/full_rest_after)
 insert into slot_templates (position_id, start_time, duration_minutes, seats, valid_from)
-values (3, '06:00', 960, 10, '2026-07-15');
+values (3, '14:00', 1440, 10, '2026-07-19');
 
--- התקפי: 8 seats, full readiness day 14:00–14:00 (crew also staffs תגבצ windows)
+-- התקפי: 8 seats, full readiness day 14:00–14:00
 insert into slot_templates (position_id, start_time, duration_minutes, seats, valid_from)
 values (4, '14:00', 1440, 8, '2026-07-15');
 
--- תגבצ: 06:30–09:00 and 17:00–22:00, 8 seats each, first seat = commander
-insert into slot_templates (position_id, start_time, duration_minutes, seats, commander_first_seat, valid_from)
-values
-  (5, '06:30', 150, 8, true, '2026-07-15'),
-  (5, '17:00', 300, 8, true, '2026-07-15');
-
--- חפק: 4 named seats (מפקד/קשר/חובש/נהג), 06:00–22:00, 1 seat each
+-- חפק: 4 named seats (מפקד/קשר/חובש/נהג), full schedule day 14:00–14:00
+-- (re-anchored effective 2026-07-19; earlier days ran 06:00–22:00)
 insert into slot_templates (position_id, sub_position_id, start_time, duration_minutes, seats, valid_from)
-select 6, v.sp, '06:00', 960, 1, date '2026-07-15' from (values (7),(8),(9),(10)) v(sp);
+select 6, v.sp, '14:00', 1440, 1, date '2026-07-19' from (values (7),(8),(9),(10)) v(sp);
 
 -- תורנים: 2 seats, 14:00–14:00 (full schedule day, aligned with the rotation)
 insert into slot_templates (position_id, start_time, duration_minutes, seats, valid_from)

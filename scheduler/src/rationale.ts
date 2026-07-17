@@ -14,7 +14,10 @@ export type RationaleCode =
   | 'rotation_switch'       // T-rules satisfied: different position than yesterday
   | 'rotation_break_static' // T3 bonus: dynamic task breaks a static streak
   | 'rest_ok'               // full rest before the shift
-  | 'attack_rest'           // R5: last night's attack counts as full rest
+  | 'attack_rest'           // R5 (legacy rows): last night's attack counts as full rest
+  | 'duty_rest'             // R5 generalized: finished a daily task — full rest from 14:00
+  | 'handover_out'          // H1 pair: departing half — serves until the handover
+  | 'handover_in'           // H1 pair: arriving half — takes over at the handover
   | 'no_prior'              // no earlier shift nearby — fully rested
   | 'fewest_nights'         // at/below the candidate group's night median (P2)
   | 'low_load'              // at/below the candidate group's load median (P3)
@@ -48,6 +51,9 @@ export const TEMPLATES: Record<RationaleCode, string> = {
   rotation_break_static: 'משימה דינמית שוברת רצף של {streak} ימים סטטיים',
   rest_ok: 'סיים משמרת ב-{lastEnd} — {restH} שעות מנוחה לפני תחילת המשמרת ({start})',
   attack_rest: 'השתתף בהתקפי אמש — נחשב כמנוחה מלאה',
+  duty_rest: 'סיים משימה יומית ({position}) — נחשב כמנוחה מלאה החל מ-14:00',
+  handover_out: 'זוג מתחלף: מאייש עד {handover}, ואז {partner} מחליף אותו (יציאה)',
+  handover_in: 'זוג מתחלף: נכנס ב-{handover} במקום {partner} (חזרה)',
   no_prior: 'ללא משמרת קודמת סמוכה — מנוחה מלאה',
   fewest_nights: 'מהמעוטים בלילות בקבוצה: {nights} לילות בשבוע האחרון (חציון הקבוצה: {median})',
   low_load: 'עומס שבועי נמוך בקבוצה: {hours} שעות משוקללות (חציון הקבוצה: {median})',

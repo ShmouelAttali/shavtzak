@@ -144,15 +144,31 @@ export async function loadContext(day: string): Promise<Context> {
 
   // Consecutive-night streak (R6): days ending yesterday where the soldier
   // held a non-readiness assignment overlapping that day's night window.
+  // night_exempt 24h duties (מגן/חפק/תורנים/קצין מוצב — the soldier sleeps)
+  // span 00-06 but do not count as nights.
+  const isNight = (a: { positionId: number; missionClass: string }) =>
+    a.missionClass !== 'readiness' && !positions.get(a.positionId)?.config?.night_exempt;
   const nightStreak = new Map<number, number>();
   for (const [sid, list] of existing) {
     let streak = 0;
     for (let d = 1; d <= 7; d++) {
       const nr = nightRange(addDays(day, -d));
-      if (list.some((a) => a.missionClass !== 'readiness' && overlaps(a.period, nr))) streak++;
+      if (list.some((a) => isNight(a) && overlaps(a.period, nr))) streak++;
       else break;
     }
     if (streak) nightStreak.set(sid, streak);
+  }
+
+  // T5 (soft): תורנות count per soldier in the rolling 7 days before `day`.
+  const toranutCount7d = new Map<number, number>();
+  const toranimId = positionByName.get('תורנים');
+  if (toranimId !== undefined) {
+    const tw: [Minutes, Minutes] = [dayStart(addDays(day, -7)), dayStart(day)];
+    for (const [sid, list] of existing) {
+      const n = list.filter((a) => a.positionId === toranimId
+        && a.period[0] >= tw[0] && a.period[0] < tw[1]).length;
+      if (n) toranutCount7d.set(sid, n);
+    }
   }
 
   // Unavailability windows intersecting the schedule day.
@@ -181,6 +197,7 @@ export async function loadContext(day: string): Promise<Context> {
 
   return {
     day, soldiers, positions, positionByName, slots, fairness, existing,
-    yesterdayPosition, staticStreak, nightStreak, blocked, lockedShift, lockedDay, chainRules, config,
+    yesterdayPosition, staticStreak, nightStreak, toranutCount7d, blocked,
+    lockedShift, lockedDay, chainRules, config,
   };
 }
