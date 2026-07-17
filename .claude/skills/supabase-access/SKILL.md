@@ -71,10 +71,8 @@ Pipeline: fetch tabs → filter dates → `import_history.py` → SQL → psql.
 4. **Verify every soldier name resolves before importing** (normalize with
    `import_history.nkey` and diff against `select full_name from soldiers`) —
    assignment inserts resolve soldiers by `full_name ... limit 1`, so an
-   unknown/misspelled name silently drops or misattributes rows. The historical
-   float-PN duplication trap is RESOLVED (2026-07-17): prod personal numbers
-   were normalized and `import_history.py` strips trailing `.0`, so soldier
-   inserts now no-op cleanly via `on conflict` — stripping them is optional.
+   unknown/misspelled name silently drops or misattributes rows. Soldier
+   inserts no-op cleanly via `on conflict (personal_number)`.
 5. If a day being imported already exists as a draft, **delete its unlocked draft
    rows first** (locked/manual survive):
 
@@ -102,12 +100,14 @@ schedule day D−1's tail. Filtering by sheet date (not schedule day) and lettin
 `schedule_day_of()` sort it out is correct — just pick the sheet-date range so it
 covers whole schedule days and doesn't re-import already-covered sheet dates.
 
-### Known import mappings
+### Import notes
 
-- FIXED 2026-07-17: `חפק` and `תורנים נוספים` now map to their real positions
-  (POSITION_MAP gained `חפק`; the final-nun `תורן`/`תורני` mismatch is fixed),
-  and a full re-import was done — history attribution is correct. `אחר` (id 99)
-  remains the catch-all for genuinely unmapped names only.
+- Sheet position names map to DB positions via keyword matching
+  (`POSITION_MAP` in `import_history.py`); unmatched names fall to the
+  catch-all `אחר` (id 99). **When a new position name appears in the sheet,
+  add a keyword** — and mind Hebrew final-letter forms in substring matches
+  (a keyword ending in ן won't match the medial-נ spelling inside a longer
+  word).
 - After importing real data over former draft days, later drafts (generated
   against the draft fairness picture) are stale — regenerate them.
 - After importing over days that already carry a stored validation snapshot,
