@@ -181,6 +181,12 @@ cross the boundary).
 
 - **T1**: avoid same exact position on consecutive days.
 - **T2**: avoid same mission class on consecutive days; alternating static/dynamic preferred.
+- **T1/T2 exemption — structurally fixed crews**: positions whose membership is
+  locked by design — continuity (מגן), dedicated seats (`seat_rules`, חפק) and
+  role crews (`staff_all_roles`, חמל) — take no T1/T2 penalty and no
+  "same-as-yesterday" rationale caveat for repeating members (מגן additionally
+  *prefers* the returning member; חפק/חמל are neutral so seat pairs still
+  rotate purely by fairness).
 - **T3**: 2+ consecutive static-only days → must break with a dynamic day (strong).
   Post-hoc: a 3rd consecutive static-only day is reported as a warning
   (`static_streak`).

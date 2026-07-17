@@ -154,6 +154,19 @@ test('staff_all_roles (חמל): every present role soldier staffs daily, absent 
     select p.name from shift_assignments sa join positions p on p.id = sa.position_id
     where sa.day = $1 and sa.soldier_id = $2 and p.name <> 'חמל'`, [D7, a]);
   assert.deepEqual(elsewhere, []);
+  // repeat day: a role crew is locked to the same people by design — no
+  // "same position as yesterday" rotation caveat on the repeat
+  const D8 = '2026-08-08';
+  await persist(await generate(D8));
+  const repeat = await query<{ rationale: { code: string }[] }>(`
+    select sa.rationale from shift_assignments sa
+    where sa.day = $1 and sa.soldier_id = $2
+      and sa.position_id = (select id from positions where name = 'חמל')`, [D8, a]);
+  assert.equal(repeat.length, 1);
+  assert.ok(!repeat[0].rationale.some((e) => e.code === 'caveat_same_position'),
+    JSON.stringify(repeat[0].rationale));
+  await query(`delete from shift_assignments where day = $1`, [D8]);
+  await query(`delete from day_assignments where day = $1`, [D8]);
   await query(`delete from unavailability where soldier_id = $1`, [b]);
   await query(`update soldiers set role = 'לוחם' where id in ($1, $2)`, [a, b]);
 });

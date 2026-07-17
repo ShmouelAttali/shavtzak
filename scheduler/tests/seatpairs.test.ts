@@ -88,3 +88,11 @@ test('H6b pair: a single fully-available candidate is still preferred', async ()
   assert.ok(rows[0].period.includes('2026-08-11 14:00') && rows[0].period.includes('2026-08-12 14:00'), rows[0].period);
   assert.ok(!rows[0].rationale.some((e) => e.code === 'handover_in'), JSON.stringify(rows[0].rationale));
 });
+
+test('no same-position-as-yesterday caveat for structurally fixed crews (חפק)', async () => {
+  // חייל 24 held the חובש seat on D1 (pair half) and again on D2 — the crew is
+  // locked by seat rules, so repeating is not a rotation fact
+  const rows = await seatRows(D2, 'חובש');
+  assert.ok(!rows[0].rationale.some((e) => e.code === 'caveat_same_position'),
+    JSON.stringify(rows[0].rationale));
+});

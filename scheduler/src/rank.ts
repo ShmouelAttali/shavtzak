@@ -36,6 +36,11 @@ export function rotationPenalty(g: Gen, st: SoldierState, positionId: number): {
   const yCls = yPos !== undefined ? g.ctx.positions.get(yPos)?.missionClass : undefined;
   const streak = g.ctx.staticStreak.get(st.soldier.id) ?? 0;
   if (pos?.config?.continuity) return { penalty: yPos === positionId ? -2 : 0, tag: 'continuity' };
+  // Dedicated-seat (seat_rules) and role crews (staff_all_roles) are locked to
+  // the same people by design — repeating there is never a rotation fact:
+  // no T1/T2 penalty and no "same as yesterday" caveat (like continuity, but
+  // with no stay-bonus so seat pairs still rotate purely by fairness).
+  if (pos?.config?.seat_rules || pos?.config?.staff_all_roles) return { penalty: 0, tag: 'continuity' };
   if (streak >= 2 && cls === 'static') return { penalty: 3, tag: 'static_streak' };   // T3 violation
   if (yPos === positionId) return { penalty: 2, tag: 'same_position' };               // T1
   if (yCls && cls && yCls === cls && cls !== 'other') return { penalty: 1, tag: 'same_class' }; // T2
