@@ -69,7 +69,12 @@ create table unavailability (
   id         bigint generated always as identity primary key,
   soldier_id bigint not null references soldiers on delete cascade,
   period     tsrange not null,
-  kind       text not null,               -- 'חופש','לא מגויס','יציאה','מחלה',...
+  -- known kinds only: the full-day + partial statuses import/cleanup.py emits
+  -- (FULL_BLOCK + PARTIAL), plus 'יציאה' (the short-exits tab import)
+  kind       text not null check (kind in (
+               'חופש','לא מגויס','לא מגוייס','שחרור','גיוס','מחלה',
+               'יציאה','יציאה בבוקר','יציאה ב14:00','יציאה בערב',
+               'חזרה ב14:00','חזרה בערב')),
   note       text
 );
 create index unavailability_soldier_period on unavailability using gist (soldier_id, period);
@@ -104,6 +109,18 @@ create table slot_templates (
   valid_from           date not null,
   valid_to             date                              -- null = still active
 );
+
+-- Two template versions of the same (position, sub, start) must never be
+-- active on the same day — day_slots would emit the slot twice. day_slots
+-- treats valid_to as INCLUSIVE, so validity ranges are closed '[]'
+-- (null valid_to = open-ended). Requires btree_gist (created above).
+alter table slot_templates add constraint slot_templates_no_overlap
+  exclude using gist (
+    position_id with =,
+    (coalesce(sub_position_id, -1)) with =,
+    start_time with =,
+    daterange(valid_from, valid_to, '[]') with &&
+  );
 
 -- Per-position seat-count changes over time (seats PER SLOT; latest
 -- valid_from <= day wins). Managed by hand — resolved by the day_slots view.

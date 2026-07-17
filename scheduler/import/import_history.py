@@ -35,10 +35,16 @@ IGNORE_SOLDIERS = {'', 'הפלוגה הקודמת', 'על בסיס מגן'}
 
 # position-name keywords -> canonical position name (order matters).
 # NB: 'מגן' MUST precede 'תגבצ' — the position 'מגן' contains both.
+# NB (2026-07-17, owner-approved): 'חפק' and 'תורני' (plural — the final-nun
+# 'תורן' does NOT substring-match 'תורנים') are now mapped explicitly; both
+# used to fall through to 'אחר'. A full re-import CHANGES the position
+# attribution of those history rows — that is the desired outcome.
 POSITION_MAP = [
     ('גשש',        'כונן גשש'),
     ('תורן',       'תורנים'),
+    ('תורני',      'תורנים'),
     ('קצין מוצב',  'קצין מוצב'),
+    ('חפק',        'חפק'),
     ('כרמל',       'כרמל חטיבה'),
     ('כוננות',     'התקפי'),
     ('חמל',        'חמל'),
@@ -159,6 +165,7 @@ def main():
             if not name or nkey(name) in {nkey(x) for x in IGNORE_SOLDIERS}:
                 continue
             pn = norm(r[c_pn]) if c_pn is not None and c_pn < len(r) else ''
+            pn = re.sub(r'\.0$', '', pn)   # sheet exports numeric cells as floats ('123456.0')
             platoon = norm(r[c_platoon]) if c_platoon is not None and c_platoon < len(r) else ''
             role = norm(r[c_role]) if c_role is not None and c_role < len(r) else ''
             rifle = re.sub(r'\D', '', norm(r[c_rifle])) if c_rifle is not None and c_rifle < len(r) else ''

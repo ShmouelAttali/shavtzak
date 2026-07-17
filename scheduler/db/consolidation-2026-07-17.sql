@@ -154,4 +154,27 @@ language sql stable as $$
   group by s.id, w.t_end
 $$;
 
+-- ── 6. DB guards (schema.sql mirrors) ───────────────────────────────────────
+-- Two template versions of the same (position, sub, start) must never be
+-- active on the same day (day_slots treats valid_to as INCLUSIVE → '[]').
+alter table slot_templates drop constraint if exists slot_templates_no_overlap;
+alter table slot_templates add constraint slot_templates_no_overlap
+  exclude using gist (
+    position_id with =,
+    (coalesce(sub_position_id, -1)) with =,
+    start_time with =,
+    daterange(valid_from, valid_to, '[]') with &&
+  );
+
+-- unavailability.kind whitelist (cleanup.py FULL_BLOCK + PARTIAL + the
+-- short-exits 'יציאה'). NOT VALID: guards new rows without failing on any
+-- legacy row — run `alter table unavailability validate constraint
+-- unavailability_kind_check;` after checking `select distinct kind`.
+alter table unavailability drop constraint if exists unavailability_kind_check;
+alter table unavailability add constraint unavailability_kind_check
+  check (kind in (
+    'חופש','לא מגויס','לא מגוייס','שחרור','גיוס','מחלה',
+    'יציאה','יציאה בבוקר','יציאה ב14:00','יציאה בערב',
+    'חזרה ב14:00','חזרה בערב')) not valid;
+
 commit;

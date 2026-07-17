@@ -62,7 +62,7 @@ async function getDrafts(from: string, to: string): Promise<DraftResponse> {
   const pool = getPool();
   const [daysRes, rowsRes, dayAssignRes, slotsRes] = await Promise.all([
     pool.query(
-      `select day::text, status, generated_at, validation
+      `select day::text, status, generated_at
        from schedule_days where day between $1 and $2 order by day`, [from, to]),
     pool.query(
       `select sa.day::text, p.name pos_name, p.config pos_config, sp.name sub_name, s.full_name,
@@ -92,12 +92,21 @@ async function getDrafts(from: string, to: string): Promise<DraftResponse> {
        order by ds.day, p.id, lower(ds.period)`, [from, to]),
   ]);
 
+  // Live validation (consistent with api/fairness.ts): the stored
+  // schedule_days.validation snapshot goes stale after manual edits, so each
+  // generated day is re-validated on read. The snapshot is still written at
+  // persist time (scheduler/src/persist.ts) as a historical record.
+  const { validateDay } = await import('../scheduler/src/validate.js');
+  const liveValidation = new Map(await Promise.all(
+    daysRes.rows.filter((d: any) => d.status !== 'draft').map(async (d: any) =>
+      [d.day as string, await validateDay(d.day) as DraftFinding[]] as const)));
+
   const days = new Map<string, DraftDay>();
   for (const d of daysRes.rows) {
     days.set(d.day, {
       day: d.day, status: d.status,
       generatedAt: d.generated_at ? new Date(d.generated_at).toISOString() : null,
-      validation: d.validation ?? [], groups: [], meta: {}, dayAssignments: {},
+      validation: liveValidation.get(d.day) ?? [], groups: [], meta: {}, dayAssignments: {},
     });
   }
 
