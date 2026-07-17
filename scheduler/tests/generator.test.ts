@@ -14,7 +14,7 @@ before(async () => {
   // seed.sql's חפק seat rules name real soldiers — remap to synthetic ones so
   // the seats fill and the coverage rule sees a fully-staffable roster
   await query(`update soldiers set role = 'מ"פ' where full_name = 'חייל 55'`);
-  await query(`update positions set config = config || $1::jsonb where id = 6`, [JSON.stringify({
+  await query(`update positions set config = config || $1::jsonb where name = 'חפק'`, [JSON.stringify({
     seat_rules: [
       { sub: 'מפקד', roles: ['מ"פ'], commander: true },
       { sub: 'קשר', soldiers: ['חייל 20', 'חייל 21'], ordered: true, release_unpicked: true },

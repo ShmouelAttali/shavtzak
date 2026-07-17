@@ -17,14 +17,15 @@ const hafakSeat = (day: string, sub: string) => query<{ full_name: string; ratio
   select s.full_name, sa.rationale from shift_assignments sa
   join soldiers s on s.id = sa.soldier_id
   join sub_positions sp on sp.id = sa.sub_position_id
-  where sa.day = $1 and sa.position_id = 6 and sp.name = $2`, [day, sub]);
+  where sa.day = $1 and sa.position_id = (select id from positions where name = 'חפק')
+    and sp.name = $2`, [day, sub]);
 
 before(async () => {
   await freshSchema();
   await seedSoldiers();
   await query(`update soldiers set role = 'מ"פ' where full_name = 'חייל 55'`);
   await query(`update soldiers set role = 'סמ"פ' where full_name = 'חייל 56'`);
-  await query(`update positions set config = config || $1::jsonb where id = 6`, [JSON.stringify({
+  await query(`update positions set config = config || $1::jsonb where name = 'חפק'`, [JSON.stringify({
     seat_rules: [
       { sub: 'מפקד', roles: ['מ"פ', 'סמ"פ'], commander: true },
       { sub: 'קשר', soldiers: KASHAR, ordered: true, release_unpicked: true },
@@ -142,7 +143,9 @@ test('staff_all_roles (חמל): every present role soldier staffs daily, absent 
     where da.day = $1 and da.soldier_id in ($2, $3)`, [D7, a, b]);
   assert.equal(rows.find((r) => String(r.id) === String(a))?.pos, 'חמל');
   assert.equal(rows.find((r) => String(r.id) === String(b))?.pos, 'בבית');
-  const shift = await query(`select 1 from shift_assignments where day = $1 and soldier_id = $2 and position_id = 11`, [D7, a]);
+  const shift = await query(`select 1 from shift_assignments
+    where day = $1 and soldier_id = $2
+      and position_id = (select id from positions where name = 'חמל')`, [D7, a]);
   assert.equal(shift.length, 1, 'present חמל soldier must hold the 24h חמל row');
   const errs = (await validateDay(D7)).filter((f) => f.severity === 'error');
   assert.deepEqual(errs, [], JSON.stringify(errs));
