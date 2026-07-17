@@ -80,6 +80,15 @@ export interface Assignment {
   rationale: RationaleEntry[];
 }
 
+/** One generated day, in memory — persisted by src/persist.ts. */
+export interface GenerateResult {
+  day: string;
+  assignments: Assignment[];
+  /** Level-1 buckets: soldier id -> position id */
+  level1: Map<number, number>;
+  issues: string[];
+}
+
 export interface ChainRule {
   targetPosition: number;
   targetStart: string;   // 'HH:MM'
