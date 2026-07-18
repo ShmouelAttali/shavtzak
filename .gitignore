@@ -24,3 +24,6 @@ Thumbs.db
 
 .vercel
 supabase/
+
+# Generated HTML generation reports
+scheduler/reports/

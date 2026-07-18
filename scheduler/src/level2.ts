@@ -7,7 +7,7 @@ import { Minutes, fmtHM, hours, overlaps } from './time.js';
 import { Slot } from './model.js';
 import { RationaleEntry } from './rationale.js';
 import { normalizeName as nrm, hasQualification } from './text.js';
-import { Gen, SoldierState, allowedIn, assign, countedHours } from './state.js';
+import { Gen, SoldierState, allowedIn, assign, countedHours, stickyContinuity } from './state.js';
 import { fits, restInfo, fitText, fitTexts, FitReason, FIT_RATIONALE } from './rest.js';
 import { rank, rotationPenalty, nightsOf, loadOf } from './rank.js';
 import { tryReplacementPair } from './pairs.js';
@@ -110,6 +110,9 @@ function exitPrePass(g: Gen, plan1: Level1Plan): void {
     const pos = ctx.positions.get(pid);
     const slots = plan1.slotsByPosition.get(pid);
     if (!pos || !slots || pos.config?.seat_rules || pos.config?.staff_all_roles) continue;
+    // H9 מגן stickiness: a continuity crew member holds the daily 14:00–14:00
+    // row itself (exit window and all) — nothing to pack around the window
+    if (pos.config?.continuity) continue;
     const nightExempt = pos.config?.night_exempt ?? false;
     const outMin = windows.reduce((m, w) =>
       m + Math.max(0, Math.min(w[1], g.dRange[1]) - Math.max(w[0], g.dRange[0])), 0);
@@ -301,10 +304,13 @@ export function fillLevel2(g: Gen, plan1: Level1Plan): void {
         const driverSeat = !!driverQual && seat === (slot.commanderFirstSeat ? 2 : 1)
           && ![...takenThisSlot].some((id) => isDriver(state.get(id)!));
         const forNight = overlaps(slot.period, g.night);
+        // H9 מגן stickiness: a returning continuity member's exit window does
+        // not block his own crew's daily row (fits' ignoreExitWindows flag)
+        const sticky = (st: SoldierState) => stickyContinuity(g, st.soldier.id, pid);
         const evals = group
           .filter((st) => !takenThisSlot.has(st.soldier.id))
           .filter((st) => !driverSeat || isDriver(st))
-          .map((st) => ({ st, fit: fits(g, st, slot.period, commanderSeat, slotReadiness, slotNightExempt, slotDaily) }));
+          .map((st) => ({ st, fit: fits(g, st, slot.period, commanderSeat, slotReadiness, slotNightExempt, slotDaily, sticky(st)) }));
         const primary = evals.filter((e) => e.fit.ok && !e.fit.fallback).map((e) => e.st);
         const fallback = evals.filter((e) => e.fit.ok && e.fit.fallback);
         // pre-pick snapshot of the primary group's fairness keys (the exact
@@ -331,7 +337,7 @@ export function fillLevel2(g: Gen, plan1: Level1Plan): void {
             && (!commanderSeat || st.soldier.isCommander)
             && (!driverSeat || isDriver(st)));
           const fitting = resters.filter((st) => {
-            const f = fits(g, st, slot.period, commanderSeat, slotReadiness, slotNightExempt, slotDaily);
+            const f = fits(g, st, slot.period, commanderSeat, slotReadiness, slotNightExempt, slotDaily, sticky(st));
             return f.ok && !f.fallback;
           });
           const pulled = rank(g, fitting, pid, forNight, slot.period[0], slot.subPositionId)[0];
@@ -370,7 +376,7 @@ export function fillLevel2(g: Gen, plan1: Level1Plan): void {
           continue;
         }
         takenThisSlot.add(picked.soldier.id);
-        const fit = fits(g, picked, slot.period, commanderSeat, slotReadiness, slotNightExempt, slotDaily);
+        const fit = fits(g, picked, slot.period, commanderSeat, slotReadiness, slotNightExempt, slotDaily, sticky(picked));
         const rationale = buildRationale(g, picked, slot, pid, {
           pickedFrom, fitReasons: fit.reasons, commanderSeat, groupNights, groupLoads,
           myNights: nightsOf(picked, forNight), myLoad: loadOf(picked),

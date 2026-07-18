@@ -38,7 +38,7 @@ insert into positions (id, name, mission_class, is_scheduled, config) values
   ( 8, 'כונן גשש',    'readiness', true,  '{}'),
   -- קצין מוצב: manned ONLY from the fixed candidate list (H6-pool) —
   -- unordered (rotates by fairness); members serve anywhere when not picked
-  ( 9, 'קצין מוצב',   'other',     true,  '{"daily":true,"candidate_pool":["שמואל אטלי","צבי שור","יוחאי יעקבסון","אורי שאג","אלעד זיו","אביאל גיאת","עמיחי ברוורמן","גלעד דביר"]}'),
+  ( 9, 'קצין מוצב',   'other',     true,  '{"daily":true,"candidate_pool":["שמואל אטלי","צבי שור","יוחאי יעקובסון","אורי שאג","אלעד זיו","אביאל גיאת","עמיחי ברוורמן","גלעד דביר"]}'),
   (10, 'כרמל חטיבה',  'readiness', true,  '{}'),
   -- חמל: standing crew — every present role-חמל soldier staffs it daily,
   -- full schedule day; readiness class = rest-transparent (internal shifts)

@@ -87,3 +87,19 @@ test('R5: post-attack morning counts as rest (no error for 14:00 start)', async 
   assert.ok(!f.some((x) => x.rule === 'rest' && x.severity === 'error'
     && x.message.includes('חייל 35')), JSON.stringify(f));
 });
+
+test('config_names lint: a misspelled pool/seat/commander name is flagged', async () => {
+  // one-letter misspelling (the יעקבסון/יעקובסון class of bug) must warn —
+  // an unmatched configured name means that soldier can never be picked
+  await query(`update positions set config = jsonb_set(config, '{candidate_pool}',
+               '["חייל 01", "חייל שלא קיים"]'::jsonb) where name = 'קצין מוצב'`);
+  await query(`insert into config (key, value) values ('magen_commander', '"שם שגוי"')
+               on conflict (key) do update set value = excluded.value`);
+  const f = await validateDay(D);
+  const lint = f.filter((x) => x.rule === 'config_names');
+  assert.ok(lint.some((x) => x.severity === 'warning' && x.message.includes('חייל שלא קיים')
+    && x.message.includes('קצין מוצב')), JSON.stringify(lint));
+  assert.ok(lint.some((x) => x.message.includes('שם שגוי') && x.message.includes('magen_commander')), JSON.stringify(lint));
+  assert.ok(!lint.some((x) => x.message.includes('"חייל 01"')), JSON.stringify(lint));
+  await query(`delete from config where key = 'magen_commander'`);
+});

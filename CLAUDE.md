@@ -6,6 +6,11 @@
   run each in its own subagent concurrently instead of working through them
   serially. Keep file-scope disjoint between concurrent agents (scheduler
   src files, docs, tests) and do only quick glue work inline.
+- **Fan out recursively**: a subagent given a multi-part task should itself
+  launch nested subagents for its independent pieces (e.g. one for SPEC+LOGIC
+  doc updates, one for code, one for tests), keep their file scopes disjoint,
+  pass each full context, and verify their diffs before integrating. Every
+  agent prompt should propagate this instruction.
 - Ask the owner questions **in English** (options/labels may quote Hebrew
   domain terms).
 
@@ -157,6 +162,16 @@ sub-positions by **name lookup**, never by hardcoded seed ids (seed renumbering
 silently breaks id-coupled tests). Run the relevant suite before committing.
 
 ## Conventions & gotchas
+
+- **Soldier identity = foreign key, never a copied name** (owner decision,
+  2026-07-19, after a one-letter pool-spelling bug silently hid יוחאי יעקובסון
+  from קצין מוצב): a soldier's name may appear ONCE in the DB —
+  `soldiers.full_name`. Every other reference must be a `soldier_id` FK. The
+  current name-list configs (`candidate_pool`, `seat_rules[].soldiers`,
+  `magen_commander`) are legacy — any new list MUST use ids, and migrating the
+  legacy ones to ids is an open task. Such lists always live in the DB, never
+  hardcoded in code. Until the migration, the validator's `config_names` check
+  warns on any configured name that matches no roster soldier.
 
 - **ALWAYS check if there's already a config that fulfills your need before
   adding a new one** — e.g. daily-duty classification is `positions.config.daily`

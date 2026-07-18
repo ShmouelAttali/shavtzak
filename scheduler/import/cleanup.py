@@ -19,11 +19,13 @@ Inputs:
                            where a.source='import'`
 
 Status → unavailability mapping (calendar-day semantics; see SPEC §11):
-  full-day block: חופש, לא מגויס, שחרור, גיוס, מחלה   -> [X 08:00, X+1 08:00)
-  (bus leaves/arrives at 08:00: a departing soldier works until 08:00 of his
-   first home day; a returnee is available from 08:00 of his first present day
-   and needs no rest — rest is measured from his last actual shift anyway)
-  יציאה בבוקר  -> [X 08:00, X+1 00:00)
+  full-day block: חופש, לא מגויס, שחרור, גיוס, מחלה   -> [X bus, X+1 bus)
+  where bus = 08:00 on Sunday / 06:00 on any other day (the bus
+  leaves/arrives at that hour: a departing soldier works until bus-hour of
+  his first home day; a returnee is available from bus-hour of his first
+  present day and needs no rest — rest is measured from his last actual
+  shift anyway).
+  יציאה בבוקר  -> [X bus, X+1 00:00)
   יציאה ב14:00 -> [X 14:00, X+1 00:00)
   יציאה בערב   -> [X 18:00, X+1 08:00)
   חזרה ב14:00  -> [X 00:00, X 14:00)
@@ -39,8 +41,14 @@ from import_history import (norm, nkey, IGNORE_SOLDIERS, canonical_position,
                             infer_period, parse_date, q)
 
 FULL_BLOCK = {'חופש', 'לא מגויס', 'לא מגוייס', 'שחרור', 'גיוס', 'מחלה'}
+
+def bus_hour(d):
+    """Default home-range boundary hour on midnight-date d: Sunday 08:00,
+    any other day 06:00 (owner decision 2026-07-19)."""
+    return 8 if d.weekday() == 6 else 6   # python: Monday=0 .. Sunday=6
+
 PARTIAL = {
-    'יציאה בבוקר':  (lambda d: (d + timedelta(hours=8),  d + timedelta(days=1))),
+    'יציאה בבוקר':  (lambda d: (d + timedelta(hours=bus_hour(d)), d + timedelta(days=1))),
     'יציאה ב14:00': (lambda d: (d + timedelta(hours=14), d + timedelta(days=1))),
     'יציאה בערב':   (lambda d: (d + timedelta(hours=18), d + timedelta(days=1, hours=8))),
     'חזרה ב14:00':  (lambda d: (d,                       d + timedelta(hours=14))),
@@ -172,9 +180,9 @@ def main():
                 merged.append((s, e, k))
         for s, e, k in merged:
             n_periods += 1
-            if k in FULL_BLOCK:   # bus at 08:00 — shift the whole run
-                s += timedelta(hours=8)
-                e += timedelta(hours=8)
+            if k in FULL_BLOCK:   # shift each boundary by its own day's bus hour
+                s += timedelta(hours=bus_hour(s))
+                e += timedelta(hours=bus_hour(e))
             print(f'insert into unavailability (soldier_id, period, kind)'
                   f" values ({sid}, tsrange('{ts(s)}','{ts(e)}'), {q(k)});", file=out)
     log.write(f'UNAVAILABILITY PERIODS: {n_periods}\n')

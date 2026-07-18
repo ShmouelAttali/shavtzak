@@ -7,6 +7,7 @@
 
 import { Minutes, overlaps } from './time.js';
 import { Slot, SeatRule } from './model.js';
+import { RationaleEntry } from './rationale.js';
 import { normalizeName as nrm, hasQualification } from './text.js';
 import { Gen, SoldierState, allowedIn, countedHours, fullyBlocked, isBlocked } from './state.js';
 import { rank } from './rank.js';
@@ -47,6 +48,41 @@ export function demand(g: Gen, pid: number, slots: Slot[]): number {
 /** commanders needed: one per commander-first slot start of the position */
 const commanderQuota = (own: Slot[]) =>
   new Set(own.filter((s) => s.commanderFirstSeat).map((s) => s.period[0])).size;
+
+const median = (xs: number[]): number => {
+  const s = [...xs].sort((a, b) => a - b);
+  const mid = (s.length - 1) / 2;
+  return (s[Math.floor(mid)] + s[Math.ceil(mid)]) / 2;
+};
+
+/** Why did the ranked demand fill take this soldier? A comparative fairness
+ *  fact snapshotted at pick time against the not-yet-assigned candidate group
+ *  — mirroring Level 2's buildRationale honesty rules (comparative claims
+ *  only against a real group, >1 candidate): fewest nights (P2), else low
+ *  weekly load (P3), else fewest stints in this position (P4); otherwise the
+ *  generic priority-cascade entry. */
+function fairnessRationale(g: Gen, st: SoldierState, pid: number,
+                           group: SoldierState[]): RationaleEntry {
+  const posName = g.ctx.positions.get(pid)!.name;
+  const nights = (x: SoldierState) => x.fairness.nightCount7d;
+  const load = (x: SoldierState) => x.fairness.weightedHours7d;
+  const count = (x: SoldierState) => x.fairness.positionCounts[posName] ?? 0;
+  if (group.length > 1) {
+    const mN = median(group.map(nights));
+    const mL = median(group.map(load));
+    const mC = median(group.map(count));
+    if (nights(st) <= mN) {
+      return { code: 'fewest_nights', params: { nights: nights(st), median: mN } };
+    }
+    if (load(st) <= mL) {
+      return { code: 'low_load', params: { hours: load(st).toFixed(1), median: mL.toFixed(1) } };
+    }
+    if (count(st) <= mC) {
+      return { code: 'position_balance', params: { count: count(st), median: mC } };
+    }
+  }
+  return { code: 'fairness_pick' };
+}
 
 export function runLevel1(g: Gen): Level1Plan {
   const { ctx, issues, level1, state } = g;
@@ -116,8 +152,9 @@ export function runLevel1(g: Gen): Level1Plan {
           // H6b pair handover: when no candidate covers the whole window, a
           // departing candidate (available until his leave time) and an
           // arriving one (available from it) may split the seat — both from
-          // the seat's OWN list, so "no substitutes" holds. Bus-at-08:00
-          // blocks meet exactly at the handover.
+          // the seat's OWN list, so "no substitutes" holds. Bus-boundary
+          // blocks (Sunday 08:00, other days 06:00) meet exactly at the
+          // handover.
           const dep = new Map<SoldierState, Minutes>();
           const arr = new Map<SoldierState, Minutes>();
           for (const c of cands) {
@@ -340,13 +377,23 @@ export function runLevel1(g: Gen): Level1Plan {
     const returning = [...state.values()].filter((st) =>
       st.level1 === null && !fullyBlocked(g, st.soldier.id)
       && allowedIn(g, st.soldier, pos.name)
-      // returning member must still be available for the crew's mission window
-      && posSlots.some((sl) => !isBlocked(g, st.soldier.id, sl.period))
+      // returning member must still be available for the crew's mission
+      // window. H9 מגן stickiness (owner 2026-07-19): a returning member's
+      // half-day exit window does NOT block the crew's daily row — he stays
+      // on the crew (the מגן officer covers his absence internally), so his
+      // exit windows are ignored here (real unavailability still blocks;
+      // yesterdayPosition === pos.id below makes him sticky by definition).
+      && posSlots.some((sl) => !isBlocked(g, st.soldier.id, sl.period, ctx.exits.has(st.soldier.id)))
       && ctx.yesterdayPosition.get(st.soldier.id) === pos.id);
     for (const st of rank(g, returning, pos.id, false)) {
       if (room <= 0) break;
       st.level1 = pos.id; level1.set(st.soldier.id, pos.id); room--;
       st.level1Rationale.push({ code: 'continuity_crew', params: { position: pos.name } });
+      // sticky exit member: reserved here (before the H9 exit pre-pass, which
+      // skips anyone with level1 already set) — mark the decision
+      if (ctx.exits.has(st.soldier.id)) {
+        st.level1Rationale.push({ code: 'exit_sticky_magen' });
+      }
     }
   }
 
@@ -467,9 +514,12 @@ export function runLevel1(g: Gen): Level1Plan {
           // then let the general fill mix in the remainder by fairness.
           // With flex seats a mixed crew above the minimum is routine — only
           // a core (min-seats) shortage is worth flagging.
-          for (const st of rank(g, same, pid, false)) {
+          const rankedSame = rank(g, same, pid, false);
+          for (const st of rankedSame) {
             if (need <= 0) break;
+            const group = rankedSame.filter((x) => x.level1 === null);
             pick(st);
+            st.level1Rationale.push(fairnessRationale(g, st, pid, group));
           }
           if (same.length < (pos.config?.flex_seats?.min ?? need)) {
             issues.push(`${posName}: אין מספיק חיילים ממחלקה ${platoon} — הצוות מעורב`);
@@ -495,9 +545,14 @@ export function runLevel1(g: Gen): Level1Plan {
         }
       }
     }
-    for (const st of rank(g, free.filter((x) => x.level1 === null), pid, false, atStart)) {
+    // general ranked fill: each pick records the fairness consideration that
+    // selected the soldier, snapshotted against the still-free candidates
+    const ranked = rank(g, free.filter((x) => x.level1 === null), pid, false, atStart);
+    for (const st of ranked) {
       if (need <= 0) break;
+      const group = ranked.filter((x) => x.level1 === null);
       pick(st);
+      st.level1Rationale.push(fairnessRationale(g, st, pid, group));
     }
     if (need > 0) issues.push(`${posName}: חסרים ${need} חיילים`);
   }

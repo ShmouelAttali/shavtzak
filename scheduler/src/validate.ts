@@ -329,18 +329,34 @@ export async function validateDay(day: string): Promise<Finding[]> {
 
   // ── 6b: H9 exit-day rules — no row inside the exit window, and no daily /
   // readiness row at all on the exit day (the soldier can't hold a 24h duty
-  // or an on-call around a half-day exit) ───────────────────────────────────
+  // or an on-call around a half-day exit). Exception — מגן stickiness (owner
+  // decision 2026-07-19): a continuity crew member (he held a row of the SAME
+  // continuity position yesterday — the validator's mirror of the generator's
+  // yesterdayPosition test) KEEPS the crew's daily row despite the exit; both
+  // errors downgrade to ONE exit_magen warning — the מגן officer covers his
+  // absence internally. A fresh (non-returning) soldier on מגן with an exit
+  // keeps the errors. ───────────────────────────────────────────────────────
   for (const r of today) {
     if (r.missionClass === 'rest') continue;
+    const stickyRow = !!posConfig.get(r.positionId)?.continuity
+      && prev.some((p) => p.soldierId === r.soldierId && p.positionId === r.positionId);
     const hit = exits.find((e) => e.soldierId === r.soldierId && overlaps(e.period, r.period));
+    const dailyViol = exitTodayIds.has(r.soldierId)
+      && !isShiftPosition({ missionClass: r.missionClass, config: posConfig.get(r.positionId) ?? {} });
+    if (stickyRow && (hit || dailyViol)) {
+      findings.push({
+        severity: 'warning', rule: 'exit_magen', soldierId: r.soldierId,
+        message: `${r.soldierName} ב${r.positionName} עם יציאה קצרה — באחריות מפקד ה${r.positionName}`,
+      });
+      continue;
+    }
     if (hit) {
       findings.push({
         severity: 'error', rule: 'exit_window', soldierId: r.soldierId,
         message: `${r.soldierName} משובץ ל${r.positionName} ${fmtHM(r.period[0])}-${fmtHM(r.period[1])} בתוך חלון יציאה קצרה`,
       });
     }
-    if (exitTodayIds.has(r.soldierId)
-      && !isShiftPosition({ missionClass: r.missionClass, config: posConfig.get(r.positionId) ?? {} })) {
+    if (dailyViol) {
       findings.push({
         severity: 'error', rule: 'exit_daily', soldierId: r.soldierId,
         message: `${r.soldierName} ביציאה קצרה היום — משובץ למשימה יומית/כוננות ${r.positionName}`,
@@ -747,6 +763,34 @@ export async function validateDay(day: string): Promise<Finding[]> {
         severity: 'warning', rule: 'second_toranut_week', soldierId: sid,
         message: `${name}: תורנות שנייה בתוך 7 ימים`,
       });
+    }
+  }
+
+  // ── 15: config-name lint — every soldier NAME in config lists must match a
+  // roster soldier (normalized). A one-letter mismatch silently removes the
+  // soldier from the list (the pool/seat gate just never matches him), so an
+  // unmatched name is a data bug, not a preference. Legacy until name lists
+  // are migrated to soldier_id FKs (CLAUDE.md owner decision 2026-07-19).
+  {
+    const rosterNames = new Set((soldierRows as any[]).map((s) => nrm(s.full_name)));
+    const lint = (pos: string, listName: string, names: string[]) => {
+      for (const n of names) {
+        if (!rosterNames.has(nrm(n))) {
+          findings.push({
+            severity: 'warning', rule: 'config_names',
+            message: `${pos}: השם "${n}" ב-${listName} לא נמצא במצבת — החייל לא ייבחר לעולם`,
+          });
+        }
+      }
+    };
+    for (const p of posRows as any[]) {
+      if (p.config?.candidate_pool) lint(p.name, 'candidate_pool', p.config.candidate_pool);
+      for (const r of (p.config?.seat_rules ?? []) as SeatRule[]) {
+        if (r.soldiers) lint(p.name, `seat_rules/${r.sub}`, r.soldiers);
+      }
+    }
+    if (typeof config.magen_commander === 'string') {
+      lint('מגן', 'magen_commander', [config.magen_commander]);
     }
   }
 

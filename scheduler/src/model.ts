@@ -80,6 +80,49 @@ export interface Assignment {
   rationale: RationaleEntry[];
 }
 
+/** Serializable side-channel data for the HTML generation report
+ *  (src/report.ts). Assembled by generate() from Context + Level-1 outputs so
+ *  the report builders stay pure (no DB, no Gen access). */
+export interface ReportMeta {
+  soldiers: {
+    id: number; name: string; platoon: string; role: string;
+    /** fairness snapshot as of generation — report chip tooltips */
+    nights7d: number; weightedHours7d: number; positionCounts: Record<string, number>;
+    allowedPositions: string[] | null;
+  }[];
+  positions: {
+    id: number; name: string; missionClass: string;
+    daily: boolean; chainOverlay: boolean; staffAllRoles: boolean;
+  }[];
+  /** unavailability windows (minutes) intersecting the day, per soldier id */
+  blocked: Record<string, [number, number][]>;
+  /** H9 half-day exit windows, per soldier id */
+  exits: Record<string, [number, number][]>;
+  /** honored human locks (process step 1) */
+  locks: { soldierId: number; positionName: string; kind: 'day' | 'shift' }[];
+  /** closed-list positions: members + who was unavailable today */
+  pools: { position: string; members: string[]; unavailable: string[] }[];
+  /** soldier ids still reserved to a seat-rule seat (H6b) — by-design rest */
+  seatReserved: string[];
+  /** soldier id -> Level-1 rationale entries (why he landed in his bucket).
+   *  NB: id keys are strings — pg returns bigint columns as strings. */
+  level1Rationale: Record<string, RationaleEntry[]>;
+  /** position id -> distinct soldiers needed (demand AFTER flex sizing) */
+  demand: Record<string, number>;
+  /** position id -> baseline demand BEFORE flex sizing (the day's real need —
+   *  flex absorbs surplus into מגן / shrinks סיור, masking the raw balance) */
+  demandBefore: Record<string, number>;
+  /** flex decisions: positions whose per-shift seat count changed (max seats
+   *  across the position's slots, before vs after Level 1) */
+  flex: { positionId: number; before: number; after: number }[];
+  /** the persisted weekly מגן-commander decision (config), when set */
+  magenCommander?: string;
+  /** sub-position id -> display name */
+  subNames: Record<string, string>;
+  restPositionId?: number;
+  homePositionId?: number;
+}
+
 /** One generated day, in memory — persisted by src/persist.ts. */
 export interface GenerateResult {
   day: string;
@@ -87,6 +130,9 @@ export interface GenerateResult {
   /** Level-1 buckets: soldier id -> position id */
   level1: Map<number, number>;
   issues: string[];
+  /** report-support data (filled by generate(); optional so tests may build
+   *  bare results) */
+  report?: ReportMeta;
 }
 
 export interface ChainRule {

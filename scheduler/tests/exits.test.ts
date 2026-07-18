@@ -51,7 +51,17 @@ before(async () => {
 after(closePool);
 
 test('exit day: shift position only, ~8h packed outside the window', async () => {
-  const sid = await addExit('חייל 30', D4, 4, 12);   // 18:00–02:00
+  // pick a soldier who is NOT on yesterday's מגן crew — a returning continuity
+  // member with an exit now STAYS on מגן (H9 stickiness, owner 2026-07-19;
+  // covered by magensticky.test.ts) and would never reach the shift packing.
+  // Plain לוחם range (27+) keeps clear of the חפק seat candidates (20–26).
+  const [{ full_name }] = await query<{ full_name: string }>(`
+    select s.full_name from soldiers s
+    join day_assignments da on da.soldier_id = s.id and da.day = $1
+    join positions p on p.id = da.position_id
+    where p.name <> 'מגן' and s.role = 'לוחם' and s.full_name >= 'חייל 27'
+    order by s.full_name limit 1`, [D3]);
+  const sid = await addExit(full_name, D4, 4, 12);   // 18:00–02:00
   await persist(await generate(D4));
 
   const bucket = await query<{ name: string }>(`

@@ -60,7 +60,26 @@ npx tsx src/cli.ts generate <start> <end>     # sequential, each day sees prior 
 The CLI prints per-day issues; validation snapshots are stored automatically.
 Re-validate explicitly if needed: `npx tsx src/cli.ts validate <day>`.
 
-## Step 4 — report
+Every generate run also writes an **HTML generation report** automatically to
+`scheduler/reports/` (git-ignored): one `<day>.html` per day + a
+`week-<start>-<end>.html` index for ranges. `--no-report` skips it;
+`--report-dir <dir>` overrides the output directory. Reports are written on
+`--dry-run` too (that's the point of a dry run).
+
+## Step 4 — walk through the HTML report
+
+Open `scheduler/reports/week-<start>-<end>.html` (and the day pages it links
+to) and walk the owner through the main findings:
+
+- the week index's per-day cards — error/warning counts and key shortages at a
+  glance; drill into any red day's page;
+- on a day page: the שלב 1 narrative bullets (flex sizing, closed-list picks,
+  מגן commander status, structural shortages), the שלב 2 grids' ⚠ cells, the
+  שרשורים table's השלמה badges, and the חריגות section;
+- the week fairness table (days on base / shifts / nights / weighted hours,
+  with min/max/avg/SD footer) — call out outliers.
+
+## Step 5 — report
 
 Summarize for the user, per day:
 - error-level findings (rest, coverage, driver, role_gate, chain) — these need
@@ -90,7 +109,10 @@ generator can't solve:
   `unavailability` row overlapping that schedule day; mass-exit days
   (weekends) genuinely can't be covered.
 
-## Step 5 — fairness check
+## Step 6 — fairness check
+
+The week report's fairness table already covers the basics; use this deeper
+query when the owner wants per-day-normalized load.
 
 Raw `shift_assignments` hours are misleading (מגן/כוננות daily rows count
 24h). Use the `soldier_fairness(as_of)` DB function's `weighted_hours_7d`,

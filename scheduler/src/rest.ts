@@ -111,15 +111,19 @@ export const restBefore = (g: Gen, st: SoldierState, start: Minutes): number =>
  *  H8 rest floor — absolute, no בדוחק), fallback-only conditions (R1
  *  long-task rest, R6 third night), and soft short-rest annotation.
  *  `slotDaily` (position config.daily): 4h rest suffices before a daily
- *  14:00–14:00 duty — no long-task fallback, no short-rest annotation. */
+ *  14:00–14:00 duty — no long-task fallback, no short-rest annotation.
+ *  `ignoreExitWindows` (H9 מגן stickiness): the caller filling a continuity
+ *  position for a returning crew member passes true — his exit window does
+ *  not block the crew's daily row (real unavailability still does). */
 export function fits(g: Gen, st: SoldierState, slot: [Minutes, Minutes], commanderSeat: boolean,
-                     isReadiness = false, nightExempt = false, slotDaily = false): Fit {
+                     isReadiness = false, nightExempt = false, slotDaily = false,
+                     ignoreExitWindows = false): Fit {
   const T = g.ctx.tunables;
   const s = st.soldier;
   const reasons: FitReason[] = [];
   const no = (code: FitCode): Fit => ({ ok: false, fallback: false, reasons: [{ code }] });
   if (commanderSeat && !s.isCommander) return no('not_commander');
-  if (isBlocked(g, s.id, slot)) return no('unavailable');
+  if (isBlocked(g, s.id, slot, ignoreExitWindows)) return no('unavailable');
   // H3 strict: a soldier is either on an active mission or on כוננות — no
   // overlap in either direction (the attack↔readiness exception is removed)
   if (st.intervals.some((iv) => overlaps(iv, slot))) return no('overlap');

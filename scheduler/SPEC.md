@@ -1,22 +1,13 @@
-# מפרט מערכת שבצ"ק אוטומטית — Shavtzak Scheduler Spec (rev 3)
+# מפרט מערכת שבצ"ק אוטומטית — Shavtzak Scheduler Spec
 
-> Phase 1: assignment-rules spec + database design. DB (Supabase Postgres) is the
-> source of truth; the Google Sheet becomes a synced output so the existing viewer
-> app and manual workflows keep working.
->
-> Rules consolidated from the Google Sheet (פלוגת גוש עלי-שילה) and its Apps Script
-> tools: Recommendations Engine v2.6, שבצ"ק Validator, fillCarmelHativa,
-> fillCarmelAlef, hours reports — plus new decisions made during spec review.
->
-> rev 3 (2026-07-18): owner rules overhaul — everyone-works flex sizing (מגן
-> 10–12, סיור 3–4), hard crew drivers (H6d), קצין מוצב candidate pool (H6-pool),
-> absolute rest floor (H8), T6 on-call streak, T3/T6 ranked above night fairness,
-> night-only כונן גשש load (R3), bus at 08:00, מפלג position, weekly מגן
-> commander, התקפי commander seat + platoon groups.
->
-> rev 3.1 (2026-07-18): half-day exit requests (יציאה קצרה) — H9 exit-day
-> exclusions, R7 exit-day rest relaxation, §7 exit pre-passes, §8 exit
-> validator keys, §9 `exit_requests` table, §12 soldier-facing tab + endpoint.
+> Assignment-rules spec + database design. The DB (Supabase Postgres) is the
+> source of truth; the Google Sheet is a synced output so the existing viewer
+> app and manual workflows keep working. The rules were consolidated from the
+> company Google Sheet (פלוגת גוש עלי-שילה), its Apps Script tools, and owner
+> decisions during spec reviews; this document describes the **current** rules
+> only. The officers' pure-Hebrew twin is `LOGIC.he.md` — the two must always
+> match in meaning. Imported history rows that predate a rule are covered by
+> the data notes in §10.
 
 ---
 
@@ -27,7 +18,7 @@
 | Soldier | Roster member: platoon (עלי/שילה/גבעות צפון/גבעות דרום/מפלג), role (מ"פ/סמ"פ/מ"מ/סמל/מ"כ/מ"ח/לוחם…), rifle level (רובאי), qualifications (נהג דוד, נהג טיגריס, חובש, מאג, קלע, חמליסט…) |
 | מפקד (commander) | Any of **מ"מ / סמל / מ"כ / מ"ח (מפקד חוליה)** — satisfies commander seats/quotas (H6). מ"מ/סמל are the *senior* commanders (the only ones gated off עמדות הגנה) |
 | Schedule day | **14:00 → 14:00 next day** — the single day unit for Level-1 assignment, konenut, rest accounting, daily caps. A shift belongs to the schedule day containing its start |
-| Night | **00:00–06:00** (fairness night-count window; configurable) |
+| Night | **00:00–06:00** (fairness night-count window; hardcoded by design — §9) |
 | Position (עמדה) | Top-level Level-1 unit: סיור, עמדות הגנה (merged שג+בונקר+מזרחית+דרומית), מגן, התקפי, חפק, חמל (standing role crew), תורנים, קצין מוצב, מפלג (staff crew), מנוחה (rest on base — a **reported exception**, not a planned outcome; see everyone-works, §2), בבית (fully unavailable). כרמל חטיבה + כונן גשש are chained overlays |
 | Slot | Concrete (position, sub-position, time-range, seat#) needing one soldier. Level-2 unit |
 | Mission class | `static` (עמדות הגנה) / `dynamic` (סיור) / `readiness` (התקפי, כרמל, כונן גשש) / `other` (daily 14:00–14:00 duties: מגן, חפק, תורנים, קצין מוצב, מפלג — outside T2/T3 rotation) — drives rotation + rest-transparency |
@@ -42,8 +33,8 @@ History shows 39 distinct position names over 20 days; templates change mid-depl
 |---|---|---|
 | סיור | **3–4** seats (flex) × 06:00, 14:00, 22:00 | 8h; `flex_seats` 3–4 — 4 normally, shrinks one seat per shift down to 3 only on soldier shortage (everyone-works); every crew: **מפקד in the first seat (H6) + נהג דוד (H6d)** |
 | עמדות הגנה (שג/בונקר/מזרחית/דרומית) | 4 posts × 06,10,14,18,22,02 | 4h |
-| מגן | **10–12** seats (flex), **14:00–14:00** | daily; **continuity crew, one מחלקה** (kept day-to-day unless seat count or a manual change intervenes; repeats back-to-back at gap 0 — R5); `flex_seats` 10–12 — absorbs surplus soldiers up to 12 (everyone-works); commander = the persisted weekly `magen_commander` decision, and his מחלקה anchors the crew's same-platoon preference (§7) |
-| התקפי | 8 seats | **14:00–14:00** standing readiness crew; **first seat = מפקד (H6 hard)**; crew must include a **נהג טיגריס (H6d)**; soft composition (`group_size` 4): two groups of (1 מפקד + 3 soldiers), each group preferably from one מחלקה (the groups may differ) — implemented as a commander quota of 2 + same-platoon group fill (P5). Ad-hoc attack missions are recorded as separate mission rows and **must not overlap the readiness row** (H3 — the old attack↔readiness exception is removed) |
+| מגן | **10–12** seats (flex), **14:00–14:00** | daily; **continuity crew, one מחלקה** (kept day-to-day unless seat count or a manual change intervenes; repeats back-to-back at gap 0 — R5); a returning member with a **half-day exit stays on the crew** (H9 stickiness — the מגן officer covers his absence internally); `flex_seats` 10–12 — absorbs surplus soldiers up to 12 (everyone-works); commander = the persisted weekly `magen_commander` decision, and his מחלקה anchors the crew's same-platoon preference (§7) |
+| התקפי | 8 seats | **14:00–14:00** standing readiness crew; **first seat = מפקד (H6 hard)**; crew must include a **נהג טיגריס (H6d)**; soft composition (`group_size` 4): two groups of (1 מפקד + 3 soldiers), each group preferably from one מחלקה (the groups may differ) — implemented as a commander quota of 2 + same-platoon group fill (P5). Ad-hoc attack missions are recorded as separate mission rows and **must not overlap the readiness row** (H3) |
 | חפק | 4 named seats (מפקד/קשר/חובש/נהג), **14:00–14:00** | daily; **dedicated candidates per seat — see H6b** |
 | תורנים | 2 seats, **14:00–14:00** | full schedule day; class `other` — outside T2/T3 rotation; **soft T5**: at most one תורנות per soldier per rolling 7 days |
 | כונן גשש | chained to סיור — see T4c | windows: 22–07, 07–14, 14–22; **only the night window counts as load** (R3) |
@@ -52,50 +43,48 @@ History shows 39 distinct position names over 20 days; templates change mid-depl
 | מפלג | **14:00–14:00**, variable staff crew | the רס"פ/סרס"פ/מנהלה staff do **no shifts**; they appear in the שבצק in this dedicated daily position whenever present on base and are restricted to it (`staff_all_roles`, like חמל). Presence follows the sheet's מפלג tab (סטטוס מגיע/לא מגיע → the soldier's schedulable flag — see Import) |
 | כרמל חטיבה / מפקד כרמל חטיבה | 3+1 × 14,18,22,02,06,10 | 4h — same grid as עמדות הגנה; commander seat: prefer a real מפקד from the descending crew, else highest רובאי (T4a) |
 
-**Everyone works** (owner rule, 2026-07-18): **מנוחה is no longer a planned
-outcome** — every present soldier must do a shift (~8h) every schedule day
-unless at home. All positions are filled first; surplus soldiers then enlarge
-מגן up to its flex max (12); מגן's minimum is 10; when soldiers are missing,
-flex positions shrink — סיור drops from 4 to a minimum of 3 seats per shift
-(`flex_seats` on the position config). An explicit manual seat override may
-enlarge מגן **beyond** 12 (the manual decision wins); shrinking below the flex
-minimum loses to everyone-works — surplus soldiers still get seats. A soldier
-left in מנוחה is reported (generation issue + validator warning `rest_bucket`).
-Exception (owner decision 2026-07-19): unchosen candidates of a **non-release
-seat rule** (H6b — e.g. the חפק מ"פ/סמ"פ commander seat) are reserved to their
-seat with no substitutes, so their מנוחה day is by design — neither report
-flags them. Slot coverage is judged against the flex **minimum** (§8).
+**Everyone works**: **מנוחה is not a planned outcome** — every present soldier
+must do a shift (~8h) every schedule day unless at home. All positions are
+filled first; surplus soldiers then enlarge מגן up to its flex max (12); מגן's
+minimum is 10; when soldiers are missing, flex positions shrink — סיור drops
+from 4 to a minimum of 3 seats per shift (`flex_seats` on the position
+config). An explicit manual seat override may enlarge מגן **beyond** 12 (the
+manual decision wins); shrinking below the flex minimum loses to
+everyone-works — surplus soldiers still get seats. A soldier left in מנוחה is
+reported (generation issue + validator warning `rest_bucket`).
+Exception: unchosen candidates of a **non-release seat rule** (H6b — e.g. the
+חפק מ"פ/סמ"פ commander seat) are reserved to their seat with no substitutes,
+so their מנוחה day is by design — neither report flags them. Slot coverage is
+judged against the flex **minimum** (§8).
 
 Ad-hoc attack missions (פטרול, צ'קפוסט…) are recorded manually as extra
 mission rows when they happen; they may **not** overlap a readiness row —
 the readiness assignment must be trimmed/replaced for the attack window (H3).
 
-**Boundary rule for daily missions** (resolved 2026-07-17, **effective
-2026-07-19** via `slot_templates` versioning): all daily duties — מגן, חפק,
-התקפי, קצין מוצב, תורנים, חמל, מפלג — run **14:00–14:00**, so a daily mission
+**Boundary rule for daily missions**: all daily duties — מגן, חפק, התקפי,
+קצין מוצב, תורנים, חמל, מפלג — run **14:00–14:00**, so a daily mission
 occupies exactly its schedule day and blocks nothing the day after; nothing
-crosses the 14:00 boundary anymore. Days up to 18/07 keep their real
-06:00–22:00 מגן/חפק windows (imported history — the validator judges them by
-the templates that were in force). An assignment's counted hours still belong
-to the schedule day containing its start (relevant for history rows that did
-cross the boundary).
+crosses the 14:00 boundary. An assignment's counted hours belong to the
+schedule day containing its start (relevant only for imported history rows
+that did cross the boundary — §10).
 
 ## 3. Hard constraints (H — never violated)
 
 - **H1 Availability**: soldier with an active unavailability period (חופש, לא מגויס, short exits) can't be assigned during it. Partial-day periods (יציאה בערב, חזרה ב14:00) block only their window.
-  **Bus-at-08:00 semantics** (changed from 10:00, 2026-07-18; boundaries
-  before that date reflect what actually happened and stay at 10:00) for
-  whole-day home ranges in the roster matrix: a
-  departing soldier works until 08:00 of his first home day; a returnee is
-  available from 08:00 of his first present day, straight to a position — no
-  rest needed (rest is measured from his last actual shift, and home counts
-  as rest).
+  **Bus-boundary semantics** for whole-day home ranges in the roster matrix:
+  the boundary is **08:00 on Sunday** (the usual switching day) and **06:00
+  on every other day of the week** — a departing soldier works until the
+  boundary of his first home day; a returnee is available from the boundary
+  of his first present day, straight to a position — no rest needed (rest is
+  measured from his last actual shift, and home counts as rest). Boundaries
+  in old imported rows: §10.
   **Replacement pairs** (partial-day completion): a slot seat may be covered
   by TWO soldiers who replace each other mid-slot — a *departing* soldier
   available from the slot start until his unavailability begins, and an
   *arriving* soldier available once his unavailability ends. The handover is
-  the departing soldier's leave time (with bus-at-08:00 home blocks both
-  sides meet at 08:00; the arriver may be back earlier and simply waits).
+  the departing soldier's leave time (with bus-boundary home blocks both
+  sides meet exactly at the boundary; the arriver may be back earlier and
+  simply waits).
   This is a completion mechanism only, ranked like the pull-from-מנוחה path
   (after the primary candidate list and the מנוחה pull, before a בדוחק
   fallback): it runs only when no single fully-available candidate exists,
@@ -108,47 +97,48 @@ cross the boundary).
   to H6d required-driver seats — on mass-exchange days the departing soldier
   holds the row until the bus and the arriving one takes it from there (both
   halves must hold the driver qualification on a driver seat; readiness
-  halves stay rest-transparent, non-blocking rows). Owner decision
-  2026-07-19: this replaced the previous readiness/driver-seat exclusion —
-  a readiness seat left empty on an exchange day while a leaver+arriver pair
-  could cover it was a coverage hole, not a rest saving. Pairs are still NOT
-  applied to chained overlays (T4 has its own arrivals-preferred completion)
-  or staff_all_roles positions. Seat-rule positions get a restricted variant:
-  a pair may split a named seat only when BOTH members come from that seat's
-  own candidate list (see H6b) — never as a substitute from outside it. The
-  validator's slot-coverage check counts a split-covered seat as fully
-  staffed and still flags a partially-covered one (see §8).
-- **H2 Excluded pools**: מפלג / חמ"ל members not scheduled (flag on soldier).
+  halves stay rest-transparent, non-blocking rows; a readiness seat left
+  empty on an exchange day that a leaver+arriver pair could cover is a
+  coverage hole, not a rest saving). Pairs are NOT applied to chained
+  overlays (T4 has its own arrivals-preferred completion) or staff_all_roles
+  positions. Seat-rule positions get a restricted variant: a pair may split a
+  named seat only when BOTH members come from that seat's own candidate list
+  (see H6b) — never as a substitute from outside it. The validator's
+  slot-coverage check counts a split-covered seat as fully staffed and still
+  flags a partially-covered one (§8).
+- **H2 Schedulability flag**: a soldier with `is_schedulable=false` is
+  outside the system entirely — never loaded, never assigned (e.g. מפלג staff
+  marked לא מגיע on the sheet's מפלג tab). Contrast H6c role crews (חמל,
+  present מפלג staff), which ARE scheduled — into their own position only.
 - **H3 No overlap**: no two time-overlapping assignments per soldier — **no
   exceptions**: a soldier is either on an active mission or on כוננות, never
-  both (the former readiness↔attack exemption is removed). Enforced at
-  the DB level for mission rows (`no_double_booking` EXCLUDE constraint), in
-  the generator (`fits` rejects overlap with both mission and readiness
-  intervals), and by the validator (`overlap`, `readiness_overlap` — a
-  readiness row overlapping a mission row is an error; `blocks_overlap=false`
-  DB semantics are unchanged for historical imports).
+  both. Enforced at the DB level for mission rows (`no_double_booking`
+  EXCLUDE constraint), in the generator (`fits` rejects overlap with both
+  mission and readiness intervals), and by the validator (`overlap`,
+  `readiness_overlap` — a readiness row overlapping a mission row is an
+  error). Some imported history rows carry `blocks_overlap=false` day-duty
+  semantics (§10/§11).
 - **H3b No double standby**: a soldier cannot hold two overlapping readiness duties (e.g. התקפי and כרמל חטיבה simultaneously) — readiness rows don't block at the DB level, so this is enforced by the generator's chain pool and the validator (`double_readiness`).
 - **H4 One position per schedule day**: exactly one Level-1 position (or מנוחה) per soldier per 14:00–14:00 day.
-- **H5 Full-day blockers**: daily 14:00–14:00 duties (מגן, חפק, קצין מוצב, תורנים, מפלג) and the התקפי readiness day occupy the whole schedule day — no other regular mission that day (H4 covers the Level-1 side; H3 forbids any overlap, with no attack exemption).
+- **H5 Full-day blockers**: daily 14:00–14:00 duties (מגן, חפק, קצין מוצב, תורנים, מפלג) and the התקפי readiness day occupy the whole schedule day — no other regular mission that day (H4 covers the Level-1 side; H3 forbids any overlap).
 - **H6 Role gates**: first seat of **every סיור crew** and of the **התקפי
   crew** → מפקד (מ"מ/סמל/מ"כ/מ"ח) — hard, `commander_first_seat` on both
   templates. מ"מ/סמל never on עמדות הגנה. קצין מוצב is governed by H6-pool
-  below; the old סמל/מ"מ role gate remains **only as fallback** when no
-  candidate pool is configured for it.
+  below; only when no candidate pool is configured for a position does a
+  senior-commander (סמל/מ"מ) role gate apply to it as fallback.
 - **H6-pool Candidate-pool positions** (`candidate_pool` on the position
   config; currently קצין מוצב): the position is manned **ONLY** from its fixed
-  name list — שמואל אטלי, צבי שור, יוחאי יעקבסון, אורי שאג, אלעד זיו,
+  name list — שמואל אטלי, צבי שור, יוחאי יעקובסון, אורי שאג, אלעד זיו,
   אביאל גיאת, עמיחי ברוורמן, גלעד דביר. The list is **unordered** — the duty
   rotates among the members by fairness (P2–P6). **Non-exclusive** (unlike
   H6b): list members serve anywhere normally when not picked. **Staffed
-  first** (owner decision 2026-07-19): a closed-list position gets its pick
-  before any other reservation — including the מגן-commander reservation and
-  continuity — can consume a pool member (§7 Level-1 step 3); the persisted
-  מגן commander is picked from the pool only when no other member is
-  available, and מגן then emits a substitute-commander issue. Enforced through
-  every fill path (the same `allowedIn` whitelist mechanism as H6b/H6c) and
-  validated (`role_gate` error; imported history rows predate the rule and are
-  excused).
+  first**: a closed-list position gets its pick before any other
+  reservation — including the מגן-commander reservation and continuity — can
+  consume a pool member (§7 Level-1 step 3); the persisted מגן commander is
+  picked from the pool only when no other member is available, and מגן then
+  emits a substitute-commander issue. Enforced through every fill path (the
+  same `allowedIn` whitelist mechanism as H6b/H6c) and validated (`role_gate`
+  error; imported history rows predate the rule and are excused).
 - **H6b Named-seat positions** (`seat_rules` on the position config; currently חפק):
   each sub-position seat is filled only from its dedicated candidate list, in
   priority order —
@@ -164,8 +154,8 @@ cross the boundary).
   issue + validation warning is raised (never completed from מנוחה or בדוחק).
   **In-list pair handover**: when no single candidate covers the whole window
   but a departing candidate and an arriving candidate from the SAME list
-  together do, they split the seat at the handover (H1 pair semantics, bus at
-  08:00). Both come from the seat's own list, so "no substitutes" holds;
+  together do, they split the seat at the handover (H1 pair semantics, bus
+  boundary). Both come from the seat's own list, so "no substitutes" holds;
   ordered rules pick the pair by list priority, unordered by fairness. A
   single fully-available candidate always wins over a pair.
   **Exclusivity**: candidates (incl. role matches מ"פ/סמ"פ) serve ONLY in their
@@ -185,7 +175,7 @@ cross the boundary).
   same validator rule — no explicit `allowed_positions` row needed (an
   explicit row, when present, wins). H6c's column stays for genuine
   per-soldier cases.
-  Contrast: H2 `is_schedulable=false` = outside the system entirely (מפלג);
+  Contrast: H2 `is_schedulable=false` = outside the system entirely;
   H6b = must-serve in a dedicated seat; H6c (explicit or role-derived) =
   may-serve-only.
 - **H6d Crew drivers** (`driver_qual` on the position config): every **סיור**
@@ -195,10 +185,9 @@ cross the boundary).
   per distinct slot start) right after the commander quota; Level 2 reserves
   the seat right after the commander seat as a dedicated driver seat until the
   crew has one. Validated (`driver` rule, error; crews that are entirely
-  imported history are excused). The old soft P5 driver preferences remain as
+  imported history are excused). The soft P5 driver preferences remain as
   tie-breakers beyond the one required driver.
-- **H7 Crew integrity**: no duplicate soldier in a crew/slot. (The former
-  מגן package rule is obsolete: מגן is a standalone continuity crew.)
+- **H7 Crew integrity**: no duplicate soldier in a crew/slot.
 - **H8 Rest floor — absolute**: < 4h rest before a task → hard block. **Never
   a "בדוחק" fallback, no exceptions** — the only exemptions are the R5
   daily-duty full-rest rule, which is already folded into the rest gap, and
@@ -218,6 +207,22 @@ cross the boundary).
   standby (T4 completion). A seat-rule candidate (H6b) with an exit that day
   is skipped — the next candidate on the list takes the seat. Validated:
   `exit_window` / `exit_daily` errors (§8).
+  **Exception — מגן stickiness**: a member of a continuity crew
+  (`config.continuity` — מגן) whose yesterday Level-1 position was that crew
+  **stays on the crew** despite a half-day exit: he keeps the daily
+  14:00–14:00 row, his exit window does **not** block the crew's fill (the
+  `ignoreExitWindows` flag on `isBlocked`/`fits` exempts exit-window blocks —
+  real unavailability still blocks; all other positions keep the block), and
+  the מגן officer covers his absence internally (internal מגן shifts are
+  outside the generator's scope). A soldier leaves the crew only when he is
+  fully unavailable that day (full חופש), or when the crew exceeds the flex
+  minimum and he is needed elsewhere — decided ONLY at the Level-1 daily
+  partition (seats shrink → the fairness-ranked fewest members are reserved);
+  Level 2 never pulls a מגן member mid-day (pull-from-מנוחה and pair pools
+  filter on Level-1 membership). Rationale `exit_sticky_magen`; validated as
+  one `exit_magen` **warning** replacing the `exit_window`/`exit_daily`
+  errors (§8). A **fresh** (non-returning) soldier with an exit still cannot
+  join מגן.
 
 ## 4. Rest rules (R)
 
@@ -229,27 +234,26 @@ cross the boundary).
     day) is an **error**; 4–8h is a **warning** (a hard-8h error rule would
     flag every legal short-task pick the generation regime allows). R5-exempt
     14:00-boundary starts are skipped.
-  - **Daily-duty exception** (owner decision 2026-07-19): 4h rest **suffices**
-    before a daily 14:00–14:00 duty (`config.daily` — מגן/התקפי/תורנים/חפק/
-    קצין מוצב): the soldier sleeps inside the duty, so the 4–8h band produces
-    no long-task fallback, no generation warning, and no validation warning.
-    The < 4h hard block / error is unchanged.
+  - **Daily-duty exception**: 4h rest **suffices** before a daily 14:00–14:00
+    duty (`config.daily` — מגן/התקפי/תורנים/חפק/קצין מוצב): the soldier
+    sleeps inside the duty, so the 4–8h band produces no long-task fallback,
+    no generation warning, and no validation warning. The < 4h hard block /
+    error is unchanged.
 - **R2**: readiness (התקפי/כרמל/כונן גשש) is **rest-transparent** (assumed sleeping) and its hours are counted separately from mission hours.
-- **R3 כונן גשש — night window only** (owner decision 2026-07-18): a גשש
-  **night window** (22:00–07:00, i.e. any גשש row overlapping its schedule
-  day's 00:00–06:00) counts as `gashash_effective_hours` (tunable, default
-  1.5) of effective work instead of 9h: its **effective end = window start +
-  1.5h** (22:00 → 23:30) joins the rest-gap search in both the generator
-  (`restInfo`) and the validator, even though readiness is otherwise
-  rest-transparent (R2). Practical effect: a task starting 07:00 next morning
-  sees 7.5h rest (short-rest regime), not "fully rested since yesterday's
-  patrol". **Day windows (07–14, 14–22) count as no load at all** — they
-  contribute no effective-rest end AND no cumulative גשש-hours: the
-  `tracker_hours_total` counter (generator and `soldier_fairness` SQL alike)
-  accrues **only** night windows. Selection for the night window
-  prefers crew members who **slept the previous night** (no counted-night
-  assignment in [D 00:00, D 06:00]), then lowest cumulative tracker hours,
-  then fairness order (see T4c).
+- **R3 כונן גשש — night window only**: a גשש **night window** (22:00–07:00,
+  i.e. any גשש row overlapping its schedule day's 00:00–06:00) counts as
+  `gashash_effective_hours` (tunable, default 1.5) of effective work instead
+  of 9h: its **effective end = window start + 1.5h** (22:00 → 23:30) joins
+  the rest-gap search in both the generator (`restInfo`) and the validator,
+  even though readiness is otherwise rest-transparent (R2). Practical effect:
+  a task starting 07:00 next morning sees 7.5h rest (short-rest regime), not
+  "fully rested since yesterday's patrol". **Day windows (07–14, 14–22) count
+  as no load at all** — they contribute no effective-rest end AND no
+  cumulative גשש-hours: the `tracker_hours_total` counter (generator and
+  `soldier_fairness` SQL alike) accrues **only** night windows. Selection for
+  the night window prefers crew members who **slept the previous night** (no
+  counted-night assignment in [D 00:00, D 06:00]), then lowest cumulative
+  tracker hours, then fairness order (see T4c).
 - **R4 Daily cap**: ≤ 8 mission-hours per schedule day (readiness hours excluded). >8h = error; available soldier with 0 missions and not in מנוחה bucket = warning (`unassigned`); available soldier bucketed to מנוחה = warning (`rest_bucket`, everyone-works).
 - **R5 Post-daily-task rest**: finishing a **daily 14:00–14:00 task** — a
   position flagged `full_rest_after` in its config: **מגן, חפק, התקפי,
@@ -264,10 +268,11 @@ cross the boundary).
   fallback-only ("בדוחק") for longer tasks.
 - **R6 Consecutive nights**: a night assignment (non-readiness shift intersecting
   00:00–06:00) on two consecutive schedule days = warning; three or more = error.
-  `night_exempt` 24h duties (מגן, חפק, תורנים, קצין מוצב — the soldier sleeps)
-  span the night window but do **not** count as nights, matching the P2
-  fairness exemption. Validated post-hoc (`consecutive_nights`) over a 7-day
-  lookback.
+  In generation, a pick that would create a 3rd consecutive night is
+  **fallback-only** (בדוחק). `night_exempt` 24h duties (מגן, חפק, תורנים,
+  קצין מוצב — the soldier sleeps) span the night window but do **not** count
+  as nights, matching the P2 fairness exemption. Validated post-hoc
+  (`consecutive_nights`) over a 7-day lookback.
 - **R7 Exit-day rest relaxation**: on a half-day-exit day (H9), the exit
   soldier's rest is honored when possible; when the remaining window doesn't
   allow it, his shifts may be packed **back-to-back with zero rest** as a
@@ -290,10 +295,9 @@ cross the boundary).
   rotate purely by fairness).
 - **T3**: 2+ consecutive static-only days → must break with a dynamic day (strong).
   Post-hoc: a 3rd consecutive static-only day is reported as a warning
-  (`static_streak`). **Priority reversal** (owner decision 2026-07-18): a
-  constant static position is WORSE than repeated nights — the T3
-  streak-rotation key (and T6 below) ranks **above** fewest-nights (P2) in the
-  priority list (§6.1).
+  (`static_streak`). **Priority**: a constant static position is WORSE than
+  repeated nights — the T3 streak-rotation key (and T6 below) ranks **above**
+  fewest-nights (P2) in the priority list (§6.1).
 - **T6 On-call streak (soft)**: avoid a 3rd consecutive day in which a soldier
   has ONLY static posts + כוננות (התקפי/כרמל) — constant on-call. Ranking
   demotion placed above night fairness like T3 (a candidate with a 2-day
@@ -301,8 +305,8 @@ cross the boundary).
   validator warning (`oncall_streak`).
 - **T4 Chained duties** — deterministic staffing; the crew that just descended covers the standby:
   - **T4a כרמל חטיבה**: carmel shift starting at hour H = the 4 soldiers who finished עמדות הגנה at H, on the same 6×4h grid (defense 06–10 → carmel 10–14, …, 18–22 → carmel 22–02, 22–02 → carmel 02–06; previous day 10–14 → carmel 14–18). Commander seat: prefer a **real מפקד** (מ"מ/סמל/מ"כ/מ"ח) from the descending crew; only when none exists take the **highest רובאי** among them. Min staffing 3 regular + 1 commander (validated).
-  - **T4b כוננות התקפית** — *retired*: the התקפי position is a standing Level-1
-    crew (8 soldiers, 14:00–14:00) rather than patrol-chained windows; ad-hoc
+  - **T4b** — there is no התקפי chain: התקפי is a standing Level-1 crew
+    (8 soldiers, 14:00–14:00) rather than patrol-chained windows; ad-hoc
     attack missions are separate rows that replace/trim the readiness (H3).
   - **T4c כונן גשש**: tied to סיור descents, **one soldier per descending patrol crew**:
     - סיור ירד ב-22:00 → כונן גשש 22:00–07:00
@@ -314,16 +318,16 @@ cross the boundary).
       fairness order. Tracker time counts as readiness hours; the cumulative
       tracker counter accrues **only night windows** — day windows are free
       (R3).
-  - **T4 completion** (owner rule, 2026-07-18): when descending crew members
-    cannot hold the standby (went home, otherwise booked, restricted), the
-    chain is **completed with fresh soldiers** instead of staying short —
-    preferring soldiers who just **arrived** back on base (a home block ending
-    within the 24h before the window), then anyone available, in fairness
-    order. Source members always take priority; completions only top up the
-    gap. Completion rows carry a `chain_completion` rationale; the validator
-    reports an out-of-crew standby as a **warning** when it covers a genuine
-    shortfall, and as an **error** when an available source member was left
-    unused or the outsider is redundant on a fully-covered window (§8).
+  - **T4 completion**: when descending crew members cannot hold the standby
+    (went home, otherwise booked, restricted), the chain is **completed with
+    fresh soldiers** instead of staying short — preferring soldiers who just
+    **arrived** back on base (a home block ending within the 24h before the
+    window), then anyone available, in fairness order. Source members always
+    take priority; completions only top up the gap. Completion rows carry a
+    `chain_completion` rationale; the validator reports an out-of-crew
+    standby as a **warning** when it covers a genuine shortfall, and as an
+    **error** when an available source member was left unused or the outsider
+    is redundant on a fully-covered window (§8).
 - **T5 תורנות שבועית (soft)**: at most one תורנות per soldier per rolling 7
   days. A **ranking preference, not a hard block**: when ranking candidates
   for תורנים, anyone with a תורנות in the last 7 days sorts after everyone
@@ -337,13 +341,13 @@ cross the boundary).
 
 When choosing soldiers for a position/slot, candidates are ordered by a
 lexicographic key tuple; an earlier key decides unless it ties, then the next
-key breaks the tie. The exact key order (`rank.ts key()`), reflecting the
-2026-07-18 priority reversal — static-streak/on-call rotation ABOVE night
-fairness:
+key breaks the tie. The exact key order (`rank.ts key()`); streak rotation
+(T3/T6) deliberately ranks above night fairness (P2) — a constant static or
+on-call position is worse than repeated nights:
 
 | # | Key | Window |
 |---|---|---|
-| 1 | Hard constraints H1–H8 (filter, eliminates — P1) | — |
+| 1 | Hard constraints H1–H9 (filter, eliminates — P1) | — |
 | 2 | R1 quasi-constraint: candidates with a full 8h rest before the slot start sort before all others | — |
 | 3 | T5 demotion (תורנים only): anyone with a תורנות in the last 7 days sorts after everyone without one | rolling 7 days |
 | 4 | **T3 (above P2)**: on a 2+ static-only-day streak, demoted for another static slot / promoted for a dynamic (streak-breaking) one | streak |
@@ -367,8 +371,7 @@ preferably from his own מחלקה).
 There is no scoring fallback: the priority list (with its deterministic
 Hebrew-name final tie-break) plus the explicit completion flow (pull from
 מנוחה → H1 replacement pair → flagged "בדוחק" fallback) IS the selection
-mechanism. (The former §6.2 compact-scoring table — engine v2.6 weights —
-was never implemented and was removed by owner decision, 2026-07-17.)
+mechanism.
 
 ### 6.2 Level-1 position balance (across-position fairness)
 
@@ -382,14 +385,13 @@ night_count first, weighted_hours second, per-position counts third.
   positions, in this order:
   1. honor Level-1 **locks**;
   2. **H6b seat-rule pre-pass** (חפק) and **staff_all_roles crews** (חמל, מפלג);
-  3. **closed-list pre-pass** (owner decision 2026-07-19): every
-     `candidate_pool` position (H6-pool — קצין מוצב) is staffed now, from its
-     fixed list only, by the pool's fairness rotation — BEFORE the
-     מגן-commander reservation, continuity, or any later fill can consume a
-     pool member (the list is small and has no substitutes, so its pick
-     always wins). The persisted `magen_commander` is taken from the pool
-     only as a **last resort** — when another member can hold the seat, מגן
-     keeps its commander; rationale `candidate_pool`;
+  3. **closed-list pre-pass**: every `candidate_pool` position (H6-pool —
+     קצין מוצב) is staffed now, from its fixed list only, by the pool's
+     fairness rotation — BEFORE the מגן-commander reservation, continuity, or
+     any later fill can consume a pool member (the list is small and has no
+     substitutes, so its pick always wins). The persisted `magen_commander`
+     is taken from the pool only as a **last resort** — when another member
+     can hold the seat, מגן keeps its commander; rationale `candidate_pool`;
   4. **flex sizing** (everyone-works): מגן seats = the free pool minus the
      other positions' demand, clamped to the flex range (10–12; a manual seat
      override may raise the max); on shortage, flex positions (סיור) shrink
@@ -401,9 +403,14 @@ night_count first, weighted_hours second, per-position counts third.
      took him (he was the only available pool member), מגן falls back with a
      generation issue — `מגן: המפקד המוגדר X שובץ לקצין מוצב — נדרש מפקד מגן
      חלופי` — so the officer names a substitute;
-  6. **continuity pre-pass** (מגן): returning crew members reserved;
+  6. **continuity pre-pass** (מגן): returning crew members reserved —
+     including a returning member with a half-day exit (H9 מגן stickiness:
+     his exit window is ignored for the crew's availability check; real
+     unavailability still drops him). Because this runs BEFORE step 7 and
+     the exit pre-pass skips soldiers already placed, a sticky member never
+     reaches the exit shift-fill;
   7. **half-day-exit pre-pass** (H9): every exit-day soldier not already
-     placed by a lock or seat rule is assigned a **shift position**
+     placed by a lock, seat rule or continuity is assigned a **shift position**
      (`isShiftPosition` — non-daily, non-readiness) with at least one slot
      outside his exit window — preferring unmet demand, then packing
      feasibility (most available non-overlapping slots outside the window),
@@ -411,10 +418,11 @@ night_count first, weighted_hours second, per-position counts third.
      position → generation issue, and the soldier falls through to the
      normal flow;
   8. demand-driven fill in a fixed order (קצין מוצב → סיור → התקפי → מגן →
-     עמדות הגנה), in **two passes**: pass A reserves the HARD role needs for
-     ALL positions first — per position the **commander quota** (one per
-     commander-first slot start; התקפי: one per `group_size` group = 2) and
-     the **H6d driver quota** (one qualified driver per distinct slot
+     עמדות הגנה → תורנים; seat-rule and staff positions were already staffed
+     by their pre-passes), in **two passes**: pass A reserves the HARD role
+     needs for ALL positions first — per position the **commander quota**
+     (one per commander-first slot start; התקפי: one per `group_size` group =
+     2) and the **H6d driver quota** (one qualified driver per distinct slot
      start) — so an earlier position's general fill can never starve a later
      position of its required commanders/drivers (the קצין מוצב
      `candidate_pool` demand is reserved even earlier, in step 3);
@@ -433,7 +441,9 @@ night_count first, weighted_hours second, per-position counts third.
   keeping the group's few commanders available for the remaining commander
   seats (soft — when only commanders fit, one is still taken). An **exit
   packing pre-pass** (H9/R7) runs before the general ranked fill: each exit
-  soldier gets 1–2 non-overlapping shifts in his Level-1 position packed
+  soldier — except a sticky continuity member (H9 מגן stickiness: he holds
+  the daily row itself, nothing to pack) — gets 1–2 non-overlapping shifts
+  in his Level-1 position packed
   **outside his exit window**, up to the daily cap (normally 8h = two
   shifts), scored lexicographically — most hours, then fewest rest
   violations (a fully rest-legal pair beats a בדוחק one), then fewest short
@@ -454,46 +464,88 @@ night_count first, weighted_hours second, per-position counts third.
 
 ## 8. Validation (post-generation & on manual edit)
 
-Checks per day (parity with the Apps Script validator): rest gaps (R1: < 4h =
-error, 4–8h = warning, incl. previous day;
-R5-exempt starts — at/after 14:00 of the day following a `full_rest_after` daily
-task — are not flagged; a תורנים→14:00 immediate start is), overlaps (incl.
-`readiness_overlap` — a readiness row overlapping a mission row, H3 strict), double
-standby (H3b), chained-duty sourcing (carmel/tracker crews match their source
-shifts; an out-of-crew soldier covering a genuine shortfall of an
-absent/booked crew is a completion **warning**, but is an **error** when an
-available source member was left unused or the window was already fully
-covered — T4 completion), carmel min staffing, ≤8h/day, assignment vs availability,
-present-but-unassigned, **rest-bucket** (`rest_bucket`, warning: an available
-soldier bucketed to מנוחה — everyone works), unknown soldier names,
-consecutive nights (R6: 2 = warning,
-3+ = error; `night_exempt` duties excluded), static streak (T3: 3rd static-only day
-= warning), **on-call streak** (T6: 3rd consecutive static+readiness-only day =
-warning `oncall_streak`), weekly תורנות repeats (T5: 2+ תורנות days within 7 days = warning
-`second_toranut_week`), seat qualification (H6b `qual` mismatch = warning
-`seat_qualification`), H6/H6-pool role gates (`role_gate`, errors: a
-candidate-pool position manned outside its list — import rows excused;
-non-senior on קצין מוצב when no pool is configured, senior commander on
-עמדות הגנה, a commander seat held by a
-non-commander, a commander-first-seat slot with no commander-seat row —
-import-only coverage excused), **crew drivers** (H6d: a סיור/התקפי crew with
-no qualified נהג דוד/נהג טיגריס = error `driver`; all-import crews excused),
-R3 גשש effective rest (night windows only — see R3), **half-day exits**
-(H9/R7 — `exit_window`, error: any row, mission or readiness, any source,
-overlapping the soldier's exit window; `exit_daily`, error: the exit soldier
-holding a daily/readiness row that day, judged by the shared shift-position
-predicate; `exit_rest`, warning: a <4h gap attributable to the exit day —
-either endpoint's schedule day carries an exit — replaces the `rest` error
-for the exit soldier; the 4–8h warning path is unchanged). Slot coverage counts the **minimum concurrent**
-assignment rows over each slot window, so a seat covered by an H1 replacement pair
-(two rows splitting at the handover) is fully staffed, while a partially-covered
-seat is flagged; for flex positions (`flex_seats` — מגן, סיור) coverage is
-judged against the flex **minimum**, not the template seat count. Results snapshot stored on
-`schedule_days.validation` (jsonb) — written automatically after every generation
-(`persist`) and available via CLI `validate <day>`. The viewer endpoints
-(`api/draft.ts`, `api/fairness.ts`) do NOT read the snapshot — they run
-`validateDay` live per requested day, since manual edits make the stored
-snapshot stale; the snapshot remains a generation-time record.
+`validateDay` checks one schedule day and returns findings — each an **error**
+or **warning** tagged with a rule key:
+
+- `rest` — R1 gaps between timed blocking shifts (incl. vs the previous day):
+  < 4h = error, 4–8h = warning. R5-exempt starts — at/after 14:00 of the day
+  following a `full_rest_after` daily task — are not flagged; a תורנים→14:00
+  immediate start is. No 4–8h warning before a `daily` duty (R1 daily
+  exception). R3 גשש effective-rest ends join the gap search (night windows
+  only — R3).
+- `overlap` — two overlapping blocking assignments (H3): error.
+- `readiness_overlap` — a readiness row overlapping a mission row (H3
+  strict): error.
+- `double_readiness` — two different overlapping standbys (H3b): error.
+- `chain` — chained-duty sourcing (T4): carmel/tracker crews must match their
+  source shifts. An out-of-crew soldier covering a genuine shortfall of an
+  absent/booked/restricted crew is a completion **warning**; it is an
+  **error** when an available source member was left unused or the window was
+  already fully covered (T4 completion). A missing source crew is a warning.
+- `carmel_staffing` — כרמל חטיבה below 3 regulars + 1 commander per start:
+  error.
+- `daily_cap` — more than 8 counted mission-hours per schedule day (R4,
+  readiness excluded): error.
+- `availability` — an assignment overlapping an unavailability period (H1):
+  error.
+- `exit_window` / `exit_daily` / `exit_magen` / `exit_rest` — H9/R7, see
+  below.
+- `unassigned` — an available soldier with no daily assignment: warning
+  (impossible by construction for generated days — Level 1 buckets everyone;
+  the check covers manual edits and imports).
+- `rest_bucket` — an available soldier bucketed to מנוחה: warning (everyone
+  works). Unchosen candidates of a non-release seat rule are excused — they
+  rest by design (H6b).
+- `unknown_soldier` — an assignment to an unknown soldier (error) or to one
+  marked not-schedulable (warning).
+- `seat_rules` — H6b: an unmanned seat (warning); an occupant outside the
+  seat's candidate list, a reserved candidate serving elsewhere (unless
+  released or blocked for the seat window), or a commander-rule seat without
+  the commander-seat mark (errors).
+- `seat_qualification` — H6b `qual` mismatch: warning (never blocks the seat).
+- `coverage` — a slot staffed below its required seats: error. Coverage
+  counts the **minimum concurrent** assignment rows over the slot window, so
+  a seat covered by an H1 replacement pair (two rows splitting at the
+  handover) is fully staffed while a partially-covered one is flagged; flex
+  positions (`flex_seats` — מגן, סיור) are judged against the flex
+  **minimum**, not the template seat count; `staff_all_roles` positions are
+  skipped (variable crew — seats is a cap, not demand).
+- `allowed_positions` — H6c whitelist (explicit or staff_all_roles-derived)
+  violated: error.
+- `role_gate` — H6/H6-pool errors: a candidate-pool position manned outside
+  its list (import rows excused); a non-senior on קצין מוצב when no pool is
+  configured; a senior commander on עמדות הגנה; a commander seat held by a
+  non-commander; a commander-first-seat slot with no commander-seat row
+  (slots covered only by import rows are excused — imports carry no seat
+  metadata).
+- `driver` — H6d: a סיור/התקפי crew with no qualified נהג דוד/נהג טיגריס:
+  error (all-import crews excused).
+- `consecutive_nights` — R6 over a 7-day lookback: 2 nights in a row =
+  warning, 3+ = error (`night_exempt` duties excluded).
+- `static_streak` — T3: a 3rd consecutive static-only day: warning.
+- `sub_rotation` — P4b: the same static sub-position twice within one
+  schedule day: warning (import rows excluded).
+- `oncall_streak` — T6: a 3rd consecutive static+readiness-only day: warning.
+- `second_toranut_week` — T5: 2+ תורנות days within 7 days: warning.
+
+**H9/R7 exit findings**: `exit_window` (error) — any row, mission or
+readiness, any source, overlapping the soldier's exit window; `exit_daily`
+(error) — the exit soldier holding a daily/readiness row that day, judged by
+the shared shift-position predicate. **Exception — מגן stickiness**: a
+continuity-position row of a returning crew member — he held a row of the
+same continuity position yesterday — downgrades both errors to ONE
+`exit_magen` **warning** (`X במגן עם יציאה קצרה — באחריות מפקד המגן`); a
+fresh soldier on מגן with an exit keeps the errors. `exit_rest` (warning) —
+a < 4h gap attributable to the exit day (either endpoint's schedule day
+carries an exit) replaces the `rest` error for the exit soldier; the 4–8h
+warning path is unchanged.
+
+Results snapshot stored on `schedule_days.validation` (jsonb) — written
+automatically after every generation (`persist`) and available via CLI
+`validate <day>`. The viewer endpoints (`api/draft.ts`, `api/fairness.ts`) do
+NOT read the snapshot — they run `validateDay` live per requested day, since
+manual edits make the stored snapshot stale; the snapshot remains a
+generation-time record.
 
 ## 9. Database design
 
@@ -543,12 +595,12 @@ Principles:
 ### Import (one-time, from the sheet)
 
 - `מצבת החיילים` → `soldiers`; date-status matrix compressed into `unavailability`
-  periods (consecutive non-נוכח runs → one row), with **bus-at-08:00**
-  boundaries for whole-day home ranges (H1; boundaries created before
-  2026-07-18 keep their historical 10:00).
+  periods (consecutive non-נוכח runs → one row), with **bus-boundary** times
+  for whole-day home ranges per H1 (Sunday 08:00 / other days 06:00; old
+  imported boundaries — §10).
 - The **מפלג tab's סטטוס** (מגיע/לא מגיע) syncs to the soldier's schedulable
-  flag (`is_schedulable`) — e.g. בנימין קיי (לא מגיע) is not schedulable;
-  present מפלג staff appear daily in the מפלג position (§2).
+  flag (`is_schedulable`) — e.g. a לא-מגיע staff member is not schedulable
+  (H2); present מפלג staff appear daily in the מפלג position (§2).
 - `הסמכות` + roster hints → `soldier_qualifications`.
 - `כל השבצק` (~1,870 rows) → `shift_assignments` (source='import') — seeds fairness
   counters with real accumulated load.
@@ -561,24 +613,26 @@ On day approval: append that day's `shift_assignments` to `כל השבצק`
 (תאריך/העמדה/סוג/השעה/החייל) via the existing service-account key. Viewer app + old
 validator keep working. Optional: render the daily שבצק-tab layout.
 
-## 10. Open items
+## 10. Historical data notes
 
-- ~~Daily missions vs 14:00 anchor~~ — **resolved (2026-07-17, effective
-  2026-07-19)**: daily missions re-anchored to 14:00–14:00 windows (מגן and חפק
-  moved from 06:00–22:00, via template versioning so history days keep their
-  real windows); every duty nests cleanly inside one schedule day and the former
-  tail/boundary handling is obsolete (§2 boundary rule rewritten accordingly).
-- Night 00–06 replaces the engine's 22–06 in all counters — historical comparisons
-  will differ slightly.
-- מנוחה is an explicit Level-1 bucket (present-but-unassigned becomes impossible by
-  construction; validator check remains as a safety net). Since the 2026-07-18
-  everyone-works rule it is a **residual exception**, not a planned outcome —
-  an available soldier landing there is itself flagged (`rest_bucket`).
-- History data quality: import dry-run found **50 genuinely overlapping rows** in
-  כל השבצק (mostly יומי + timed shift, same soldier, same day). Decide per row on
-  real import: drop, trim, or mark `blocks_overlap=false`.
+Imported history rows (`source='import'`) predate several current rules; the
+stored rows are **data facts** and are not rewritten:
 
-## 11. Import data-quality decisions (resolved)
+- **Daily-mission windows**: days up to 2026-07-18 keep their real
+  06:00–22:00 מגן/חפק windows (`slot_templates` versioning — the validator
+  judges each day by the templates in force on it). From 2026-07-19 all daily
+  duties are 14:00–14:00 (§2). Counted hours of a boundary-crossing history
+  row belong to the schedule day containing its start.
+- **Bus boundaries**: `unavailability` rows imported before 2026-07-18 carry
+  the 10:00 bus boundary that was in force then. Later rows follow the
+  current rule (Sunday 08:00 / other days 06:00 — H1).
+- **Night window**: all counters use 00:00–06:00; the old Apps Script engine
+  counted 22:00–06:00, so historical fairness comparisons differ slightly.
+- **Validator excusals**: import rows are excused from rules that postdate
+  them — the H6-pool role gate, commander-seat coverage (when every covering
+  row is an import), H6d drivers (all-import crews), and P4b sub-rotation.
+
+## 11. Import data-quality decisions
 
 - The 50 genuinely-overlapping history rows (יומי mission alongside a timed shift,
   same soldier, same day) are imported with `blocks_overlap=false` — day-duty

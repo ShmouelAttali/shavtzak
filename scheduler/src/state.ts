@@ -56,8 +56,31 @@ export interface Gen {
 export const countedHours = (g: Gen, p: [Minutes, Minutes]): number =>
   Math.min(hours(p), g.ctx.tunables.dailyCapH);
 
-export const isBlocked = (g: Gen, sid: number, p: [Minutes, Minutes]): boolean =>
-  (g.ctx.blocked.get(sid) ?? []).some((b) => overlaps(b, p));
+/** Is this blocked interval an H9 exit window (vs. real unavailability)?
+ *  Exit windows are appended verbatim to ctx.blocked in load.ts, so value
+ *  equality against ctx.exits distinguishes the two sources. */
+const isExitWindow = (g: Gen, sid: number, b: [Minutes, Minutes]): boolean =>
+  (g.ctx.exits.get(sid) ?? []).some((e) => e[0] === b[0] && e[1] === b[1]);
+
+/** `ignoreExitWindows` (H9 מגן stickiness, owner 2026-07-19): a continuity
+ *  crew member keeps his daily 14:00–14:00 row despite a half-day exit — the
+ *  crew's fill checks his availability ignoring exit-window blocks (real
+ *  unavailability still blocks). Every other path keeps the default (false),
+ *  so the exit window stays blocked for non-continuity assignments. */
+export const isBlocked = (g: Gen, sid: number, p: [Minutes, Minutes],
+                          ignoreExitWindows = false): boolean =>
+  (g.ctx.blocked.get(sid) ?? []).some((b) => overlaps(b, p)
+    && !(ignoreExitWindows && isExitWindow(g, sid, b)));
+
+/** H9 מגן stickiness (owner decision 2026-07-19): a member of a continuity
+ *  crew (his yesterday Level-1 position IS the continuity position) STAYS on
+ *  the crew's daily row despite a half-day exit — the position's officer
+ *  manages the absence internally (internal shifts are outside the
+ *  generator's scope). Gates both the allowedIn H9 carve-out and the
+ *  exit-window block exemption in fits(). */
+export const stickyContinuity = (g: Gen, sid: number, pid: number): boolean =>
+  !!g.ctx.positions.get(pid)?.config?.continuity
+  && g.ctx.yesterdayPosition.get(sid) === pid;
 
 export const fullyBlocked = (g: Gen, sid: number): boolean => isBlocked(g, sid, g.dRange) &&
   (g.ctx.blocked.get(sid) ?? []).some((b) => b[0] <= g.dRange[0] && b[1] >= g.dRange[1]);
@@ -81,9 +104,13 @@ export const allowedIn = (g: Gen, s: Soldier, posName: string): boolean => {
   // H9 half-day exit: on his exit day a soldier takes no daily 14:00–14:00
   // duty and no readiness/on-call row (someone else covers the chain) —
   // enforced here so every fill path (levels, pairs, chains) honors it.
+  // Carve-out (owner 2026-07-19): a continuity crew member returning to HIS
+  // continuity position (מגן stickiness) keeps the daily row despite the
+  // exit — the מגן officer manages the absence internally.
   if (g.ctx.exits.has(s.id)) {
     const pos = pid !== undefined ? g.ctx.positions.get(pid) : undefined;
-    if (pos && !isShiftPosition(pos)) return false;
+    if (pos && !isShiftPosition(pos)
+      && !(pid !== undefined && stickyContinuity(g, s.id, pid))) return false;
   }
   // H6 role gate: מ"מ/סמל never man עמדות הגנה — enforced here so the Level-2
   // pull-from-מנוחה and pair paths can't bypass Level 1's eligibility filter

@@ -37,7 +37,8 @@ export function partialWindow(blocks: [Minutes, Minutes][], p: [Minutes, Minutes
  * Level-2 H1 replacement pair: a departing soldier (available from the slot
  * start until his unavailability begins) and an arriving one (available once
  * his unavailability ends) split the seat at the handover — the departing
- * soldier's leave time (bus-at-08:00 semantics: both blocks meet at 08:00).
+ * soldier's leave time (bus-boundary semantics — Sunday 08:00, other days
+ * 06:00: both blocks meet exactly at the boundary).
  * Completion mechanism only, like the pull-from-מנוחה path: runs when no
  * single fully-available candidate exists, and both halves must pass every
  * other hard rule cleanly (rest floor, daily cap, role gates, whitelists — no

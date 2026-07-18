@@ -20,6 +20,8 @@ export type RationaleCode =
   | 'no_prior'              // no earlier shift nearby — fully rested
   | 'fewest_nights'         // at/below the candidate group's night median (P2)
   | 'low_load'              // at/below the candidate group's load median (P3)
+  | 'position_balance'      // at/below the group's median count for THIS position (P4)
+  | 'fairness_pick'         // ranked fill with no dominant comparative key
   | 'commander_seat'        // seat requires a commander
   | 'pulled_from_rest'      // completed from the מנוחה pool
   | 'seat_rule'             // dedicated-candidate seat (H6b, e.g. חפק)
@@ -36,6 +38,7 @@ export type RationaleCode =
   | 'no_rest_fill'          // everyone works: leftover soldier joins מגן
   | 'exit_shift_fill'       // H9: exit-day soldier placed in a shift position
   | 'exit_packed'           // H9: shift packed outside the exit window
+  | 'exit_sticky_magen'     // H9 מגן stickiness: continuity member keeps the daily row despite the exit
   // caveats (⚠)
   | 'caveat_rest_lt4'       // בדוחק: under the 4h hard rest floor
   | 'caveat_rest_lt8_long'  // בדוחק: under 8h rest before a long task
@@ -65,6 +68,8 @@ export const TEMPLATES: Record<RationaleCode, string> = {
   no_prior: 'ללא משמרת קודמת סמוכה — מנוחה מלאה',
   fewest_nights: 'מהמעוטים בלילות בקבוצה: {nights} לילות בשבוע האחרון (חציון הקבוצה: {median})',
   low_load: 'עומס שבועי נמוך בקבוצה: {hours} שעות משוקללות (חציון הקבוצה: {median})',
+  position_balance: 'שירת בעמדה זו הכי מעט פעמים בקבוצה: {count} פעמים (חציון הקבוצה: {median})',
+  fairness_pick: 'נבחר לפי סדר העדיפויות: מנוחה מלאה → שבירת רצפים → מיעוט לילות → עומס נמוך → איזון עמדות',
   commander_seat: 'מושב מפקד — נדרש מפקד למשמרת זו',
   pulled_from_rest: 'הושלם ממנוחה — לא נותר מועמד פנוי בקבוצת העמדה',
   seat_rule: 'מושב {seat} ב{position} — מועמד ייעודי (עדיפות {priority} ברשימה)',
@@ -81,6 +86,7 @@ export const TEMPLATES: Record<RationaleCode, string> = {
   no_rest_fill: 'צורף ל{position} — כל חייל זמין משובץ (אין מנוחה)',
   exit_shift_fill: 'שובץ ל{position} ביום יציאה קצרה — עמדת משמרות בלבד (ללא משימה יומית/כוננות)',
   exit_packed: 'משמרת מרוכזת מחוץ לחלון היציאה ({from}–{to})',
+  exit_sticky_magen: 'נשאר בצוות המגן למרות יציאה קצרה — היציאה באחריות מפקד המגן',
   caveat_rest_lt4: 'פחות מ-4 שעות מנוחה לפני המשמרת',
   caveat_rest_lt8_long: 'פחות מ-8 שעות מנוחה לפני משימה ארוכה',
   caveat_short_rest: 'מנוחה קצרה: {restH} שעות בלבד',
