@@ -598,9 +598,18 @@ React viewer:
   with a ביטול action. **Once a day's שבצ"ק exists, both creating and
   cancelling a request touching it are blocked** (409) — a late change goes
   through an officer, who deletes the request row and regenerates the day.
+- **ניהול יציאות** — officer-only (shavtzak_admins-gated, like the draft tab)
+  admin view over `exit_requests`: the draft tab's date-range picker, a table
+  of every soldier's requests in the range, and add/edit/delete for any
+  soldier. Admin times are **free-form** (not limited to shift boundaries —
+  the DB period always was), the ≥8h-per-cycle rule still applies, and the
+  generated-day freeze is **bypassed with a warning** instead of a block: the
+  request is saved/removed and the UI flags that the affected day's שבצ"ק
+  must be regenerated for it to take effect.
 
 Data flows through three Vercel serverless endpoints (`api/draft.ts`,
 `api/fairness.ts`, and `api/exit-requests.ts` — GET list / POST create /
-DELETE cancel over `exit_requests`)
+PATCH edit / DELETE cancel over `exit_requests`; admin mutations are
+parameter-gated, free-form-time variants of the same handlers)
 reading the scheduler DB via `SCHEDULER_DATABASE_URL`; endpoints are open like the
 existing sheet endpoints (no server-side auth) per current app security model.

@@ -11,6 +11,7 @@ import { Shavtzak } from './components/Shavtzak';
 import { DraftSchedule } from './components/DraftSchedule';
 import { FairnessView } from './components/FairnessView';
 import { ExitRequests } from './components/ExitRequests';
+import { AdminExits } from './components/AdminExits';
 
 const COMPANY_ROLES = new Set(['מ"פ', 'סמ"פ', 'מ"מ', 'סמל', 'מ"כ']);
 
@@ -24,6 +25,7 @@ const TABS: { id: TabId; label: string; restricted?: 'company' | 'scheduler' }[]
   { id: 'exitreq',   label: 'יציאה קצרה' },
   { id: 'draft',     label: 'שבצק חדש (טיוטה)', restricted: 'scheduler' },
   { id: 'fairness',  label: 'הוגנות', restricted: 'scheduler' },
+  { id: 'exitadmin', label: 'ניהול יציאות', restricted: 'scheduler' },
 ];
 
 const APP_VERSION = '1.0.1';
@@ -62,7 +64,7 @@ function AppContent({ data }: { data: SheetData }) {
   // If a restricted tab becomes inaccessible, fall back to personal
   useEffect(() => {
     if (activeTab === 'company' && !canSeeCompany) setActiveTab('personal');
-    if (['draft', 'fairness'].includes(activeTab) && !canSeeScheduler) setActiveTab('personal');
+    if (['draft', 'fairness', 'exitadmin'].includes(activeTab) && !canSeeScheduler) setActiveTab('personal');
   }, [activeTab, canSeeCompany, canSeeScheduler]);
   const { data: shavtzakAll, loading: shavtzakLoading, error: shavtzakError, reload: reloadShavtzak } = useShavtzak();
 
@@ -133,6 +135,7 @@ function AppContent({ data }: { data: SheetData }) {
         {activeTab === 'draft' && <DraftSchedule soldiers={data.soldiers} mySoldierName={mySoldierName} />}
         {activeTab === 'fairness' && <FairnessView />}
         {activeTab === 'exitreq' && <ExitRequests soldierName={mySoldierName} email={myEmail} />}
+        {activeTab === 'exitadmin' && <AdminExits soldiers={data.soldiers} email={myEmail} />}
       </main>
     </div>
   );

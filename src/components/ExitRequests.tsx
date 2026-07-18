@@ -1,27 +1,7 @@
 import { useState } from 'react';
-import { FROM_TIMES, TO_TIMES } from '../../api/exit-requests';
+import { FROM_TIMES, TO_TIMES } from '../constants/exitRequests';
 import { useExitRequests } from '../hooks/useExitRequests';
-
-// ── date helpers (YYYY-MM-DD, local) ────────────────────────────────────────
-function todayIso(): string {
-  const d = new Date();
-  const pad = (n: number) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-}
-function heDate(iso: string): string {
-  const [y, m, d] = iso.split('-');
-  return `${d}/${m}/${y}`;
-}
-
-// Offsets in hours from the 14:00 schedule-day start.
-const START_OFFSET: Record<string, number> = {
-  '14:00': 0, '18:00': 4, '22:00': 8, '02:00': 12, '06:00': 16,
-};
-const fromOffset = (t: string) => START_OFFSET[t] ?? 0;
-// As a return time, 14:00 means the end of the schedule day (next day 14:00).
-const toOffset = (t: string) => (t === '14:00' ? 24 : START_OFFSET[t] ?? 0);
-// Offsets ≥ 12 fall past midnight — on the next calendar day.
-const timeLabel = (t: string, offset: number) => (offset >= 12 ? `${t} (למחרת)` : t);
+import { ExitWindowPicker, ExitWindowSummary, windowInfo, todayIso, heDate } from './ExitWindowPicker';
 
 export function ExitRequests({ soldierName, email }: { soldierName: string; email: string }) {
   const { requests, loading, error, add, remove } = useExitRequests(soldierName, email);
@@ -42,17 +22,7 @@ export function ExitRequests({ soldierName, email }: { soldierName: string; emai
     );
   }
 
-  const validTos: string[] = TO_TIMES.filter((t: string) => toOffset(t) > fromOffset(from));
-  const effectiveTo = validTos.includes(to) ? to : validTos[0];
-  const hoursOut = toOffset(effectiveTo) - fromOffset(from);
-  const hoursLeft = 24 - hoursOut;
-  const tooLong = hoursOut > 16;
-
-  const onFromChange = (v: string) => {
-    setFrom(v);
-    const stillValid: string[] = TO_TIMES.filter((t: string) => toOffset(t) > fromOffset(v));
-    if (!stillValid.includes(to)) setTo(stillValid[0]);
-  };
+  const { effectiveTo, tooLong } = windowInfo(from, to);
 
   const submit = async () => {
     setFormError(null);
@@ -77,39 +47,12 @@ export function ExitRequests({ soldierName, email }: { soldierName: string; emai
       <section className="rounded-xl bg-white p-5 shadow-sm space-y-4">
         <h2 className="text-lg font-bold text-slate-800">בקשת יציאה קצרה</h2>
         <div className="flex flex-wrap items-end gap-4">
-          <div className="space-y-1">
-            <label className="block text-sm font-medium text-gray-600">יממת שיבוץ</label>
-            <input
-              type="date"
-              value={day}
-              onChange={(e) => e.target.value && setDay(e.target.value)}
-              className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm font-semibold text-slate-800 shadow-sm focus:border-blue-500 focus:outline-none"
-            />
-          </div>
-          <div className="space-y-1">
-            <label className="block text-sm font-medium text-gray-600">יציאה מ־</label>
-            <select
-              value={from}
-              onChange={(e) => onFromChange(e.target.value)}
-              className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm font-semibold text-slate-800 shadow-sm focus:border-blue-500 focus:outline-none"
-            >
-              {FROM_TIMES.map((t: string) => (
-                <option key={t} value={t}>{timeLabel(t, fromOffset(t))}</option>
-              ))}
-            </select>
-          </div>
-          <div className="space-y-1">
-            <label className="block text-sm font-medium text-gray-600">חזרה עד</label>
-            <select
-              value={effectiveTo}
-              onChange={(e) => setTo(e.target.value)}
-              className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm font-semibold text-slate-800 shadow-sm focus:border-blue-500 focus:outline-none"
-            >
-              {validTos.map((t: string) => (
-                <option key={t} value={t}>{timeLabel(t, toOffset(t))}</option>
-              ))}
-            </select>
-          </div>
+          <ExitWindowPicker
+            day={day} from={from} to={to}
+            onDay={setDay}
+            onFrom={(f, correctedTo) => { setFrom(f); setTo(correctedTo); }}
+            onTo={setTo}
+          />
           <div className="flex-1 min-w-[12rem] space-y-1">
             <label className="block text-sm font-medium text-gray-600">הערה (לא חובה)</label>
             <input
@@ -121,15 +64,7 @@ export function ExitRequests({ soldierName, email }: { soldierName: string; emai
             />
           </div>
         </div>
-        <div className="text-xs text-gray-400">יממת שיבוץ מתחילה ב-14:00 ומסתיימת ב-14:00 למחרת</div>
-        <div className="text-sm text-gray-700">
-          סה"כ {hoursOut} שעות מחוץ לבסיס, נשארות {hoursLeft} שעות זמינות ביממה
-        </div>
-        {tooLong && (
-          <div className="rounded-lg bg-yellow-50 px-3 py-2 text-sm text-yellow-700">
-            יציאה ארוכה מ-16 שעות — יש להגיש יום חופש
-          </div>
-        )}
+        <ExitWindowSummary from={from} to={to} />
         {formError && (
           <div className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{formError}</div>
         )}
@@ -166,7 +101,8 @@ export function ExitRequests({ soldierName, email }: { soldierName: string; emai
               {r.note && <span className="text-sm text-gray-500">{r.note}</span>}
               <button
                 onClick={() => void cancel(r.id)}
-                disabled={removing === r.id}
+                disabled={removing === r.id || r.generated}
+                title={r.generated ? 'השבצ"ק כבר נוצר — פנה לאחראי' : undefined}
                 className="mr-auto rounded-lg border border-red-200 bg-red-50 hover:bg-red-100 disabled:opacity-50 px-3 py-1 text-sm font-medium text-red-700"
               >
                 {removing === r.id ? '⏳' : 'ביטול'}
