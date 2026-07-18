@@ -101,8 +101,16 @@ cross the boundary).
   recorded as two assignment rows whose periods split the slot at the
   handover (so the DB overlap constraint and the validator see real,
   non-overlapping intervals), and each half counts hours/nights by its real
-  period. Pairs are NOT applied to readiness slots, chained overlays (T4), or
-  staff_all_roles positions. Seat-rule positions get a restricted variant:
+  period. Pairs DO apply to daily readiness rows (התקפי-style 24h duties) and
+  to H6d required-driver seats — on mass-exchange days the departing soldier
+  holds the row until the bus and the arriving one takes it from there (both
+  halves must hold the driver qualification on a driver seat; readiness
+  halves stay rest-transparent, non-blocking rows). Owner decision
+  2026-07-19: this replaced the previous readiness/driver-seat exclusion —
+  a readiness seat left empty on an exchange day while a leaver+arriver pair
+  could cover it was a coverage hole, not a rest saving. Pairs are still NOT
+  applied to chained overlays (T4 has its own arrivals-preferred completion)
+  or staff_all_roles positions. Seat-rule positions get a restricted variant:
   a pair may split a named seat only when BOTH members come from that seat's
   own candidate list (see H6b) — never as a substitute from outside it. The
   validator's slot-coverage check counts a split-covered seat as fully

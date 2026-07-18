@@ -342,9 +342,10 @@ export function fillLevel2(g: Gen, plan1: Level1Plan): void {
             viol = ['הושלם ממנוחה'];
           }
         }
-        if (!picked && !slotReadiness && !driverSeat) {
+        if (!picked) {
           const paired = tryReplacementPair(g, {
             slot, seat, pid, posName, commanderSeat, forNight, slotNightExempt,
+            slotReadiness, isDriverSeat: driverSeat ? isDriver : undefined,
             takenThisSlot, group, restId,
             buildHalf: (st, half, fitReasons) => buildRationale(g, st, half, pid, {
               pickedFrom: 'primary', fitReasons, commanderSeat,

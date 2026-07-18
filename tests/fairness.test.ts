@@ -81,6 +81,21 @@ test('consecutive_nights findings are deduped to one per soldier', async () => {
   assert.equal(nights[0].day, D3);             // latest day of the run
 });
 
+test('spread stats exclude soldiers with no service in the window', async () => {
+  // a schedulable soldier who never served (e.g. home all week) must not pin
+  // the spread min at 0 or drag the average
+  await query(`
+    insert into soldiers (personal_number, full_name, platoon, is_schedulable)
+    values ('9999999', 'חייל בבית', '1', true)
+    on conflict (personal_number) do nothing`);
+  const res = await get({ date: '2026-09-04' });
+  const body = res.body as FairnessResponse;
+  const idle = body.rows.find((r) => r.name === 'חייל בבית');
+  assert.ok(idle, 'idle soldier row is still returned');
+  assert.equal(idle!.weightedHours7d, 0);
+  assert.ok(body.spread.weightedHours.min > 0, `min should ignore idle soldiers, got ${body.spread.weightedHours.min}`);
+});
+
 test('empty window returns no checked days and no findings', async () => {
   const res = await get({ date: '2027-01-01' });
   assert.equal(res.statusCode, 200);

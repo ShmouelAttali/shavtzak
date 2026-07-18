@@ -104,10 +104,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         trackerHoursTotal: Math.round(Number(r.tracker_hours_total) * 10) / 10,
         positionCounts: r.position_counts ?? {},
       })),
-      spread: {
-        nights: spread(rows.map((r) => Number(r.night_count_7d))),
-        weightedHours: spread(rows.map((r) => Number(r.weighted_hours_7d))),
-      },
+      // spread over soldiers who actually served in the window — soldiers home
+      // the whole week (weighted 0, nights 0) would pin min at 0 and drag the
+      // average, matching nothing the top/bottom lists show
+      spread: (() => {
+        const active = rows.filter((r) => Number(r.weighted_hours_7d) > 0 || Number(r.night_count_7d) > 0);
+        return {
+          nights: spread(active.map((r) => Number(r.night_count_7d))),
+          weightedHours: spread(active.map((r) => Number(r.weighted_hours_7d))),
+        };
+      })(),
       ...(await compliancePromise),
     };
     res.setHeader('Cache-Control', 'no-store');

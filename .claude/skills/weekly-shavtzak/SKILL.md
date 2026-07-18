@@ -73,6 +73,44 @@ Summarize for the user, per day:
 Remind the user the drafts are visible in the שבצק חדש (טיוטה) tab and remain
 draft-only (no sheet sync-out).
 
+### Diagnosing recurring errors before reporting them
+
+Don't just relay validator errors — check whether they're a data gap the
+generator can't solve:
+
+- **קצין מוצב unfilled** → check pool availability per day
+  (`positions.config->'candidate_pool'` names vs `unavailability`). Note: if
+  the only available pool member is also the persisted `magen_commander`, he's
+  reserved to מגן and the seat stays empty — flag that trade-off to the user.
+- **אין נהג דוד / נהג טיגריס** → count available qualified drivers via
+  `soldier_qualifications` (qualification = 'נהג דוד' / 'נהג טיגריס'). 2
+  drivers can't cover all daily סיור shifts under rest rules — a real
+  shortage, not a generator bug.
+- **A day that collapses (many לא אויש)** → count soldiers with an
+  `unavailability` row overlapping that schedule day; mass-exit days
+  (weekends) genuinely can't be covered.
+
+## Step 5 — fairness check
+
+Raw `shift_assignments` hours are misleading (מגן/כוננות daily rows count
+24h). Use the `soldier_fairness(as_of)` DB function's `weighted_hours_7d`,
+normalized by days-on-base (days without an unavailability row covering that
+evening). Healthy: SD ≲ 3 around the mean per-day load; top loads should be
+either short-stay soldiers (present 1–2 days) or already flagged by
+`consecutive_nights`/`oncall_streak` warnings. Example query shape:
+
+```sql
+with f as (select * from soldier_fairness('<end_date>')),
+b as (select s.id, s.full_name,
+        (select <n_days> - count(*) from generate_series(...) dd
+         where exists (select 1 from unavailability u where u.soldier_id=s.id
+           and u.period @> ((dd + time '20:00')::timestamp))) days_present
+      from soldiers s where s.is_schedulable)
+select b.full_name, b.days_present, f.weighted_hours_7d, f.night_count_7d,
+       round(f.weighted_hours_7d/b.days_present,1) per_day
+from f join b on b.id=f.soldier_id where b.days_present>0 order by per_day desc;
+```
+
 ## Gotchas
 
 - Generation MUST run day-by-day in date order (the CLI does this) — each day's
@@ -82,3 +120,8 @@ draft-only (no sheet sync-out).
   transition).
 - Never run the test suite against this DB; tests use the local Docker
   `shavtzak_test` database only.
+- `unavailability` has a `period` tsrange column (not `range`); the קצין מוצב
+  pool lives in `positions.config->'candidate_pool'`, driver quals in
+  `soldier_qualifications.qualification` — there is no config key for either.
+- A range "20-07 14:00 to 26-07 14:00" is schedule days 2026-07-20..2026-07-25
+  (each day is D 14:00 → D+1 14:00) — pass `generate 2026-07-20 2026-07-25`.
