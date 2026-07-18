@@ -149,6 +149,12 @@ silently breaks id-coupled tests). Run the relevant suite before committing.
 
 ## Conventions & gotchas
 
+- **ALWAYS check if there's already a config that fulfills your need before
+  adding a new one** — e.g. daily-duty classification is `positions.config.daily`
+  (resolved by `effectiveConfig()`), on-call is `mission_class='readiness'`;
+  never introduce a parallel flag or hardcode position names for a distinction
+  the schema already expresses.
+
 - Schedule day = **14:00 → 14:00**; night = 00:00–06:00; all times naive local
   (`timestamp`/`tsrange`, no time zones). Helpers: `day_start()`, `night_range()`,
   `schedule_day_of()` in `scheduler/db/schema.sql`, mirrored in `scheduler/src/time.ts`.

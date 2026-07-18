@@ -24,7 +24,7 @@ export async function loadContext(day: string): Promise<Context> {
   // TLS handshakes) dominate wall-clock over the WAN pooler. Day literals are
   // regex-validated above; no user input reaches this SQL.
   const [, posRows, soldierRows, fairRows, slotRows, existRows, ydayRows,
-    blockRows, lockShiftRows, lockDayRows, chainRows, configRows] = await multiQuery([
+    blockRows, exitRows, lockShiftRows, lockDayRows, chainRows, configRows] = await multiQuery([
     `insert into schedule_days (day) values ('${day}') on conflict do nothing`,
     `select id, name, mission_class, is_scheduled, config from positions`,
     `select s.id, s.full_name, s.platoon, coalesce(s.role,'') role,
@@ -46,6 +46,8 @@ export async function loadContext(day: string): Promise<Context> {
        and not (sa.day = '${day}' and sa.source in ('auto','chain') and not sa.locked)`,
     `select soldier_id, position_id from day_assignments where day = '${yesterday}'`,
     `select soldier_id, period::text from unavailability
+     where period && tsrange(day_start('${day}'), day_start('${day}') + interval '1 day')`,
+    `select soldier_id, period::text from exit_requests
      where period && tsrange(day_start('${day}'), day_start('${day}') + interval '1 day')`,
     `select soldier_id, position_id, period::text from shift_assignments
      where day = '${day}' and (locked or source in ('manual','import'))`,
@@ -202,6 +204,16 @@ export async function loadContext(day: string): Promise<Context> {
     blocked.set(u.soldier_id, list);
   }
 
+  // H9: approved half-day exit windows — kept separately (the exit day gets
+  // special packing) AND merged into blocked so every availability check
+  // excludes the window itself.
+  const exits = new Map<number, [Minutes, Minutes][]>();
+  for (const e of exitRows) {
+    const p = parseRange(e.period);
+    exits.set(e.soldier_id, [...(exits.get(e.soldier_id) ?? []), p]);
+    blocked.set(e.soldier_id, [...(blocked.get(e.soldier_id) ?? []), p]);
+  }
+
   const lockedShift = lockShiftRows
     .map((r) => ({ soldierId: r.soldier_id, positionId: r.position_id, period: parseRange(r.period) as [Minutes, Minutes] }));
   const lockedDay = new Map<number, number>();
@@ -220,7 +232,7 @@ export async function loadContext(day: string): Promise<Context> {
 
   return {
     day, soldiers, positions, positionByName, slots, fairness, existing,
-    yesterdayPosition, staticStreak, onCallStreak, nightStreak, toranutCount7d, blocked,
+    yesterdayPosition, staticStreak, onCallStreak, nightStreak, toranutCount7d, blocked, exits,
     lockedShift, lockedDay, chainRules, config, tunables: loadTunables(config),
   };
 }

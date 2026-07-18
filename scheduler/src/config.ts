@@ -47,3 +47,13 @@ export function effectiveConfig(config: Record<string, any> | null | undefined):
   if (!c.daily) return c;
   return { night_exempt: true, full_rest_after: true, yomi_display: true, ...c };
 }
+
+/**
+ * H9: a position a soldier may serve on his half-day-exit day. Reuses the
+ * existing classification — not a daily 14:00–14:00 duty (`config.daily`, the
+ * same flag that makes מגן/חפק/תורנים/קצין מוצב/התקפי/מפלג daily) and not an
+ * on-call overlay (`mission_class = 'readiness'`). Expects a position whose
+ * config went through effectiveConfig() at the read boundary.
+ */
+export const isShiftPosition = (pos: { missionClass: string; config: Record<string, any> }): boolean =>
+  !pos.config.daily && pos.missionClass !== 'readiness';

@@ -40,7 +40,8 @@ export function isCountedNight(missionClass: string, nightExempt: boolean | unde
 
 export type FitCode =
   | 'not_commander' | 'unavailable' | 'overlap' | 'readiness_overlap'
-  | 'over_daily_cap' | 'third_night' | 'rest_lt4' | 'rest_lt8_long' | 'short_rest';
+  | 'over_daily_cap' | 'third_night' | 'rest_lt4' | 'rest_lt8_long' | 'short_rest'
+  | 'exit_rest';
 export interface FitReason { code: FitCode; params?: Record<string, string> }
 export type Fit = { ok: boolean; fallback: boolean; reasons: FitReason[] };
 
@@ -54,6 +55,7 @@ const FIT_TEXT: Record<FitCode, string> = {
   rest_lt4: 'פחות מ-{minH} שעות מנוחה',
   rest_lt8_long: 'פחות מ-{idealH} שעות מנוחה למשימה ארוכה',
   short_rest: 'מנוחה קצרה: {restH}ש',
+  exit_rest: 'מנוחה מקוצרת עקב יציאה קצרה',
 };
 export const fitText = (r: FitReason): string =>
   FIT_TEXT[r.code].replace(/\{(\w+)\}/g, (_, k) => r.params?.[k] ?? '?');
@@ -63,6 +65,7 @@ export const fitTexts = (rs: FitReason[]): string[] => rs.map(fitText);
 export const FIT_RATIONALE: Partial<Record<FitCode, RationaleCode>> = {
   rest_lt8_long: 'caveat_rest_lt8_long',
   third_night: 'caveat_third_night',
+  exit_rest: 'caveat_exit_rest',
 };
 
 /** Rest facts before `start`; readiness is transparent (R2).
@@ -134,9 +137,13 @@ export function fits(g: Gen, st: SoldierState, slot: [Minutes, Minutes], command
   }
   const rest = restBefore(g, st, slot[0]);
   // H8 ABSOLUTE: < 4h rest before a task is a hard block — never a בדוחק
-  // fallback. The only exemption is R5 duty-rest (daily positions), which is
-  // already folded into restBefore()'s gap.
+  // fallback. Exemptions: R5 duty-rest (daily positions, folded into
+  // restBefore()'s gap) and R7 — on his half-day-exit day a soldier's shifts
+  // may be packed back-to-back (fallback, not a block), him alone.
   if (rest < T.restMinH * 60) {
+    if (g.ctx.exits.has(s.id)) {
+      return { ok: true, fallback: true, reasons: [{ code: 'exit_rest' }] };
+    }
     return { ok: false, fallback: false,
       reasons: [{ code: 'rest_lt4', params: { minH: String(T.restMinH) } }] };
   }

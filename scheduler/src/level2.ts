@@ -3,11 +3,11 @@
 // fill with the pull-from-מנוחה and H1 replacement-pair completion paths.
 // Also owns buildRationale(), the structured "why picked" snapshot.
 
-import { Minutes, fmtHM, overlaps } from './time.js';
+import { Minutes, fmtHM, hours, overlaps } from './time.js';
 import { Slot } from './model.js';
 import { RationaleEntry } from './rationale.js';
 import { normalizeName as nrm, hasQualification } from './text.js';
-import { Gen, SoldierState, allowedIn, assign } from './state.js';
+import { Gen, SoldierState, allowedIn, assign, countedHours } from './state.js';
 import { fits, restInfo, fitText, fitTexts, FitReason, FIT_RATIONALE } from './rest.js';
 import { rank, rotationPenalty, nightsOf, loadOf } from './rank.js';
 import { tryReplacementPair } from './pairs.js';
@@ -92,10 +92,119 @@ function buildRationale(g: Gen, st: SoldierState, slot: Slot, pid: number, opts:
   return out;
 }
 
+/** H9 pre-pass: pack each exit-day soldier's shifts around his exit window
+ *  BEFORE the general ranked fill. His relaxed-rest picks are fallback-tier
+ *  by construction, so the general fill would starve him of the very shifts
+ *  he must take (a fallback never beats a rested primary). Prefers a
+ *  rest-legal combination; degrades to back-to-back (exit_rest, בדוחק) only
+ *  when the window leaves no legal spacing — never by touching other
+ *  soldiers. */
+function exitPrePass(g: Gen, plan1: Level1Plan): void {
+  const { ctx, state, issues } = g;
+  const restMin = ctx.tunables.restMinH * 60;
+  const restIdeal = ctx.tunables.restIdealH * 60;
+  for (const [sid, windows] of ctx.exits) {
+    const st = state.get(sid);
+    if (!st || st.level1 === null) continue;
+    const pid = st.level1;
+    const pos = ctx.positions.get(pid);
+    const slots = plan1.slotsByPosition.get(pid);
+    if (!pos || !slots || pos.config?.seat_rules || pos.config?.staff_all_roles) continue;
+    const nightExempt = pos.config?.night_exempt ?? false;
+    const outMin = windows.reduce((m, w) =>
+      m + Math.max(0, Math.min(w[1], g.dRange[1]) - Math.max(w[0], g.dRange[0])), 0);
+    const targetH = Math.min(ctx.tunables.dailyCapH - st.missionHoursToday, 24 - outMin / 60);
+    if (targetH <= 0) continue;
+
+    // pre-pass rows already in a slot (earlier exit soldiers) count against it
+    const occupancy = (sl: Slot) => g.assignments.filter((a) =>
+      a.positionId === sl.positionId && a.subPositionId === sl.subPositionId
+      && a.period[0] === sl.period[0]).length;
+    const usable = slots.filter((sl) => occupancy(sl) < sl.seats
+      && fits(g, st, sl.period, false, false, nightExempt).ok);
+
+    // Combos of 1–2 non-overlapping shifts (slot templates are 4h+, so two
+    // shifts reach the 8h cap). fits() can't see the combo's own first shift,
+    // so the rest gaps INSIDE a combo are simulated here.
+    const evalCombo = (picks: Slot[]) => {
+      const inOrder = [...picks].sort((a, b) => a.period[0] - b.period[0]);
+      let fallbacks = 0, shortRests = 0, packedH = 0;
+      const comboEnds: Minutes[] = [];
+      for (const sl of inOrder) {
+        let prevEnd = -Infinity;
+        for (const iv of st.intervals) if (iv[1] <= sl.period[0] && iv[1] > prevEnd) prevEnd = iv[1];
+        for (const e of [...st.gashashNightEnds, ...comboEnds]) {
+          if (e <= sl.period[0] && e > prevEnd) prevEnd = e;
+        }
+        const gap = sl.period[0] - prevEnd;
+        if (gap < restMin) fallbacks++;
+        else if (gap < restIdeal && hours(sl.period) > ctx.tunables.longTaskH) fallbacks++;
+        else if (gap < restIdeal) shortRests++;
+        comboEnds.push(sl.period[1]);
+        packedH += countedHours(g, sl.period);
+      }
+      return {
+        picks: inOrder, packedH, fallbacks, shortRests,
+        subs: new Set(inOrder.map((sl) => sl.subPositionId)).size,
+        night: (ctx.nightStreak.get(sid) ?? 0) >= 2
+          && inOrder.some((sl) => overlaps(sl.period, g.night)) ? 1 : 0,
+        startSum: inOrder.reduce((s, sl) => s + sl.period[0], 0),
+      };
+    };
+    const combos: ReturnType<typeof evalCombo>[] = [];
+    for (let i = 0; i < usable.length; i++) {
+      combos.push(evalCombo([usable[i]]));
+      for (let j = i + 1; j < usable.length; j++) {
+        if (overlaps(usable[i].period, usable[j].period)) continue;
+        const c = evalCombo([usable[i], usable[j]]);
+        if (c.packedH <= targetH + 0.01) combos.push(c);  // R4 cap
+      }
+    }
+    const best = combos.sort((a, b) =>
+      b.packedH - a.packedH || a.fallbacks - b.fallbacks || a.shortRests - b.shortRests
+      || b.subs - a.subs || a.night - b.night || a.startSum - b.startSum)[0];
+    if (!best) {
+      issues.push(`${st.soldier.name}: יציאה קצרה — לא נמצאה משמרת פנויה מחוץ לחלון היציאה`);
+      continue;
+    }
+    const w = windows[0];
+    const winFrom = fmtHM(Math.max(w[0], g.dRange[0]));
+    const winTo = fmtHM(Math.min(w[1], g.dRange[1]));
+    for (const sl of best.picks) {
+      const fit = fits(g, st, sl.period, false, false, nightExempt);
+      if (!fit.ok) {   // shouldn't happen — combo was simulated; keep the seat safe
+        issues.push(`${pos.name} ${fmtHM(sl.period[0])}: ${st.soldier.name} חסום (${fitTexts(fit.reasons).join(', ')})`);
+        continue;
+      }
+      const rationale = buildRationale(g, st, sl, pid, {
+        pickedFrom: 'primary', fitReasons: fit.reasons, commanderSeat: false,
+        groupNights: [], groupLoads: [], myNights: 0, myLoad: 0,
+      });
+      if (fit.fallback) {
+        for (const r of fit.reasons) {
+          const code = FIT_RATIONALE[r.code];
+          if (code) rationale.push({ code });
+        }
+      }
+      rationale.push({ code: 'exit_packed', params: { from: winFrom, to: winTo } });
+      // top-down seat index — the general fill hands out 1..(seats-taken)
+      assign(g, st, sl, sl.seats - occupancy(sl), false,
+        fit.reasons.map((r) => fit.fallback ? `בדוחק: ${fitText(r)}` : fitText(r)),
+        'auto', rationale);
+    }
+    if (best.packedH + 0.01 < targetH) {
+      issues.push(`${st.soldier.name}: יציאה קצרה — שובצו ${best.packedH} מתוך `
+        + `${targetH} שעות מחוץ לחלון היציאה`);
+    }
+  }
+}
+
 export function fillLevel2(g: Gen, plan1: Level1Plan): void {
   const { ctx, state, issues, level1 } = g;
   const { slotsByPosition, seatPlan, seatRuleBySub } = plan1;
   const restId = ctx.positionByName.get('מנוחה')!;
+
+  exitPrePass(g, plan1);
 
   for (const [pid, slots] of slotsByPosition) {
     const posName = ctx.positions.get(pid)!.name;
@@ -181,8 +290,11 @@ export function fillLevel2(g: Gen, plan1: Level1Plan): void {
     for (const slot of sorted) {
       const slotReadiness = ctx.positions.get(slot.positionId)!.missionClass === 'readiness';
       const slotNightExempt = ctx.positions.get(slot.positionId)!.config?.night_exempt ?? false;
-      const takenThisSlot = new Set<number>();   // H7: no duplicate soldier in a crew
-      for (let seat = 1; seat <= slot.seats; seat++) {
+      // rows the exit pre-pass already put in this slot occupy its top seats
+      const pre = g.assignments.filter((a) => a.positionId === slot.positionId
+        && a.subPositionId === slot.subPositionId && a.period[0] === slot.period[0]);
+      const takenThisSlot = new Set<number>(pre.map((a) => a.soldierId));   // H7: no duplicate soldier in a crew
+      for (let seat = 1; seat <= slot.seats - pre.length; seat++) {
         const commanderSeat = slot.commanderFirstSeat && seat === 1;
         const driverSeat = !!driverQual && seat === (slot.commanderFirstSeat ? 2 : 1)
           && ![...takenThisSlot].some((id) => isDriver(state.get(id)!));

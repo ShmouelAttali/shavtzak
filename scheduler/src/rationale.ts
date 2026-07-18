@@ -33,6 +33,8 @@ export type RationaleCode =
   | 'driver_seat'           // seat requires a qualified driver
   | 'platoon_group'         // P5: joins a commander's same-platoon group (התקפי)
   | 'no_rest_fill'          // everyone works: leftover soldier joins מגן
+  | 'exit_shift_fill'       // H9: exit-day soldier placed in a shift position
+  | 'exit_packed'           // H9: shift packed outside the exit window
   // caveats (⚠)
   | 'caveat_rest_lt4'       // בדוחק: under the 4h hard rest floor
   | 'caveat_rest_lt8_long'  // בדוחק: under 8h rest before a long task
@@ -41,7 +43,8 @@ export type RationaleCode =
   | 'caveat_same_class'     // T2: same mission class as yesterday
   | 'caveat_static_streak'  // T3: 3rd+ consecutive static day
   | 'caveat_third_night'    // R6: third consecutive night (max 2)
-  | 'caveat_no_alternative';// the primary candidate list was empty
+  | 'caveat_no_alternative' // the primary candidate list was empty
+  | 'caveat_exit_rest';     // R7: back-to-back shifts around a half-day exit
 
 export interface RationaleEntry {
   code: RationaleCode;
@@ -74,6 +77,8 @@ export const TEMPLATES: Record<RationaleCode, string> = {
   driver_seat: 'מושב נהג — נדרש {qual} בצוות',
   platoon_group: 'מצטרף לקבוצה של {commander} (מחלקה {platoon})',
   no_rest_fill: 'צורף ל{position} — כל חייל זמין משובץ (אין מנוחה)',
+  exit_shift_fill: 'שובץ ל{position} ביום יציאה קצרה — עמדת משמרות בלבד (ללא משימה יומית/כוננות)',
+  exit_packed: 'משמרת מרוכזת מחוץ לחלון היציאה ({from}–{to})',
   caveat_rest_lt4: 'פחות מ-4 שעות מנוחה לפני המשמרת',
   caveat_rest_lt8_long: 'פחות מ-8 שעות מנוחה לפני משימה ארוכה',
   caveat_short_rest: 'מנוחה קצרה: {restH} שעות בלבד',
@@ -82,6 +87,7 @@ export const TEMPLATES: Record<RationaleCode, string> = {
   caveat_static_streak: 'יום סטטי {streak}+ ברצף',
   caveat_third_night: 'לילה שלישי ברצף (מקסימום 2)',
   caveat_no_alternative: 'לא נמצא מועמד כשיר אחר — אחרת המושב היה נשאר ריק',
+  caveat_exit_rest: 'מנוחה מקוצרת בשל יציאה קצרה — משמרות צמודות מותרות ביום זה',
 };
 
 export const RATIONALE_CODES = Object.keys(TEMPLATES) as RationaleCode[];

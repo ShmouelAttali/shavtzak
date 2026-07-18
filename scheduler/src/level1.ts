@@ -10,6 +10,7 @@ import { normalizeName as nrm, hasQualification } from './text.js';
 import { Gen, SoldierState, allowedIn, countedHours, fullyBlocked, isBlocked } from './state.js';
 import { rank } from './rank.js';
 import { partialWindow } from './pairs.js';
+import { isShiftPosition } from './config.js';
 
 const OVERLAY = new Set(['כרמל חטיבה', 'כונן גשש']); // chained overlays, not Level-1
 
@@ -94,13 +95,17 @@ export function runLevel1(g: Gen): Level1Plan {
         const window = subPeriod.get(nrm(rule.sub)) ?? g.dRange;
         // candidates in priority order: explicit list, or role matches ordered
         // by the roles list (e.g. מ"פ before סמ"פ)
-        const cands = rule.soldiers
+        const cands = (rule.soldiers
           ? rule.soldiers.map((n) => byName.get(nrm(n))).filter((x): x is SoldierState => !!x)
           : [...state.values()]
               .filter((st) => (rule.roles ?? []).some((r) => nrm(r) === nrm(st.soldier.role)))
               .sort((a, b) =>
                 rule.roles!.findIndex((r) => nrm(r) === nrm(a.soldier.role))
-                - rule.roles!.findIndex((r) => nrm(r) === nrm(b.soldier.role)));
+                - rule.roles!.findIndex((r) => nrm(r) === nrm(b.soldier.role))))
+          // the one restriction gate also here: an exit-day candidate (H9)
+          // can't hold a daily seat — the NEXT candidate on the list takes it,
+          // and he is never reserved (stays free for a shift position)
+          .filter((c) => allowedIn(g, c.soldier, pos.name));
         for (const c of cands) g.seatRestrict.set(c.soldier.id, pos.name);
         const avail = cands.filter((st) =>
           (st.level1 === null || st.level1 === pos.id) && !isBlocked(g, st.soldier.id, window));
@@ -239,7 +244,7 @@ export function runLevel1(g: Gen): Level1Plan {
       const st = [...state.values()].find((s) => nrm(s.soldier.name) === nrm(name));
       if (!st) {
         issues.push(`מגן: המפקד המוגדר "${name}" לא נמצא במצבת`);
-      } else if (fullyBlocked(g, st.soldier.id)) {
+      } else if (fullyBlocked(g, st.soldier.id) || !allowedIn(g, st.soldier, 'מגן')) {
         issues.push(`מגן: המפקד המוגדר ${name} אינו זמין היום`);
       } else if (st.level1 !== null && st.level1 !== magenId) {
         issues.push(`מגן: המפקד המוגדר ${name} כבר משובץ לעמדה אחרת (נעילה)`);
@@ -269,6 +274,41 @@ export function runLevel1(g: Gen): Level1Plan {
       st.level1 = pos.id; level1.set(st.soldier.id, pos.id); room--;
       st.level1Rationale.push({ code: 'continuity_crew', params: { position: pos.name } });
     }
+  }
+
+  // ── H9 exit pre-pass: a soldier with a half-day exit serves a SHIFT
+  // position that day (not daily, not readiness — allowedIn rejects those for
+  // him); reserved here so the general fill can't strand him, Level 2 packs
+  // his shifts around the exit window.
+  for (const [sid] of ctx.exits) {
+    const st = state.get(sid);
+    if (!st || st.level1 !== null || fullyBlocked(g, sid)) continue;
+    const cands = [...slotsByPosition.entries()].filter(([pid, posSlots]) => {
+      const pos = ctx.positions.get(pid)!;
+      if (pos.config?.seat_rules || pos.config?.staff_all_roles) return false; // pre-pass staffed
+      return isShiftPosition(pos) && allowedIn(g, st.soldier, pos.name)
+        && posSlots.some((sl) => !isBlocked(g, sid, sl.period));
+    });
+    // prefer a position with unmet demand, then the one with more open slots
+    // outside his window (packing feasibility), then P4 position balance
+    const score = ([pid, posSlots]: [number, Slot[]]): [number, number, number] => [
+      Math.max(0, demand(g, pid, posSlots)
+        - [...level1.values()].filter((p) => p === pid).length) > 0 ? 0 : 1,
+      -posSlots.filter((sl) => !isBlocked(g, sid, sl.period)).length,
+      st.fairness.positionCounts[ctx.positions.get(pid)!.name] ?? 0,
+    ];
+    const best = cands.sort((a, b) => {
+      const [sa, sb] = [score(a), score(b)];
+      return sa[0] - sb[0] || sa[1] - sb[1] || sa[2] - sb[2];
+    })[0];
+    if (!best) {
+      issues.push(`${st.soldier.name}: יציאה קצרה — לא נמצאה עמדת משמרות זמינה ליום זה`);
+      continue;
+    }
+    st.level1 = best[0]; level1.set(sid, best[0]);
+    st.level1Rationale.push({
+      code: 'exit_shift_fill', params: { position: ctx.positions.get(best[0])!.name },
+    });
   }
 
   // fill order: role-gated / commander-heavy first

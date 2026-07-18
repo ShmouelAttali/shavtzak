@@ -79,6 +79,22 @@ create table unavailability (
 );
 create index unavailability_soldier_period on unavailability using gist (soldier_id, period);
 
+-- Half-day exit requests (H9). Own table — NOT unavailability, which the sheet
+-- import truncates and rebuilds; requests must survive re-imports. A row IS an
+-- approved exit (auto-approved). The generator merges periods into the blocked
+-- windows at load time and packs the soldier's shifts around them.
+create table exit_requests (
+  id          bigint generated always as identity primary key,
+  soldier_id  bigint not null references soldiers on delete cascade,
+  period      tsrange not null check (upper(period) > lower(period)),
+  created_by  text,                        -- requester email (audit only)
+  created_at  timestamp not null default now(),
+  note        text
+);
+create index exit_requests_soldier_period on exit_requests using gist (soldier_id, period);
+alter table exit_requests add constraint exit_requests_no_overlap
+  exclude using gist (soldier_id with =, period with &&);
+
 -- NB: no blocks_day column — H5 (daily duties occupy the whole schedule day)
 -- is enforced by construction: daily slots span 14:00–14:00, H4 gives one
 -- Level-1 position per day, and H3's overlap exclusion blocks anything else.

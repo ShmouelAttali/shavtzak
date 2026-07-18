@@ -10,6 +10,7 @@ import { CompanySummary } from './components/CompanySummary';
 import { Shavtzak } from './components/Shavtzak';
 import { DraftSchedule } from './components/DraftSchedule';
 import { FairnessView } from './components/FairnessView';
+import { ExitRequests } from './components/ExitRequests';
 
 const COMPANY_ROLES = new Set(['מ"פ', 'סמ"פ', 'מ"מ', 'סמל', 'מ"כ']);
 
@@ -20,6 +21,7 @@ const TABS: { id: TabId; label: string; restricted?: 'company' | 'scheduler' }[]
   { id: 'unit',      label: 'לוז יציאות מחלקתי' },
   { id: 'company',   label: 'סיכום פלוגתי', restricted: 'company' },
   { id: 'shavtzak',  label: 'שבצק' },
+  { id: 'exitreq',   label: 'יציאה קצרה' },
   { id: 'draft',     label: 'שבצק חדש (טיוטה)', restricted: 'scheduler' },
   { id: 'fairness',  label: 'הוגנות', restricted: 'scheduler' },
 ];
@@ -130,6 +132,7 @@ function AppContent({ data }: { data: SheetData }) {
         {activeTab === 'shavtzak' && <Shavtzak soldiers={data.soldiers} shavtzakAll={shavtzakAll} loading={shavtzakLoading} error={shavtzakError} mySoldierName={mySoldierName} />}
         {activeTab === 'draft' && <DraftSchedule soldiers={data.soldiers} mySoldierName={mySoldierName} />}
         {activeTab === 'fairness' && <FairnessView />}
+        {activeTab === 'exitreq' && <ExitRequests soldierName={mySoldierName} email={myEmail} />}
       </main>
     </div>
   );

@@ -1,11 +1,11 @@
 import { multiQuery, query } from './db.js';
 import {
-  Minutes, parseRange, dayStart, dayEnd, addDays, slotStart,
+  Minutes, DAY, parseRange, dayStart, dayEnd, addDays, slotStart, scheduleDayStart,
   overlaps, hours, fmtHM, nightRange, nightRangeAt,
 } from './time.js';
 import { normalizeName as nrm, hasQualification } from './text.js';
 import { isFullRestExempt, isCountedNight } from './rest.js';
-import { loadTunables, effectiveConfig } from './config.js';
+import { loadTunables, effectiveConfig, isShiftPosition } from './config.js';
 import { roleFlags } from './load.js';
 import type { SeatRule } from './model.js';
 
@@ -37,7 +37,7 @@ interface Row {
 export async function validateDay(day: string): Promise<Finding[]> {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) throw new Error(`bad day: ${day}`);
   const yesterday = addDays(day, -1);
-  const [rows, prevRows, unavailRows, dayAssignRows, soldierRows, chainRows, seatRulePosRows, daySlotRows, posRows, historyRows, configRows, qualRows] = await multiQuery([
+  const [rows, prevRows, unavailRows, dayAssignRows, soldierRows, chainRows, seatRulePosRows, daySlotRows, posRows, historyRows, configRows, qualRows, exitRows] = await multiQuery([
     ...[day, yesterday].map((d) => `
       select sa.soldier_id, s.full_name, sa.position_id, p.name pos_name, p.mission_class,
              sp.name sub_name, sa.period::text, sa.blocks_overlap, sa.is_commander_seat, sa.source
@@ -71,6 +71,10 @@ export async function validateDay(day: string): Promise<Finding[]> {
        and p.mission_class <> 'rest'`,
     `select key, value from config`,
     `select soldier_id, qualification from soldier_qualifications`,
+    // H9: exit windows ±1 day, so boundary rest gaps can be attributed to the
+    // exit day on either side of the 14:00 anchor
+    `select soldier_id, period::text from exit_requests
+     where period && tsrange(day_start('${addDays(day, -1)}'), day_start('${day}') + interval '1 day')`,
   ]);
 
   const config: Record<string, any> = {};
@@ -94,6 +98,16 @@ export async function validateDay(day: string): Promise<Finding[]> {
   // for starts at/after 14:00 of the following schedule day (חפק/התקפי/קצין
   // מוצב carry full_rest_after; תורנים deliberately does not — R1 applies)
   const posConfig = new Map((posRows as any[]).map((p) => [p.id as number, effectiveConfig(p.config)]));
+
+  // H9: half-day exit windows (±1 day); "exit at minute t" = an exit window
+  // touching t's schedule day
+  const exits = (exitRows as any[]).map((e) => ({
+    soldierId: e.soldier_id as number, period: parseRange(e.period) as [Minutes, Minutes],
+  }));
+  const hasExitAt = (sid: number, t: Minutes) => exits.some((e) =>
+    e.soldierId === sid && e.period[1] > scheduleDayStart(t) && e.period[0] < scheduleDayStart(t) + DAY);
+  const exitTodayIds = new Set(exits
+    .filter((e) => overlaps(e.period, [dayStart(day), dayEnd(day)])).map((e) => e.soldierId));
 
   // ── 1+2: rest & overlap over consecutive blocking, non-readiness shifts ──
   // R3: a כונן גשש NIGHT window (22:00–07:00) counts as ~gashash_effective_hours
@@ -135,10 +149,20 @@ export async function validateDay(day: string): Promise<Finding[]> {
       if (prevEnd === -Infinity) continue;
       const gap = b.period[0] - prevEnd;
       if (gap < REST_MIN) {
-        findings.push({
-          severity: 'error', rule: 'rest', soldierId: sid,
-          message: `${b.soldierName}: מנוחה ${(gap / 60).toFixed(1)}ש׳ לפני ${b.positionName} ${fmtHM(b.period[0])} (מינימום ${tunables.restMinH})`,
-        });
+        // R7: on an exit day the packed shifts may be back-to-back — the H8
+        // floor degrades to a warning for the exit soldier (either side of
+        // the 14:00 boundary)
+        if (hasExitAt(sid, b.period[0]) || hasExitAt(sid, prevEnd)) {
+          findings.push({
+            severity: 'warning', rule: 'exit_rest', soldierId: sid,
+            message: `${b.soldierName}: מנוחה ${(gap / 60).toFixed(1)}ש׳ לפני ${b.positionName} ${fmtHM(b.period[0])} — מותר בדוחק ביום יציאה קצרה`,
+          });
+        } else {
+          findings.push({
+            severity: 'error', rule: 'rest', soldierId: sid,
+            message: `${b.soldierName}: מנוחה ${(gap / 60).toFixed(1)}ש׳ לפני ${b.positionName} ${fmtHM(b.period[0])} (מינימום ${tunables.restMinH})`,
+          });
+        }
       } else if (gap < REST_IDEAL) {
         findings.push({
           severity: 'warning', rule: 'rest', soldierId: sid,
@@ -216,10 +240,18 @@ export async function validateDay(day: string): Promise<Finding[]> {
     const targetWindow: [Minutes, Minutes] = [tStart,
       Math.max(...targets.map((t) => t.period[1]))];
     const usedSrc = new Set(targets.filter((t) => srcIds.has(t.soldierId)).map((t) => t.soldierId));
+    const allowedPosBySoldier = new Map((soldierRows as any[])
+      .map((s) => [s.id as number, s.allowed_positions as string[] | null]));
     const availableUnused = srcPool.filter((s) =>
       !usedSrc.has(s.soldierId)
       // blocked by an unavailability window during the standby
       && !unavail.some((u) => u.soldierId === s.soldierId && overlaps(u.period, targetWindow))
+      // H9: an exit-day member takes no readiness row — a completion instead
+      // of him is legitimate
+      && !exitTodayIds.has(s.soldierId)
+      // H6c: a whitelisted member may not hold the target position at all
+      && (allowedPosBySoldier.get(s.soldierId) == null
+          || allowedPosBySoldier.get(s.soldierId)!.some((p) => nrm(p) === nrm(cr.target_name)))
       // or already holding another blocking assignment overlapping it
       && !today.some((r) => r.soldierId === s.soldierId && r.blocksOverlap
            && r.missionClass !== 'rest' && overlaps(r.period, targetWindow)
@@ -289,6 +321,27 @@ export async function validateDay(day: string): Promise<Finding[]> {
       findings.push({
         severity: 'error', rule: 'availability', soldierId: r.soldierId,
         message: `${r.soldierName} משובץ ל${r.positionName} ${fmtHM(r.period[0])} למרות "${hit.kind}"`,
+      });
+    }
+  }
+
+  // ── 6b: H9 exit-day rules — no row inside the exit window, and no daily /
+  // readiness row at all on the exit day (the soldier can't hold a 24h duty
+  // or an on-call around a half-day exit) ───────────────────────────────────
+  for (const r of today) {
+    if (r.missionClass === 'rest') continue;
+    const hit = exits.find((e) => e.soldierId === r.soldierId && overlaps(e.period, r.period));
+    if (hit) {
+      findings.push({
+        severity: 'error', rule: 'exit_window', soldierId: r.soldierId,
+        message: `${r.soldierName} משובץ ל${r.positionName} ${fmtHM(r.period[0])}-${fmtHM(r.period[1])} בתוך חלון יציאה קצרה`,
+      });
+    }
+    if (exitTodayIds.has(r.soldierId)
+      && !isShiftPosition({ missionClass: r.missionClass, config: posConfig.get(r.positionId) ?? {} })) {
+      findings.push({
+        severity: 'error', rule: 'exit_daily', soldierId: r.soldierId,
+        message: `${r.soldierName} ביציאה קצרה היום — משובץ למשימה יומית/כוננות ${r.positionName}`,
       });
     }
   }

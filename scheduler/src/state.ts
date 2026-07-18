@@ -8,6 +8,7 @@ import { RationaleEntry } from './rationale.js';
 import { Minutes, dayStart, dayEnd, hours, overlaps, nightRange, nightRangeAt } from './time.js';
 import { normalizeName as nrm } from './text.js';
 import { isCountedNight } from './rest.js';
+import { isShiftPosition } from './config.js';
 
 export const EMPTY_FAIRNESS: Fairness = {
   nightCount7d: 0, nightCountTotal: 0, missionHours7d: 0, weightedHours7d: 0,
@@ -77,6 +78,13 @@ export const allowedIn = (g: Gen, s: Soldier, posName: string): boolean => {
   const pool: string[] | undefined = pid !== undefined
     ? g.ctx.positions.get(pid)?.config?.candidate_pool : undefined;
   if (pool && !pool.some((n) => nrm(n) === nrm(s.name))) return false;
+  // H9 half-day exit: on his exit day a soldier takes no daily 14:00–14:00
+  // duty and no readiness/on-call row (someone else covers the chain) —
+  // enforced here so every fill path (levels, pairs, chains) honors it.
+  if (g.ctx.exits.has(s.id)) {
+    const pos = pid !== undefined ? g.ctx.positions.get(pid) : undefined;
+    if (pos && !isShiftPosition(pos)) return false;
+  }
   // H6 role gate: מ"מ/סמל never man עמדות הגנה — enforced here so the Level-2
   // pull-from-מנוחה and pair paths can't bypass Level 1's eligibility filter
   if (s.isSeniorCommander && nrm(posName) === nrm('עמדות הגנה')) return false;

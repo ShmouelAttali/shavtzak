@@ -120,6 +120,10 @@ export interface Context {
   toranutCount7d: Map<number, number>;
   /** soldiers unavailable (fully or partially) today: id -> blocked windows */
   blocked: Map<number, [Minutes, Minutes][]>;
+  /** H9: approved half-day exit windows intersecting the day (also merged into
+   *  `blocked`); presence here means "exit day" — no daily duty, no readiness
+   *  row, shifts packed around the window */
+  exits: Map<number, [Minutes, Minutes][]>;
   /** locked rows for this day already in DB (kept as-is) */
   lockedShift: { soldierId: number; positionId: number; period: [Minutes, Minutes] }[];
   lockedDay: Map<number, number>; // soldier -> position
