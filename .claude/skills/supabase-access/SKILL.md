@@ -102,6 +102,22 @@ covers whole schedule days and doesn't re-import already-covered sheet dates.
 
 ### Import notes
 
+- **Daily-window cutover (2026-07-19)**: `infer_period` maps יומי/hour-less
+  rows dated **before** 19/07 to the historical windows (מגן/חפק 06:00–22:00,
+  התקפי/כרמל 06:00→06:00, תורנים 07:30–22:00) and rows **from** 19/07 to the
+  14:00→14:00 schedule day. Never "fix" old rows to the new anchor.
+- **Precise incremental import**: for a partial refresh (new sheet dates over
+  existing data), compute want-vs-have with `infer_period`-derived keys
+  (cleanup.py's construction) and import only the missing rows — piping the
+  whole date range again duplicates readiness rows. Run the assignment inserts
+  WITHOUT a wrapping transaction: genuine יומי-alongside-shift overlaps must
+  fail row-by-row against `no_double_booking`, then be re-added with
+  `blocks_overlap=false`.
+- **Bus-boundary reconciliation**: when imported real shifts run PAST a
+  soldier's 08:00 block start (morning handovers at 09:00/10:00), anchor that
+  block's start to the real descent time (`max(upper(shift))`) or the day
+  flags false `availability` errors.
+
 - Sheet position names map to DB positions via keyword matching
   (`POSITION_MAP` in `import_history.py`); unmatched names fall to the
   catch-all `אחר` (id 99). **When a new position name appears in the sheet,

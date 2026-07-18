@@ -21,6 +21,10 @@
   different static post per soldier within the same 24h (sub rotation).
 - **התקפי**: soft 2×(1 מפקד + 3 same-מחלקה) via `group_size:4`; מפקד כרמל =
   commander from crew first, else highest רובאי. מפקד def: מ"מ/סמל/מ"כ/מ"ח.
+- **T4 completion**: chained standbys (כרמל/גשש) whose descending crew went
+  home are completed with fresh soldiers (arrivals preferred, fairness order);
+  validator warns on genuine-shortfall completions, errors when an available
+  crew member was skipped or the window was already covered.
 - **מפלג position** (id 14): רס"פ/סרס"פ/מנהלה staff — daily 14:00–14:00 row,
   restricted to it (staff_all_roles); presence follows the sheet's מפלג tab
   סטטוס (לא מגיע → `is_schedulable=false`; that was the בנימין קיי bug).

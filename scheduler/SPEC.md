@@ -265,6 +265,16 @@ cross the boundary).
       fairness order. Tracker time counts as readiness hours; the cumulative
       tracker counter accrues **only night windows** — day windows are free
       (R3).
+  - **T4 completion** (owner rule, 2026-07-18): when descending crew members
+    cannot hold the standby (went home, otherwise booked, restricted), the
+    chain is **completed with fresh soldiers** instead of staying short —
+    preferring soldiers who just **arrived** back on base (a home block ending
+    within the 24h before the window), then anyone available, in fairness
+    order. Source members always take priority; completions only top up the
+    gap. Completion rows carry a `chain_completion` rationale; the validator
+    reports an out-of-crew standby as a **warning** when it covers a genuine
+    shortfall, and as an **error** when an available source member was left
+    unused or the outsider is redundant on a fully-covered window (§8).
 - **T5 תורנות שבועית (soft)**: at most one תורנות per soldier per rolling 7
   days. A **ranking preference, not a hard block**: when ranking candidates
   for תורנים, anyone with a תורנות in the last 7 days sorts after everyone
@@ -372,7 +382,10 @@ R5-exempt starts — at/after 14:00 of the day following a `full_rest_after` dai
 task — are not flagged; a תורנים→14:00 immediate start is), overlaps (incl.
 `readiness_overlap` — a readiness row overlapping a mission row, H3 strict), double
 standby (H3b), chained-duty sourcing (carmel/tracker crews match their source
-shifts), carmel min staffing, ≤8h/day, assignment vs availability,
+shifts; an out-of-crew soldier covering a genuine shortfall of an
+absent/booked crew is a completion **warning**, but is an **error** when an
+available source member was left unused or the window was already fully
+covered — T4 completion), carmel min staffing, ≤8h/day, assignment vs availability,
 present-but-unassigned, **rest-bucket** (`rest_bucket`, warning: an available
 soldier bucketed to מנוחה — everyone works), unknown soldier names,
 consecutive nights (R6: 2 = warning,

@@ -1,6 +1,8 @@
 // T4 chained duties: overlay readiness rows staffed by the crew descending
 // from a source shift (כרמל חטיבה from the defense grid, כונן גשש from patrol
-// descents). Runs in two passes around Level 2 — see generate.ts.
+// descents). When crew members went home, the standby is COMPLETED with fresh
+// soldiers (arrivals preferred). Runs in two passes around Level 2 — see
+// generate.ts.
 
 import { Minutes, addDays, slotStart, overlaps, nightRange, nightRangeAt } from './time.js';
 import { ChainRule } from './model.js';
@@ -57,21 +59,44 @@ export function runChain(g: Gen, rule: ChainRule): void {
     }];
   }
 
-  let pool = crew.map((id) => g.state.get(id)!).filter(Boolean)
-    .filter((st) => !isBlocked(g, st.soldier.id, targetSlots[0].period))
+  const window = targetSlots[0].period;
+  const chainFit = (st: SoldierState) =>
+    !isBlocked(g, st.soldier.id, window)
     // a soldier already on a mission during the window can't stand by for it
-    .filter((st) => !st.intervals.some((iv) => overlaps(iv, targetSlots[0].period)))
+    && !st.intervals.some((iv) => overlaps(iv, window))
     // nor can they hold two simultaneous standbys (e.g. התקפי + כרמל)
-    .filter((st) => !st.readiness.some((iv) => overlaps(iv, targetSlots[0].period)))
+    && !st.readiness.some((iv) => overlaps(iv, window))
     // H6c: whitelisted soldiers take only their allowed positions, chains included
-    .filter((st) => allowedIn(g, st.soldier, targetName));
+    && allowedIn(g, st.soldier, targetName);
+
+  let pool = crew.map((id) => g.state.get(id)!).filter(Boolean).filter(chainFit);
+  const fromSource = new Set(pool.map((st) => st.soldier.id));
+
+  // T4 completion (owner rule 2026-07-18): when descending crew members went
+  // home, the standby is completed with FRESH soldiers — preferring those who
+  // just ARRIVED back on base (their home block ended in the 24h before the
+  // window), then anyone available, by fairness order.
+  {
+    const needed = targetSlots.reduce((n, s) => n + s.seats, 0);
+    if (pool.length < needed) {
+      const arrived = (st: SoldierState) => (ctx.blocked.get(st.soldier.id) ?? [])
+        .some((b) => b[1] <= window[0] && b[1] > window[0] - 24 * 60);
+      const fresh = [...g.state.values()].filter((st) =>
+        !fromSource.has(st.soldier.id) && chainFit(st));
+      const ranked = rank(g, fresh, rule.targetPosition, false);
+      const completions = [
+        ...ranked.filter(arrived),
+        ...ranked.filter((st) => !arrived(st)),
+      ].slice(0, needed - pool.length);
+      pool = [...pool, ...completions];   // source members keep priority order
+    }
+  }
 
   if (rule.pick === 'min_tracker_hours') {
     // T4c selection (R3): for the night window (22:00–07:00) prefer crew
     // members who SLEPT the previous night (no counted-night assignment in
     // [D 00:00, D 06:00]), then minimize cumulative tracker hours, then
     // fairness order.
-    const window = targetSlots[0].period;
     const prevNight = nightRange(addDays(day, -1));
     const sleptPrevNight = (st: SoldierState) => !(ctx.existing.get(st.soldier.id) ?? [])
       .some((a) => overlaps(a.period, prevNight)
@@ -103,6 +128,9 @@ export function runChain(g: Gen, rule: ChainRule): void {
       }];
       if (rule.pick === 'min_tracker_hours') rationale.push({ code: 'chain_min_tracker' });
       if (isCmdSlot) rationale.push({ code: 'chain_commander' });
+      if (!fromSource.has(st.soldier.id)) {
+        rationale.push({ code: 'chain_completion', params: { source: sourceName } });
+      }
       assign(g, st, slot, i + 1, isCmdSlot, [], 'chain', rationale);
       if (targetName === 'כונן גשש') {
         // R3 (owner decision): ONLY the night window (22:00–07:00) counts as

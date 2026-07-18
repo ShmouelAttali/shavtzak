@@ -27,6 +27,7 @@ export type RationaleCode =
   | 'chain'                 // T4 overlay: crew descends from a source shift
   | 'chain_min_tracker'     // chain pick rule: minimum tracker hours
   | 'chain_commander'       // chain commander slot: commander in crew / highest rifle
+  | 'chain_completion'      // chain crew short (source went home) — completed fresh
   | 'magen_commander'       // the weekly מגן commander decision (config)
   | 'driver_quota'          // picked in the position's Level-1 driver quota
   | 'driver_seat'           // seat requires a qualified driver
@@ -67,6 +68,7 @@ export const TEMPLATES: Record<RationaleCode, string> = {
   chain: '{target}: ירד מ{source} של {sourceStart} (שרשור)',
   chain_min_tracker: 'נבחר מהצוות היורד עם מינימום שעות גשש',
   chain_commander: 'מפקד הכונן — מפקד מהצוות, או הרובאי הבכיר באין מפקד',
+  chain_completion: 'השלמה לכוננות: הצוות שירד מ{source} יצא/חסר — נבחר חייל זמין (עדיפות למי שחזר לבסיס)',
   magen_commander: 'מפקד המגן שנקבע לשבוע — מוביל את צוות המגן',
   driver_quota: 'שובץ במכסת הנהגים של {position} (נדרש {qual})',
   driver_seat: 'מושב נהג — נדרש {qual} בצוות',

@@ -185,6 +185,12 @@ export async function validateDay(day: string): Promise<Finding[]> {
     }
   }
 
+  // unavailability windows intersecting the day (used by the chain-completion
+  // check in §3 and the availability check in §6)
+  const unavail = (unavailRows as any[]).map((u) => ({
+    soldierId: u.soldier_id, period: parseRange(u.period) as [Minutes, Minutes], kind: u.kind,
+  }));
+
   // ── 3: chain sourcing ────────────────────────────────────────────────────
   for (const cr of chainRows as any[]) {
     const tStart = slotStart(day, String(cr.target_start).slice(0, 5));
@@ -202,11 +208,43 @@ export async function validateDay(day: string): Promise<Finding[]> {
       continue;
     }
     const srcIds = new Set(srcPool.map((r) => r.soldierId));
+    // T4 completion (owner rule 2026-07-18): a non-source soldier is a valid
+    // COMPLETION when the descending crew couldn't cover the window (members
+    // went home / are otherwise booked). It is an error only when an
+    // AVAILABLE source member was left unused — otherwise a warning so the
+    // completion stays visible.
+    const targetWindow: [Minutes, Minutes] = [tStart,
+      Math.max(...targets.map((t) => t.period[1]))];
+    const usedSrc = new Set(targets.filter((t) => srcIds.has(t.soldierId)).map((t) => t.soldierId));
+    const availableUnused = srcPool.filter((s) =>
+      !usedSrc.has(s.soldierId)
+      // blocked by an unavailability window during the standby
+      && !unavail.some((u) => u.soldierId === s.soldierId && overlaps(u.period, targetWindow))
+      // or already holding another blocking assignment overlapping it
+      && !today.some((r) => r.soldierId === s.soldierId && r.blocksOverlap
+           && r.missionClass !== 'rest' && overlaps(r.period, targetWindow)
+           && !(r.positionId === cr.target_position && r.period[0] === tStart)));
+    // completions are legitimate only up to the crew's actual shortfall of
+    // the window's seats — a redundant outsider on a fully-covered window
+    // stays an error
+    const needed = (daySlotRows as any[])
+      .filter((ds) => ds.position_id === cr.target_position
+        && parseRange(ds.period)[0] === tStart)
+      .reduce((n, ds) => n + Number(ds.seats), 0) || targets.length;
+    let completionsAllowed = availableUnused.length > 0 ? 0
+      : Math.max(0, needed - usedSrc.size);
     for (const t of targets) {
-      if (!srcIds.has(t.soldierId)) {
+      if (srcIds.has(t.soldierId)) continue;
+      if (completionsAllowed > 0) {
+        completionsAllowed--;
+        findings.push({
+          severity: 'warning', rule: 'chain', soldierId: t.soldierId,
+          message: `${t.soldierName} ב${cr.target_name} ${fmtHM(tStart)}: השלמה מחוץ לצוות היורד (הצוות מ${cr.source_name} ${String(cr.source_start).slice(0, 5)} יצא/חסר)`,
+        });
+      } else {
         findings.push({
           severity: 'error', rule: 'chain', soldierId: t.soldierId,
-          message: `${t.soldierName} ב${cr.target_name} ${fmtHM(tStart)} אך לא ירד מ${cr.source_name} ${String(cr.source_start).slice(0, 5)}`,
+          message: `${t.soldierName} ב${cr.target_name} ${fmtHM(tStart)} אך לא ירד מ${cr.source_name} ${String(cr.source_start).slice(0, 5)}${availableUnused.length ? ' — ויש חבר צוות זמין שלא שובץ' : ''}`,
         });
       }
     }
@@ -245,9 +283,6 @@ export async function validateDay(day: string): Promise<Finding[]> {
   }
 
   // ── 6: assignment during unavailability ──────────────────────────────────
-  const unavail = (unavailRows as any[]).map((u) => ({
-    soldierId: u.soldier_id, period: parseRange(u.period) as [Minutes, Minutes], kind: u.kind,
-  }));
   for (const r of today) {
     const hit = unavail.find((u) => u.soldierId === r.soldierId && overlaps(u.period, r.period));
     if (hit) {

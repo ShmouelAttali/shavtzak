@@ -94,6 +94,11 @@ def parse_date(text):
             pass
     return None
 
+# 2026-07-19: daily duties re-anchored to the 14:00-14:00 schedule day (SPEC
+# §2, slot_templates versioning). Sheet rows before the cutover keep their
+# historical windows; from the cutover a יומי/hour-less row spans 14:00→14:00.
+DAILY_CUTOVER = datetime(2026, 7, 19)
+
 def infer_period(date, position, typ, time_text, canon):
     """Return (start,end) datetimes or None."""
     t = norm(time_text).replace('–', '-').replace('—', '-')
@@ -103,12 +108,16 @@ def infer_period(date, position, typ, time_text, canon):
         d = date + timedelta(days=plus_days)
         return d.replace(hour=h, minute=m)
 
-    if canon == 'כונן גשש':
+    if canon == 'כונן גשש' and ('יומי' in t or not t):
         return at(5, 30), at(5, 30, 1)
-    if canon == 'תורנים':
+    if canon == 'תורנים' and ('יומי' in t or not t):
+        if date >= DAILY_CUTOVER:
+            return at(14, 0), at(14, 0, 1)
         return at(7, 30), at(22, 0)
 
     if 'יומי' in t or not t:
+        if date >= DAILY_CUTOVER:
+            return at(14, 0), at(14, 0, 1)        # 14:00-anchored schedule day
         if canon in ('התקפי', 'כרמל חטיבה'):
             return at(6, 0), at(6, 0, 1)          # readiness full day (old anchor)
         return at(6, 0), at(22, 0)
