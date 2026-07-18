@@ -1,8 +1,9 @@
 // Level 1 (SPEC §7): partition the available soldiers into positions for the
 // schedule day — locks, the H6b seat-rule pre-pass, staff_all_roles crews,
-// flex seat sizing (everyone works — מנוחה is not a planned outcome),
-// continuity crews, then the demand-driven fill in priority order with hard
-// commander/driver quotas first.
+// the closed-list (candidate_pool) pre-pass, flex seat sizing (everyone
+// works — מנוחה is not a planned outcome), continuity crews, then the
+// demand-driven fill in priority order with hard commander/driver quotas
+// first.
 
 import { Minutes, overlaps } from './time.js';
 import { Slot, SeatRule } from './model.js';
@@ -183,6 +184,72 @@ export function runLevel1(g: Gen): Level1Plan {
     }
   }
 
+  // shared per-position context for the closed-list pre-pass and the two
+  // fill passes below
+  const posCtx = (posName: string) => {
+    const pid = ctx.positionByName.get(posName);
+    if (pid === undefined || !slotsByPosition.has(pid)) return null;
+    const pos = ctx.positions.get(pid)!;
+    if (pos.config?.seat_rules || pos.config?.staff_all_roles) return null;   // staffed by pre-pass only
+    const slots = slotsByPosition.get(pid)!;
+    // H6-pool (config.candidate_pool, e.g. קצין מוצב): manned ONLY from the
+    // named list — unordered, rotating by fairness, NON-exclusive (members
+    // serve anywhere when not picked). Enforced inside allowedIn().
+    const namePool: string[] | undefined = pos.config?.candidate_pool;
+    const eligible = (st: SoldierState) => {
+      const s = st.soldier;
+      if (st.level1 !== null || fullyBlocked(g, s.id)) return false;
+      if (!allowedIn(g, s, posName)) return false;             // H6b/H6c/H6-pool whitelists
+      // must be available for at least one of the position's slot windows
+      // (a soldier leaving/arriving mid-day can't hold a window he'd miss)
+      if (!slots.some((sl) => !isBlocked(g, s.id, sl.period))) return false;
+      // H6 fallback role gate — only when no candidate_pool is configured
+      if (!namePool && posName === 'קצין מוצב' && !s.isSeniorCommander) return false;
+      if (posName === 'עמדות הגנה' && s.isSeniorCommander) return false;         // H6
+      return true;
+    };
+    // For positions whose work is anchored to few starts (daily missions)
+    // rank by rest before the earliest MISSION slot — readiness slots are
+    // rest-transparent and must not mask the hint (e.g. התקפי's 24h slot).
+    const missionSlots = slots.filter((s) =>
+      ctx.positions.get(s.positionId)!.missionClass !== 'readiness');
+    const starts = [...new Set(missionSlots.map((s) => s.period[0]))];
+    const atStart = starts.length > 0 && starts.length <= 2 ? Math.min(...starts) : undefined;
+    const assigned = () => [...level1.values()].filter((p) => p === pid).length;
+    const take = (st: SoldierState) => { st.level1 = pid; level1.set(st.soldier.id, pid); };
+    return { pid, pos, slots, eligible, atStart, assigned, take };
+  };
+
+  // ── Closed-list pre-pass (owner decision 2026-07-19): a position manned
+  // ONLY from a fixed candidate list (config.candidate_pool — קצין מוצב) is
+  // staffed FIRST — before the מגן-commander reservation, continuity, or any
+  // later fill can consume a pool member. The list is small and has no
+  // substitutes, so its pick always wins; rank keeps the pool's fairness
+  // rotation. The persisted מגן commander is taken from the pool only as a
+  // LAST resort — when another member can hold the seat, מגן keeps its
+  // commander (the forced case emits a מגן issue below).
+  {
+    const magenCmd = typeof ctx.config.magen_commander === 'string'
+      ? nrm(ctx.config.magen_commander) : undefined;
+    for (const pos of ctx.positions.values()) {
+      if (!pos.config?.candidate_pool) continue;
+      const c = posCtx(pos.name);
+      if (!c) continue;
+      const { pid, slots, eligible, atStart, assigned, take } = c;
+      let need = demand(g, pid, slots) - assigned();
+      if (need <= 0) continue;
+      const pool = rank(g, [...state.values()].filter(eligible), pid, false, atStart)
+        // stable sort: the מגן commander sinks to the end, fairness order kept
+        .sort((a, b) => Number(nrm(a.soldier.name) === magenCmd)
+          - Number(nrm(b.soldier.name) === magenCmd));
+      for (const st of pool) {
+        if (need <= 0) break;
+        take(st); need--;
+        st.level1Rationale.push({ code: 'candidate_pool', params: { position: pos.name } });
+      }
+    }
+  }
+
   // ── Everyone works (owner rule): flexible seat counts ─────────────────────
   // Every present soldier must do a shift — מנוחה is not a planned outcome.
   // Surplus soldiers enlarge מגן up to its flex max (12); on shortage מגן
@@ -247,7 +314,14 @@ export function runLevel1(g: Gen): Level1Plan {
       } else if (fullyBlocked(g, st.soldier.id) || !allowedIn(g, st.soldier, 'מגן')) {
         issues.push(`מגן: המפקד המוגדר ${name} אינו זמין היום`);
       } else if (st.level1 !== null && st.level1 !== magenId) {
-        issues.push(`מגן: המפקד המוגדר ${name} כבר משובץ לעמדה אחרת (נעילה)`);
+        const other = ctx.positions.get(st.level1);
+        if (other?.config?.candidate_pool) {
+          // closed-list positions staff first (owner decision 2026-07-19):
+          // the pool pick wins — the officer must name a substitute
+          issues.push(`מגן: המפקד המוגדר ${name} שובץ ל${other.name} — נדרש מפקד מגן חלופי`);
+        } else {
+          issues.push(`מגן: המפקד המוגדר ${name} כבר משובץ לעמדה אחרת (נעילה)`);
+        }
       } else if (st.level1 === null) {
         st.level1 = magenId; level1.set(st.soldier.id, magenId);
         st.level1Rationale.push({ code: 'magen_commander' });
@@ -314,61 +388,17 @@ export function runLevel1(g: Gen): Level1Plan {
   // fill order: role-gated / commander-heavy first
   const order = ['קצין מוצב', 'סיור', 'התקפי', 'מגן', 'עמדות הגנה', 'חפק', 'תורנים'];
 
-  // shared per-position context for the two fill passes below
-  const posCtx = (posName: string) => {
-    const pid = ctx.positionByName.get(posName);
-    if (pid === undefined || !slotsByPosition.has(pid)) return null;
-    const pos = ctx.positions.get(pid)!;
-    if (pos.config?.seat_rules || pos.config?.staff_all_roles) return null;   // staffed by pre-pass only
-    const slots = slotsByPosition.get(pid)!;
-    // H6-pool (config.candidate_pool, e.g. קצין מוצב): manned ONLY from the
-    // named list — unordered, rotating by fairness, NON-exclusive (members
-    // serve anywhere when not picked). Enforced inside allowedIn().
-    const namePool: string[] | undefined = pos.config?.candidate_pool;
-    const eligible = (st: SoldierState) => {
-      const s = st.soldier;
-      if (st.level1 !== null || fullyBlocked(g, s.id)) return false;
-      if (!allowedIn(g, s, posName)) return false;             // H6b/H6c/H6-pool whitelists
-      // must be available for at least one of the position's slot windows
-      // (a soldier leaving/arriving mid-day can't hold a window he'd miss)
-      if (!slots.some((sl) => !isBlocked(g, s.id, sl.period))) return false;
-      // H6 fallback role gate — only when no candidate_pool is configured
-      if (!namePool && posName === 'קצין מוצב' && !s.isSeniorCommander) return false;
-      if (posName === 'עמדות הגנה' && s.isSeniorCommander) return false;         // H6
-      return true;
-    };
-    // For positions whose work is anchored to few starts (daily missions)
-    // rank by rest before the earliest MISSION slot — readiness slots are
-    // rest-transparent and must not mask the hint (e.g. התקפי's 24h slot).
-    const missionSlots = slots.filter((s) =>
-      ctx.positions.get(s.positionId)!.missionClass !== 'readiness');
-    const starts = [...new Set(missionSlots.map((s) => s.period[0]))];
-    const atStart = starts.length > 0 && starts.length <= 2 ? Math.min(...starts) : undefined;
-    const assigned = () => [...level1.values()].filter((p) => p === pid).length;
-    const take = (st: SoldierState) => { st.level1 = pid; level1.set(st.soldier.id, pid); };
-    return { pid, pos, slots, eligible, atStart, assigned, take };
-  };
-
   // ── Pass A: HARD role quotas across ALL positions — commanders (H6/item
   // 12), then qualified drivers (H6d) — BEFORE any soft/fairness fill, so an
   // earlier position's general fill can never starve a later position of its
-  // required commanders/drivers.
+  // required commanders/drivers. (candidate_pool demand — קצין מוצב — is
+  // reserved even earlier, in the closed-list pre-pass above.)
   for (const posName of order) {
     const c = posCtx(posName);
     if (!c) continue;
     const { pid, pos, slots, eligible, atStart, assigned, take } = c;
     const totalNeed = demand(g, pid, slots);
     let need = totalNeed - assigned();
-    // candidate_pool positions (קצין מוצב) can ONLY be manned from their
-    // named list — that list is small and its members are commanders, so the
-    // position's whole demand is a hard-role need: reserve it here, before
-    // other positions' commander quotas can consume the pool.
-    if (pos.config?.candidate_pool && need > 0) {
-      for (const st of rank(g, [...state.values()].filter(eligible), pid, false, atStart)) {
-        if (need <= 0) break;
-        take(st); need--;
-      }
-    }
     // group positions (config.group_size, e.g. התקפי 2×(מפקד+3)): one
     // commander per group, not just per commander-first slot start
     const groupSize: number | undefined = pos.config?.group_size;

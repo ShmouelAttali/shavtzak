@@ -29,6 +29,7 @@ export type RationaleCode =
   | 'chain_commander'       // chain commander slot: commander in crew / highest rifle
   | 'chain_completion'      // chain crew short (source went home) — completed fresh
   | 'magen_commander'       // the weekly מגן commander decision (config)
+  | 'candidate_pool'        // H6-pool: reserved first from the position's fixed candidate list
   | 'driver_quota'          // picked in the position's Level-1 driver quota
   | 'driver_seat'           // seat requires a qualified driver
   | 'platoon_group'         // P5: joins a commander's same-platoon group (התקפי)
@@ -73,6 +74,7 @@ export const TEMPLATES: Record<RationaleCode, string> = {
   chain_commander: 'מפקד הכונן — מפקד מהצוות, או הרובאי הבכיר באין מפקד',
   chain_completion: 'השלמה לכוננות: הצוות שירד מ{source} יצא/חסר — נבחר חייל זמין (עדיפות למי שחזר לבסיס)',
   magen_commander: 'מפקד המגן שנקבע לשבוע — מוביל את צוות המגן',
+  candidate_pool: 'שובץ מהרשימה הקבועה של {position} — התפקיד מתחלף בין חברי הרשימה לפי ההוגנות',
   driver_quota: 'שובץ במכסת הנהגים של {position} (נדרש {qual})',
   driver_seat: 'מושב נהג — נדרש {qual} בצוות',
   platoon_group: 'מצטרף לקבוצה של {commander} (מחלקה {platoon})',

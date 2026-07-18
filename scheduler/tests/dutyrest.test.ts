@@ -101,6 +101,39 @@ test('R5: finishing התקפי → 14:00 start of the new schedule day passes va
   assert.ok(!f.some((x) => x.rule === 'rest' && x.message.includes('תוקף אתמול')), JSON.stringify(f));
 });
 
+test('R1 daily exception: 4h rest before a daily duty — primary pick, no warning', async () => {
+  await toranimOnly();
+  await addSoldier('R010', 'רגיל אחד');
+  await addSoldier('R011', 'סיים בעשר');
+  // mission ends 10:00 → the 14:00 daily starts after exactly 4h of rest;
+  // previously this was a rest_lt8_long בדוחק fallback (24h > long-task)
+  await manualRow('סיים בעשר', 'עמדות הגנה', Y, '2026-08-20 06:00', '2026-08-20 10:00');
+  await persist(await generate(D));
+  const rows = await query<{ violations: string[] }>(`
+    select sa.violations from shift_assignments sa
+    join positions p on p.id = sa.position_id
+    join soldiers s on s.id = sa.soldier_id
+    where sa.day = $1 and p.name = 'תורנים' and s.full_name = 'סיים בעשר'`, [D]);
+  assert.equal(rows.length, 1, JSON.stringify(rows));
+  assert.deepEqual(rows[0].violations, [], JSON.stringify(rows[0].violations));
+  const f = await validateDay(D);
+  assert.ok(!f.some((x) => x.rule === 'rest' && x.message.includes('סיים בעשר')), JSON.stringify(f));
+});
+
+test('R1 daily exception: under 4h rest before a daily is still a hard block', async () => {
+  await toranimOnly();
+  await addSoldier('R012', 'רגיל אחד');
+  await addSoldier('R013', 'סיים באחת עשרה');
+  await manualRow('סיים באחת עשרה', 'עמדות הגנה', Y, '2026-08-20 07:00', '2026-08-20 11:00');
+  await persist(await generate(D));
+  const rows = await query(`
+    select 1 from shift_assignments sa
+    join positions p on p.id = sa.position_id
+    join soldiers s on s.id = sa.soldier_id
+    where sa.day = $1 and p.name = 'תורנים' and s.full_name = 'סיים באחת עשרה'`, [D]);
+  assert.equal(rows.length, 0, '3h rest must still block a daily assignment (H8)');
+});
+
 test('תורנים exception: an immediate 14:00 start is flagged as a rest error', async () => {
   await toranimOnly();
   await addSoldier('R005', 'תורן אתמול');

@@ -1,5 +1,14 @@
 # shavtzak — project guide
 
+## Working style (owner request, 2026-07-19)
+
+- **Parallelize aggressively**: when the owner gives several independent tasks,
+  run each in its own subagent concurrently instead of working through them
+  serially. Keep file-scope disjoint between concurrent agents (scheduler
+  src files, docs, tests) and do only quick glue work inline.
+- Ask the owner questions **in English** (options/labels may quote Hebrew
+  domain terms).
+
 ## Rules overhaul (2026-07-18) — owner's 18-item list, all implemented
 
 - **Everyone works, no מנוחה**: flex seats (`positions.config.flex_seats`) —

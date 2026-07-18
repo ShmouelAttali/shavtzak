@@ -41,10 +41,13 @@ export async function generate(day: string): Promise<GenerateResult> {
 
   // Everyone works (owner rule): report every soldier who STILL rests after
   // Level 2 (its pull-from-מנוחה path may have rescued Level-1 leftovers).
+  // Unchosen seat-rule candidates (surviving seatRestrict — e.g. the unpicked
+  // מ"פ/סמ"פ of the חפק commander seat) rest BY DESIGN (H6b: no substitutes,
+  // reserved to their seat) — not a planning failure, so not reported.
   const restId = ctx.positionByName.get('מנוחה');
   if (restId !== undefined) {
     for (const st of g.state.values()) {
-      if (st.level1 === restId) {
+      if (st.level1 === restId && !g.seatRestrict.has(st.soldier.id)) {
         g.issues.push(`${st.soldier.name} נותר במנוחה — כל חייל זמין אמור לעבוד`);
       }
     }

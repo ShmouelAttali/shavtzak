@@ -163,7 +163,9 @@ export async function validateDay(day: string): Promise<Finding[]> {
             message: `${b.soldierName}: מנוחה ${(gap / 60).toFixed(1)}ש׳ לפני ${b.positionName} ${fmtHM(b.period[0])} (מינימום ${tunables.restMinH})`,
           });
         }
-      } else if (gap < REST_IDEAL) {
+      } else if (gap < REST_IDEAL && !posConfig.get(b.positionId)?.daily) {
+        // R1 daily exception (owner, 2026-07-19): 4h rest suffices before a
+        // daily 14:00–14:00 duty — the soldier sleeps inside it; no warning
         findings.push({
           severity: 'warning', rule: 'rest', soldierId: sid,
           message: `${b.soldierName}: מנוחה קצרה ${(gap / 60).toFixed(1)}ש׳ לפני ${b.positionName} ${fmtHM(b.period[0])}`,
@@ -362,9 +364,24 @@ export async function validateDay(day: string): Promise<Finding[]> {
       }
     }
     // everyone works (owner rule): an available soldier bucketed to מנוחה is
-    // a planning exception — every present soldier must do a shift
+    // a planning exception — every present soldier must do a shift.
+    // Exception (mirrors the generator's seatRestrict skip): candidates of a
+    // NON-release seat rule (e.g. the חפק מ"פ/סמ"פ commander seat) are
+    // reserved to their seat with no substitutes (H6b) — the unchosen ones
+    // rest BY DESIGN and are not flagged.
+    const seatReserved = new Set<number>();
+    for (const p of posRows as any[]) {
+      for (const rule of (p.config?.seat_rules ?? []) as any[]) {
+        if (rule.release_unpicked) continue;
+        const names = new Set(((rule.soldiers ?? []) as string[]).map(nrm));
+        const roles = new Set(((rule.roles ?? []) as string[]).map(nrm));
+        for (const s of soldierRows as any[]) {
+          if (names.has(nrm(s.full_name)) || roles.has(nrm(s.role ?? ''))) seatReserved.add(s.id);
+        }
+      }
+    }
     for (const r of dayAssignRows as any[]) {
-      if (r.pos_name !== 'מנוחה' || fullyOut.has(r.soldier_id)) continue;
+      if (r.pos_name !== 'מנוחה' || fullyOut.has(r.soldier_id) || seatReserved.has(r.soldier_id)) continue;
       const s = schedulable.get(r.soldier_id);
       if (!s?.ok) continue;
       findings.push({

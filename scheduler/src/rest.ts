@@ -109,9 +109,11 @@ export const restBefore = (g: Gen, st: SoldierState, start: Minutes): number =>
 
 /** Feasibility of `st` for a slot window: hard blocks (H1/H3/H3b/R4/H6 seat,
  *  H8 rest floor — absolute, no בדוחק), fallback-only conditions (R1
- *  long-task rest, R6 third night), and soft short-rest annotation. */
+ *  long-task rest, R6 third night), and soft short-rest annotation.
+ *  `slotDaily` (position config.daily): 4h rest suffices before a daily
+ *  14:00–14:00 duty — no long-task fallback, no short-rest annotation. */
 export function fits(g: Gen, st: SoldierState, slot: [Minutes, Minutes], commanderSeat: boolean,
-                     isReadiness = false, nightExempt = false): Fit {
+                     isReadiness = false, nightExempt = false, slotDaily = false): Fit {
   const T = g.ctx.tunables;
   const s = st.soldier;
   const reasons: FitReason[] = [];
@@ -147,6 +149,11 @@ export function fits(g: Gen, st: SoldierState, slot: [Minutes, Minutes], command
     return { ok: false, fallback: false,
       reasons: [{ code: 'rest_lt4', params: { minH: String(T.restMinH) } }] };
   }
+  // R1 daily exception (owner, 2026-07-19): 4h rest suffices before a daily
+  // 14:00–14:00 duty (מגן/התקפי/תורנים/חפק/קצין מוצב) — the soldier sleeps
+  // inside it, so neither the long-task fallback nor the short-rest
+  // annotation applies (the H8 4h floor above still does).
+  if (slotDaily) return { ok: true, fallback: false, reasons };
   if (rest < T.restIdealH * 60 && hours(slot) > T.longTaskH) {
     return { ok: true, fallback: true,
       reasons: [{ code: 'rest_lt8_long', params: { idealH: String(T.restIdealH) } }] };

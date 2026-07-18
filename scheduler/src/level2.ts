@@ -219,13 +219,14 @@ export function fillLevel2(g: Gen, plan1: Level1Plan): void {
         const pick = plan.get(subKey);
         if (!pick) continue;   // empty seat — issue already raised in the pre-pass
         const nightExempt = ctx.positions.get(pid)?.config?.night_exempt ?? false;
+        const posDaily = ctx.positions.get(pid)?.config?.daily ?? false;
         const isCmd = ruleMap.get(subKey)?.commander ?? false;
         if (isSeatPair(pick)) {
           const { d, a, handover } = pick;
           const firstHalf: [Minutes, Minutes] = [slot.period[0], handover];
           const secondHalf: [Minutes, Minutes] = [handover, slot.period[1]];
-          const fd = fits(g, d, firstHalf, false, false, nightExempt);
-          const fa = fits(g, a, secondHalf, false, false, nightExempt);
+          const fd = fits(g, d, firstHalf, false, false, nightExempt, posDaily);
+          const fa = fits(g, a, secondHalf, false, false, nightExempt, posDaily);
           if (!fd.ok || !fa.ok) {
             const bad = !fd.ok ? d : a;
             const reasons = fitTexts((!fd.ok ? fd : fa).reasons).join(', ');
@@ -246,7 +247,7 @@ export function fillLevel2(g: Gen, plan1: Level1Plan): void {
           continue;
         }
         const st = pick;
-        const fit = fits(g, st, slot.period, false, false, nightExempt);
+        const fit = fits(g, st, slot.period, false, false, nightExempt, posDaily);
         if (!fit.ok) {
           issues.push(`${posName} ${slot.subName}: ${st.soldier.name} חסום (${fitTexts(fit.reasons).join(', ')}) — המושב נשאר ריק`);
           continue;
@@ -290,6 +291,7 @@ export function fillLevel2(g: Gen, plan1: Level1Plan): void {
     for (const slot of sorted) {
       const slotReadiness = ctx.positions.get(slot.positionId)!.missionClass === 'readiness';
       const slotNightExempt = ctx.positions.get(slot.positionId)!.config?.night_exempt ?? false;
+      const slotDaily = ctx.positions.get(slot.positionId)!.config?.daily ?? false;
       // rows the exit pre-pass already put in this slot occupy its top seats
       const pre = g.assignments.filter((a) => a.positionId === slot.positionId
         && a.subPositionId === slot.subPositionId && a.period[0] === slot.period[0]);
@@ -302,7 +304,7 @@ export function fillLevel2(g: Gen, plan1: Level1Plan): void {
         const evals = group
           .filter((st) => !takenThisSlot.has(st.soldier.id))
           .filter((st) => !driverSeat || isDriver(st))
-          .map((st) => ({ st, fit: fits(g, st, slot.period, commanderSeat, slotReadiness, slotNightExempt) }));
+          .map((st) => ({ st, fit: fits(g, st, slot.period, commanderSeat, slotReadiness, slotNightExempt, slotDaily) }));
         const primary = evals.filter((e) => e.fit.ok && !e.fit.fallback).map((e) => e.st);
         const fallback = evals.filter((e) => e.fit.ok && e.fit.fallback);
         // pre-pick snapshot of the primary group's fairness keys (the exact
@@ -329,7 +331,7 @@ export function fillLevel2(g: Gen, plan1: Level1Plan): void {
             && (!commanderSeat || st.soldier.isCommander)
             && (!driverSeat || isDriver(st)));
           const fitting = resters.filter((st) => {
-            const f = fits(g, st, slot.period, commanderSeat, slotReadiness, slotNightExempt);
+            const f = fits(g, st, slot.period, commanderSeat, slotReadiness, slotNightExempt, slotDaily);
             return f.ok && !f.fallback;
           });
           const pulled = rank(g, fitting, pid, forNight, slot.period[0], slot.subPositionId)[0];
@@ -339,13 +341,16 @@ export function fillLevel2(g: Gen, plan1: Level1Plan): void {
             group.push(pulled);
             picked = pulled;
             pickedFrom = 'rest';
-            viol = ['הושלם ממנוחה'];
+            // no violation note (owner, 2026-07-19): with everyone-works,
+            // pulling from מנוחה is routine — the pulled_from_rest rationale
+            // still records it for the popup
+            viol = [];
           }
         }
         if (!picked) {
           const paired = tryReplacementPair(g, {
             slot, seat, pid, posName, commanderSeat, forNight, slotNightExempt,
-            slotReadiness, isDriverSeat: driverSeat ? isDriver : undefined,
+            slotReadiness, slotDaily, isDriverSeat: driverSeat ? isDriver : undefined,
             takenThisSlot, group, restId,
             buildHalf: (st, half, fitReasons) => buildRationale(g, st, half, pid, {
               pickedFrom: 'primary', fitReasons, commanderSeat,
@@ -365,7 +370,7 @@ export function fillLevel2(g: Gen, plan1: Level1Plan): void {
           continue;
         }
         takenThisSlot.add(picked.soldier.id);
-        const fit = fits(g, picked, slot.period, commanderSeat, slotReadiness, slotNightExempt);
+        const fit = fits(g, picked, slot.period, commanderSeat, slotReadiness, slotNightExempt, slotDaily);
         const rationale = buildRationale(g, picked, slot, pid, {
           pickedFrom, fitReasons: fit.reasons, commanderSeat, groupNights, groupLoads,
           myNights: nightsOf(picked, forNight), myLoad: loadOf(picked),

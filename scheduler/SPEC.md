@@ -61,7 +61,10 @@ flex positions shrink — סיור drops from 4 to a minimum of 3 seats per shif
 enlarge מגן **beyond** 12 (the manual decision wins); shrinking below the flex
 minimum loses to everyone-works — surplus soldiers still get seats. A soldier
 left in מנוחה is reported (generation issue + validator warning `rest_bucket`).
-Slot coverage is judged against the flex **minimum** (§8).
+Exception (owner decision 2026-07-19): unchosen candidates of a **non-release
+seat rule** (H6b — e.g. the חפק מ"פ/סמ"פ commander seat) are reserved to their
+seat with no substitutes, so their מנוחה day is by design — neither report
+flags them. Slot coverage is judged against the flex **minimum** (§8).
 
 Ad-hoc attack missions (פטרול, צ'קפוסט…) are recorded manually as extra
 mission rows when they happen; they may **not** overlap a readiness row —
@@ -137,7 +140,12 @@ cross the boundary).
   name list — שמואל אטלי, צבי שור, יוחאי יעקבסון, אורי שאג, אלעד זיו,
   אביאל גיאת, עמיחי ברוורמן, גלעד דביר. The list is **unordered** — the duty
   rotates among the members by fairness (P2–P6). **Non-exclusive** (unlike
-  H6b): list members serve anywhere normally when not picked. Enforced through
+  H6b): list members serve anywhere normally when not picked. **Staffed
+  first** (owner decision 2026-07-19): a closed-list position gets its pick
+  before any other reservation — including the מגן-commander reservation and
+  continuity — can consume a pool member (§7 Level-1 step 3); the persisted
+  מגן commander is picked from the pool only when no other member is
+  available, and מגן then emits a substitute-commander issue. Enforced through
   every fill path (the same `allowedIn` whitelist mechanism as H6b/H6c) and
   validated (`role_gate` error; imported history rows predate the rule and are
   excused).
@@ -221,6 +229,11 @@ cross the boundary).
     day) is an **error**; 4–8h is a **warning** (a hard-8h error rule would
     flag every legal short-task pick the generation regime allows). R5-exempt
     14:00-boundary starts are skipped.
+  - **Daily-duty exception** (owner decision 2026-07-19): 4h rest **suffices**
+    before a daily 14:00–14:00 duty (`config.daily` — מגן/התקפי/תורנים/חפק/
+    קצין מוצב): the soldier sleeps inside the duty, so the 4–8h band produces
+    no long-task fallback, no generation warning, and no validation warning.
+    The < 4h hard block / error is unchanged.
 - **R2**: readiness (התקפי/כרמל/כונן גשש) is **rest-transparent** (assumed sleeping) and its hours are counted separately from mission hours.
 - **R3 כונן גשש — night window only** (owner decision 2026-07-18): a גשש
   **night window** (22:00–07:00, i.e. any גשש row overlapping its schedule
@@ -369,16 +382,27 @@ night_count first, weighted_hours second, per-position counts third.
   positions, in this order:
   1. honor Level-1 **locks**;
   2. **H6b seat-rule pre-pass** (חפק) and **staff_all_roles crews** (חמל, מפלג);
-  3. **flex sizing** (everyone-works): מגן seats = the free pool minus the
+  3. **closed-list pre-pass** (owner decision 2026-07-19): every
+     `candidate_pool` position (H6-pool — קצין מוצב) is staffed now, from its
+     fixed list only, by the pool's fairness rotation — BEFORE the
+     מגן-commander reservation, continuity, or any later fill can consume a
+     pool member (the list is small and has no substitutes, so its pick
+     always wins). The persisted `magen_commander` is taken from the pool
+     only as a **last resort** — when another member can hold the seat, מגן
+     keeps its commander; rationale `candidate_pool`;
+  4. **flex sizing** (everyone-works): מגן seats = the free pool minus the
      other positions' demand, clamped to the flex range (10–12; a manual seat
      override may raise the max); on shortage, flex positions (סיור) shrink
      one seat per shift down to their min (3) until מגן's minimum crew fits;
-  4. **מגן commander reservation**: the persisted weekly decision (config key
+  5. **מגן commander reservation**: the persisted weekly decision (config key
      `magen_commander`) names the מגן commander — he is reserved to מגן before
-     anything else can take him, and his מחלקה anchors the crew's
-     same-platoon preference;
-  5. **continuity pre-pass** (מגן): returning crew members reserved;
-  6. **half-day-exit pre-pass** (H9): every exit-day soldier not already
+     anything else except a closed list can take him, and his מחלקה anchors
+     the crew's same-platoon preference. If the closed-list pre-pass already
+     took him (he was the only available pool member), מגן falls back with a
+     generation issue — `מגן: המפקד המוגדר X שובץ לקצין מוצב — נדרש מפקד מגן
+     חלופי` — so the officer names a substitute;
+  6. **continuity pre-pass** (מגן): returning crew members reserved;
+  7. **half-day-exit pre-pass** (H9): every exit-day soldier not already
      placed by a lock or seat rule is assigned a **shift position**
      (`isShiftPosition` — non-daily, non-readiness) with at least one slot
      outside his exit window — preferring unmet demand, then packing
@@ -386,22 +410,21 @@ night_count first, weighted_hours second, per-position counts third.
      then P4 position balance; rationale `exit_shift_fill`. No fitting
      position → generation issue, and the soldier falls through to the
      normal flow;
-  7. demand-driven fill in a fixed order (קצין מוצב → סיור → התקפי → מגן →
+  8. demand-driven fill in a fixed order (קצין מוצב → סיור → התקפי → מגן →
      עמדות הגנה), in **two passes**: pass A reserves the HARD role needs for
-     ALL positions first — the קצין מוצב `candidate_pool` demand (the pool is
-     small and its members are commanders, so it must be reserved before
-     anyone's commander quota can consume it), then per position the
-     **commander quota** (one per commander-first slot start; התקפי: one per
-     `group_size` group = 2) and the **H6d driver quota** (one qualified
-     driver per distinct slot start) — so an earlier position's general fill
-     can never starve a later position of its required commanders/drivers;
+     ALL positions first — per position the **commander quota** (one per
+     commander-first slot start; התקפי: one per `group_size` group = 2) and
+     the **H6d driver quota** (one qualified driver per distinct slot
+     start) — so an earlier position's general fill can never starve a later
+     position of its required commanders/drivers (the קצין מוצב
+     `candidate_pool` demand is reserved even earlier, in step 3);
      pass B then runs the soft fill per position — the התקפי
      **platoon-group fill** (each quota commander anchors a group of 3,
      preferably his own מחלקה), then the ranked fill by the priority list;
-  8. **everyone-works absorb**: leftover available soldiers join מגן up to its
+  9. **everyone-works absorb**: leftover available soldiers join מגן up to its
      flex max (12) before anyone is allowed to rest;
-  9. residual bucketing: מנוחה (reported as a generation issue — every
-     available soldier should work) or בבית (blocked all day).
+  10. residual bucketing: מנוחה (reported as a generation issue — every
+      available soldier should work) or בבית (blocked all day).
 - **Level 2**: fill concrete slots inside each position (hours, seats, night rotation
   within group by night_count, commander first-seat, then the H6d **driver
   seat** — the seat right after the commander seat is reserved for a
@@ -512,7 +535,7 @@ Principles:
   `readiness_hour_weight` (0.25, also read by `soldier_fairness` in SQL).
   One more config key is read directly (not a numeric tunable):
   `magen_commander` — the persisted weekly מגן-commander decision (a soldier
-  name; §7 step 4).
+  name; §7 step 5).
   The 14:00 day anchor and the 00:00–06:00 night window are **hardcoded
   mirrors** in `src/time.ts` + `db/schema.sql` by design — changing them
   mid-deployment would silently reinterpret all stored data.
