@@ -1,8 +1,39 @@
 # shavtzak — project guide
 
+## Rules overhaul (2026-07-18) — owner's 18-item list, all implemented
+
+- **Everyone works, no מנוחה**: flex seats (`positions.config.flex_seats`) —
+  מגן 10–12 absorbs surplus, סיור shrinks 4→3/shift on shortage; leftover
+  absorb into מגן; validator `rest_bucket` warning; coverage judged vs flex
+  min. Manual seat_override may enlarge מגן beyond 12 (manual wins); shrinking
+  below min loses to everyone-works.
+- **קצין מוצב**: `candidate_pool` (8 names) — unordered, fairness-rotated,
+  NON-exclusive; enforced in `allowedIn()` (every fill path) + validator.
+- **Hard rules H6d**: every סיור crew ≥1 נהג דוד, התקפי ≥1 נהג טיגריס
+  (L1 driver quota after commander quota; L2 driver seat after commander
+  seat; validator `driver`). התקפי template now `commander_first_seat=true`.
+- **H8 absolute**: <4h rest is a hard block — no בדוחק (only R5 duty-rest
+  exempts). R3 גשש: ONLY the 22–07 night window counts as load (tracker hours
+  + effective-rest; day windows free). Bus time is **08:00** (was 10:00).
+- **Priorities**: static-streak (T3) and new on-call streak (T6: 3rd day of
+  only static+כוננות, validator `oncall_streak`) rank ABOVE night fairness
+  (P2) — owner: constant static is worse than constant nights. New P4b key:
+  different static post per soldier within the same 24h (sub rotation).
+- **התקפי**: soft 2×(1 מפקד + 3 same-מחלקה) via `group_size:4`; מפקד כרמל =
+  commander from crew first, else highest רובאי. מפקד def: מ"מ/סמל/מ"כ/מ"ח.
+- **מפלג position** (id 14): רס"פ/סרס"פ/מנהלה staff — daily 14:00–14:00 row,
+  restricted to it (staff_all_roles); presence follows the sheet's מפלג tab
+  סטטוס (לא מגיע → `is_schedulable=false`; that was the בנימין קיי bug).
+- **מגן commander**: weekly decision persisted in `config.magen_commander`;
+  generator reserves him + anchors the crew's platoon. Use the
+  **`weekly-shavtzak` skill** to generate a week (asks + persists).
+- יהונתן רוט: `allowed_positions` = עמדות הגנה/כרמל חטיבה/תורנים.
+- Live delta: `db/rules-2026-07-18.sql` (applied); baseline schema/seed
+  updated in step.
+
 ## Current state (2026-07-17)
 
-Everything below is implemented, tested (125 tests: `scheduler/` 110 + root 15),
+Everything below is implemented, tested (143 tests: `scheduler/` 128 + root 15),
 and live against the shared Supabase project:
 
 - **Scheduler DB** on Supabase (schema in `scheduler/db/schema.sql`, template

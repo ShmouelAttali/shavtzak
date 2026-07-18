@@ -44,14 +44,15 @@ test('generator fills מגן with the version in force on each side of the cutov
     select sa.period::text, count(*) n from shift_assignments sa
     join positions p on p.id = sa.position_id
     where p.name = 'מגן' and sa.day = $1 group by 1`, [d]);
+  // the 60-soldier fixture has surplus → flex absorbs up to the מגן max (12)
   const oldRows = await dist(OLD_DAY);
   assert.equal(oldRows.length, 1, JSON.stringify(oldRows));
   assert.ok(oldRows[0].period.includes('2026-07-18 06:00'), oldRows[0].period);
-  assert.equal(Number(oldRows[0].n), 10);
+  assert.equal(Number(oldRows[0].n), 12);
   const newRows = await dist(NEW_DAY);
   assert.equal(newRows.length, 1, JSON.stringify(newRows));
   assert.ok(newRows[0].period.includes('2026-07-19 14:00'), newRows[0].period);
-  assert.equal(Number(newRows[0].n), 10);
+  assert.equal(Number(newRows[0].n), 12);
 });
 
 test('slot_templates no-overlap EXCLUDE rejects a version overlapping an active one', async () => {

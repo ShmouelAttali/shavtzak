@@ -1,6 +1,8 @@
-// Level 1 (SPEC §7): partition the available soldiers into positions + מנוחה
-// for the schedule day — locks, the H6b seat-rule pre-pass, staff_all_roles
-// crews, continuity crews, then the demand-driven fill in priority order.
+// Level 1 (SPEC §7): partition the available soldiers into positions for the
+// schedule day — locks, the H6b seat-rule pre-pass, staff_all_roles crews,
+// flex seat sizing (everyone works — מנוחה is not a planned outcome),
+// continuity crews, then the demand-driven fill in priority order with hard
+// commander/driver quotas first.
 
 import { Minutes, overlaps } from './time.js';
 import { Slot, SeatRule } from './model.js';
@@ -108,7 +110,7 @@ export function runLevel1(g: Gen): Level1Plan {
           // H6b pair handover: when no candidate covers the whole window, a
           // departing candidate (available until his leave time) and an
           // arriving one (available from it) may split the seat — both from
-          // the seat's OWN list, so "no substitutes" holds. Bus-at-10:00
+          // the seat's OWN list, so "no substitutes" holds. Bus-at-08:00
           // blocks meet exactly at the handover.
           const dep = new Map<SoldierState, Minutes>();
           const arr = new Map<SoldierState, Minutes>();
@@ -176,6 +178,78 @@ export function runLevel1(g: Gen): Level1Plan {
     }
   }
 
+  // ── Everyone works (owner rule): flexible seat counts ─────────────────────
+  // Every present soldier must do a shift — מנוחה is not a planned outcome.
+  // Surplus soldiers enlarge מגן up to its flex max (12); on shortage מגן
+  // stays at its flex min (10) and flex positions like סיור shrink one seat
+  // per shift (down to their min, 3) until demand fits the pool.
+  const magenId = ctx.positionByName.get('מגן');
+  let magenEffMax: number | undefined;
+  {
+    const magenSlots = magenId !== undefined ? slotsByPosition.get(magenId) : undefined;
+    const magenFlex = magenId !== undefined ? ctx.positions.get(magenId)?.config?.flex_seats : undefined;
+    if (magenSlots && magenFlex) {
+      // an explicit seat override may ENLARGE the crew beyond the flex max
+      // (manual decision wins); shrinking below the flex min loses to the
+      // everyone-works rule — surplus soldiers still need a seat
+      const base = magenSlots[0].seats;
+      const effMin = Math.min(magenFlex.min, base);
+      magenEffMax = Math.max(magenFlex.max, base);
+      const pool = [...state.values()].filter((st) =>
+        st.level1 === null && !fullyBlocked(g, st.soldier.id)).length;
+      const assignedTo = (pid: number) => [...level1.values()].filter((p) => p === pid).length;
+      const nonMagenNeed = () => {
+        let n = 0;
+        for (const [pid, posSlots] of slotsByPosition) {
+          if (pid === magenId) continue;
+          const pos = ctx.positions.get(pid)!;
+          if (pos.config?.seat_rules || pos.config?.staff_all_roles) continue; // pre-pass staffed
+          n += Math.max(0, demand(g, pid, posSlots) - assignedTo(pid));
+        }
+        return n;
+      };
+      let free = pool - nonMagenNeed();
+      // shortage: shrink other flex positions (סיור 4 → min 3) until מגן's
+      // minimum crew fits
+      for (const [pid, posSlots] of slotsByPosition) {
+        if (pid === magenId) continue;
+        const flex = ctx.positions.get(pid)?.config?.flex_seats;
+        if (!flex) continue;
+        while (free + assignedTo(magenId!) < effMin
+               && posSlots.some((s) => s.seats > flex.min)) {
+          for (const s of posSlots) if (s.seats > flex.min) s.seats--;
+          free = pool - nonMagenNeed();
+        }
+      }
+      const seats = Math.max(effMin,
+        Math.min(magenEffMax, free + assignedTo(magenId!)));
+      for (const s of magenSlots) s.seats = seats;
+      if (free + assignedTo(magenId!) < effMin) {
+        issues.push(`מגן: חסרים ${effMin - free - assignedTo(magenId!)} חיילים לאיוש מלא`);
+      }
+    }
+  }
+
+  // ── מגן commander (weekly decision, config key `magen_commander`) ─────────
+  // Reserved to מגן before anything else can take him; his platoon anchors
+  // the crew's same-platoon preference.
+  {
+    const name = ctx.config.magen_commander;
+    if (magenId !== undefined && typeof name === 'string' && slotsByPosition.has(magenId)) {
+      const st = [...state.values()].find((s) => nrm(s.soldier.name) === nrm(name));
+      if (!st) {
+        issues.push(`מגן: המפקד המוגדר "${name}" לא נמצא במצבת`);
+      } else if (fullyBlocked(g, st.soldier.id)) {
+        issues.push(`מגן: המפקד המוגדר ${name} אינו זמין היום`);
+      } else if (st.level1 !== null && st.level1 !== magenId) {
+        issues.push(`מגן: המפקד המוגדר ${name} כבר משובץ לעמדה אחרת (נעילה)`);
+      } else if (st.level1 === null) {
+        st.level1 = magenId; level1.set(st.soldier.id, magenId);
+        st.level1Rationale.push({ code: 'magen_commander' });
+      }
+    }
+  }
+
   // Continuity pre-pass (מגן): returning crew members are reserved BEFORE any
   // other position can grab them — the crew repeats day-to-day unless seats
   // shrink, a member is unavailable, or a manual/locked change intervenes.
@@ -199,31 +273,104 @@ export function runLevel1(g: Gen): Level1Plan {
 
   // fill order: role-gated / commander-heavy first
   const order = ['קצין מוצב', 'סיור', 'התקפי', 'מגן', 'עמדות הגנה', 'חפק', 'תורנים'];
-  for (const posName of order) {
-    const pid = ctx.positionByName.get(posName);
-    if (pid === undefined || !slotsByPosition.has(pid)) continue;
-    const pos = ctx.positions.get(pid)!;
-    if (pos.config?.seat_rules || pos.config?.staff_all_roles) continue;   // staffed by pre-pass only
-    const slots = slotsByPosition.get(pid)!;
-    let need = demand(g, pid, slots) - [...level1.values()].filter((p) => p === pid).length;
-    let cmdNeed = commanderQuota(slots);
 
+  // shared per-position context for the two fill passes below
+  const posCtx = (posName: string) => {
+    const pid = ctx.positionByName.get(posName);
+    if (pid === undefined || !slotsByPosition.has(pid)) return null;
+    const pos = ctx.positions.get(pid)!;
+    if (pos.config?.seat_rules || pos.config?.staff_all_roles) return null;   // staffed by pre-pass only
+    const slots = slotsByPosition.get(pid)!;
+    // H6-pool (config.candidate_pool, e.g. קצין מוצב): manned ONLY from the
+    // named list — unordered, rotating by fairness, NON-exclusive (members
+    // serve anywhere when not picked). Enforced inside allowedIn().
+    const namePool: string[] | undefined = pos.config?.candidate_pool;
     const eligible = (st: SoldierState) => {
       const s = st.soldier;
       if (st.level1 !== null || fullyBlocked(g, s.id)) return false;
-      if (!allowedIn(g, s, posName)) return false;                               // H6b/H6c: position whitelist
+      if (!allowedIn(g, s, posName)) return false;             // H6b/H6c/H6-pool whitelists
       // must be available for at least one of the position's slot windows
       // (a soldier leaving/arriving mid-day can't hold a window he'd miss)
       if (!slots.some((sl) => !isBlocked(g, s.id, sl.period))) return false;
-      if (posName === 'קצין מוצב' && !s.isSeniorCommander) return false;         // H6
+      // H6 fallback role gate — only when no candidate_pool is configured
+      if (!namePool && posName === 'קצין מוצב' && !s.isSeniorCommander) return false;
       if (posName === 'עמדות הגנה' && s.isSeniorCommander) return false;         // H6
       return true;
     };
+    // For positions whose work is anchored to few starts (daily missions)
+    // rank by rest before the earliest MISSION slot — readiness slots are
+    // rest-transparent and must not mask the hint (e.g. התקפי's 24h slot).
+    const missionSlots = slots.filter((s) =>
+      ctx.positions.get(s.positionId)!.missionClass !== 'readiness');
+    const starts = [...new Set(missionSlots.map((s) => s.period[0]))];
+    const atStart = starts.length > 0 && starts.length <= 2 ? Math.min(...starts) : undefined;
+    const assigned = () => [...level1.values()].filter((p) => p === pid).length;
+    const take = (st: SoldierState) => { st.level1 = pid; level1.set(st.soldier.id, pid); };
+    return { pid, pos, slots, eligible, atStart, assigned, take };
+  };
 
-    const pick = (st: SoldierState) => {
-      st.level1 = pid; level1.set(st.soldier.id, pid); need--;
-      if (st.soldier.isCommander && cmdNeed > 0) cmdNeed--;
-    };
+  // ── Pass A: HARD role quotas across ALL positions — commanders (H6/item
+  // 12), then qualified drivers (H6d) — BEFORE any soft/fairness fill, so an
+  // earlier position's general fill can never starve a later position of its
+  // required commanders/drivers.
+  for (const posName of order) {
+    const c = posCtx(posName);
+    if (!c) continue;
+    const { pid, pos, slots, eligible, atStart, assigned, take } = c;
+    const totalNeed = demand(g, pid, slots);
+    let need = totalNeed - assigned();
+    // candidate_pool positions (קצין מוצב) can ONLY be manned from their
+    // named list — that list is small and its members are commanders, so the
+    // position's whole demand is a hard-role need: reserve it here, before
+    // other positions' commander quotas can consume the pool.
+    if (pos.config?.candidate_pool && need > 0) {
+      for (const st of rank(g, [...state.values()].filter(eligible), pid, false, atStart)) {
+        if (need <= 0) break;
+        take(st); need--;
+      }
+    }
+    // group positions (config.group_size, e.g. התקפי 2×(מפקד+3)): one
+    // commander per group, not just per commander-first slot start
+    const groupSize: number | undefined = pos.config?.group_size;
+    let cmdNeed = Math.max(commanderQuota(slots),
+      groupSize ? Math.ceil(totalNeed / groupSize) : 0)
+      - [...state.values()].filter((st) => st.level1 === pid && st.soldier.isCommander).length;
+    if (cmdNeed > 0 && need > 0) {
+      for (const st of rank(g, [...state.values()].filter((x) => eligible(x) && x.soldier.isCommander),
+                            pid, false, atStart)) {
+        if (cmdNeed <= 0 || need <= 0) break;
+        take(st); need--; cmdNeed--;
+        st.level1Rationale.push({ code: 'commander_quota', params: { position: posName } });
+      }
+      if (cmdNeed > 0) issues.push(`${posName}: חסרים ${cmdNeed} מפקדים בשיבוץ היומי`);
+    }
+    const driverQual: string | undefined = pos.config?.driver_qual;
+    if (driverQual && need > 0) {
+      const isDriver = (st: SoldierState) =>
+        hasQualification(st.soldier.quals, st.soldier.role, driverQual);
+      // one qualified driver per distinct slot start (each crew needs one)
+      let drvNeed = new Set(slots.map((s) => s.period[0])).size
+        - [...state.values()].filter((st) => st.level1 === pid && isDriver(st)).length;
+      for (const st of rank(g, [...state.values()].filter((x) => eligible(x) && isDriver(x)),
+                            pid, false, atStart)) {
+        if (drvNeed <= 0 || need <= 0) break;
+        take(st); need--; drvNeed--;
+        st.level1Rationale.push({ code: 'driver_quota', params: { position: posName, qual: driverQual } });
+      }
+      if (drvNeed > 0) issues.push(`${posName}: חסרים ${drvNeed} נהגים (${driverQual})`);
+    }
+  }
+
+  // ── Pass B: soft fill in priority order — same-platoon crews, platoon
+  // groups, then the general fairness fill.
+  for (const posName of order) {
+    const c = posCtx(posName);
+    if (!c) continue;
+    const { pid, pos, slots, eligible, atStart, assigned, take } = c;
+    let need = demand(g, pid, slots) - assigned();
+    const groupSize: number | undefined = pos.config?.group_size;
+
+    const pick = (st: SoldierState) => { take(st); need--; };
 
     let free = [...state.values()].filter(eligible);
 
@@ -243,33 +390,66 @@ export function runLevel1(g: Gen): Level1Plan {
       }
       if (platoon) {
         const same = free.filter((st) => st.soldier.platoon === platoon);
-        if (same.length >= need) free = same;
-        else issues.push(`${posName}: אין מספיק חיילים ממחלקה ${platoon} — הצוות מעורב`);
+        if (same.length >= need) {
+          free = same;
+        } else {
+          // platoon can't cover the whole crew: take ALL its members first,
+          // then let the general fill mix in the remainder by fairness.
+          // With flex seats a mixed crew above the minimum is routine — only
+          // a core (min-seats) shortage is worth flagging.
+          for (const st of rank(g, same, pid, false)) {
+            if (need <= 0) break;
+            pick(st);
+          }
+          if (same.length < (pos.config?.flex_seats?.min ?? need)) {
+            issues.push(`${posName}: אין מספיק חיילים ממחלקה ${platoon} — הצוות מעורב`);
+          }
+        }
       }
     }
 
-    // For positions whose work is anchored to few starts (daily missions)
-    // rank by rest before the earliest MISSION slot — readiness slots are
-    // rest-transparent and must not mask the hint (e.g. התקפי's 24h slot).
-    const missionSlots = slots.filter((s) =>
-      ctx.positions.get(s.positionId)!.missionClass !== 'readiness');
-    const starts = [...new Set(missionSlots.map((s) => s.period[0]))];
-    const atStart = starts.length > 0 && starts.length <= 2 ? Math.min(...starts) : undefined;
-
-    // commanders first (P5 quota), then everyone remaining
-    if (cmdNeed > 0 && need > 0) {
-      for (const st of rank(g, free.filter((c) => c.soldier.isCommander && c.level1 === null), pid, false, atStart)) {
-        if (cmdNeed <= 0 || need <= 0) break;
-        pick(st);
-        st.level1Rationale.push({ code: 'commander_quota', params: { position: posName } });
+    // P5 platoon groups (config.group_size): each quota commander anchors a
+    // group filled preferably from his own platoon (soft)
+    if (groupSize && need > 0) {
+      const cmdrs = [...state.values()].filter((st) => st.level1 === pid && st.soldier.isCommander);
+      for (const cm of cmdrs) {
+        let room = Math.min(groupSize - 1, need);
+        for (const st of rank(g, free.filter((x) => x.level1 === null
+            && x.soldier.platoon === cm.soldier.platoon), pid, false, atStart)) {
+          if (room <= 0 || need <= 0) break;
+          pick(st); room--;
+          st.level1Rationale.push({
+            code: 'platoon_group',
+            params: { commander: cm.soldier.name, platoon: cm.soldier.platoon },
+          });
+        }
       }
-      if (cmdNeed > 0) issues.push(`${posName}: חסרים ${cmdNeed} מפקדים בשיבוץ היומי`);
     }
-    for (const st of rank(g, free.filter((c) => c.level1 === null), pid, false, atStart)) {
+    for (const st of rank(g, free.filter((x) => x.level1 === null), pid, false, atStart)) {
       if (need <= 0) break;
       pick(st);
     }
     if (need > 0) issues.push(`${posName}: חסרים ${need} חיילים`);
+  }
+
+  // Everyone works: leftover available soldiers join מגן up to its flex max
+  // before anyone is allowed to rest.
+  if (magenId !== undefined && slotsByPosition.has(magenId)) {
+    const magenSlots = slotsByPosition.get(magenId)!;
+    const flexMax: number | undefined = ctx.positions.get(magenId)?.config?.flex_seats?.max;
+    if (flexMax) {
+      let crew = [...level1.values()].filter((p) => p === magenId).length;
+      const leftovers = rank(g, [...state.values()].filter((st) =>
+        st.level1 === null && !fullyBlocked(g, st.soldier.id)
+        && allowedIn(g, st.soldier, 'מגן')
+        && magenSlots.some((sl) => !isBlocked(g, st.soldier.id, sl.period))), magenId, false);
+      for (const st of leftovers) {
+        if (crew >= flexMax) break;
+        st.level1 = magenId; level1.set(st.soldier.id, magenId); crew++;
+        st.level1Rationale.push({ code: 'no_rest_fill', params: { position: 'מגן' } });
+      }
+      for (const s of magenSlots) s.seats = Math.max(s.seats, crew);
+    }
   }
 
   const restId = ctx.positionByName.get('מנוחה')!;
@@ -281,6 +461,8 @@ export function runLevel1(g: Gen): Level1Plan {
       st.level1 = pid; level1.set(st.soldier.id, pid);
     }
   }
+  // NB: the "left resting" issues are reported at the END of generation
+  // (generate.ts) — Level 2's pull-from-מנוחה may still rescue soldiers.
 
   return { slotsByPosition, seatPlan, seatRuleBySub };
 }

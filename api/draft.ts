@@ -157,7 +157,12 @@ async function getDrafts(from: string, to: string): Promise<DraftResponse> {
     // rows matching this slot: exact sub + pooled null-sub rows (import data)
     let n = countAt(bySug, sug, time);
     if (sl.sub_name !== null) n += countAt(bySug, station, time);
-    const missing = Number(sl.seats) - n;
+    // flex positions (מגן 10-12, סיור 3-4/shift) may legitimately staff below
+    // the template seat count down to the flex minimum — same rule as the
+    // validator's coverage check
+    const flexMin = sl.pos_config?.flex_seats?.min;
+    const required = flexMin !== undefined ? Math.min(Number(sl.seats), Number(flexMin)) : Number(sl.seats);
+    const missing = required - n;
     if (missing <= 0) continue;
     const byTime = bySug.get(sug) ?? new Map<string, string[]>();
     bySug.set(sug, byTime);

@@ -61,7 +61,6 @@ export const fitTexts = (rs: FitReason[]): string[] => rs.map(fitText);
 
 /** fallback fit codes -> rationale caveat codes (level2 buildRationale) */
 export const FIT_RATIONALE: Partial<Record<FitCode, RationaleCode>> = {
-  rest_lt4: 'caveat_rest_lt4',
   rest_lt8_long: 'caveat_rest_lt8_long',
   third_night: 'caveat_third_night',
 };
@@ -105,9 +104,9 @@ export function restInfo(g: Gen, st: SoldierState, start: Minutes):
 export const restBefore = (g: Gen, st: SoldierState, start: Minutes): number =>
   restInfo(g, st, start).gap;
 
-/** Feasibility of `st` for a slot window: hard blocks (H1/H3/H3b/R4/H6 seat),
- *  fallback-only conditions (H8 rest floor, R1 long-task rest, R6 third
- *  night), and soft short-rest annotation. */
+/** Feasibility of `st` for a slot window: hard blocks (H1/H3/H3b/R4/H6 seat,
+ *  H8 rest floor — absolute, no בדוחק), fallback-only conditions (R1
+ *  long-task rest, R6 third night), and soft short-rest annotation. */
 export function fits(g: Gen, st: SoldierState, slot: [Minutes, Minutes], commanderSeat: boolean,
                      isReadiness = false, nightExempt = false): Fit {
   const T = g.ctx.tunables;
@@ -134,8 +133,11 @@ export function fits(g: Gen, st: SoldierState, slot: [Minutes, Minutes], command
     return { ok: true, fallback: true, reasons: [{ code: 'third_night' }] };
   }
   const rest = restBefore(g, st, slot[0]);
+  // H8 ABSOLUTE: < 4h rest before a task is a hard block — never a בדוחק
+  // fallback. The only exemption is R5 duty-rest (daily positions), which is
+  // already folded into restBefore()'s gap.
   if (rest < T.restMinH * 60) {
-    return { ok: true, fallback: true,
+    return { ok: false, fallback: false,
       reasons: [{ code: 'rest_lt4', params: { minH: String(T.restMinH) } }] };
   }
   if (rest < T.restIdealH * 60 && hours(slot) > T.longTaskH) {

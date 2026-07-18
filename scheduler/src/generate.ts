@@ -39,5 +39,16 @@ export async function generate(day: string): Promise<GenerateResult> {
   fillLevel2(g, plan);
   for (const rule of ctx.chainRules.filter((r) => r.sourceDayOffset >= 0)) runChain(g, rule);
 
+  // Everyone works (owner rule): report every soldier who STILL rests after
+  // Level 2 (its pull-from-מנוחה path may have rescued Level-1 leftovers).
+  const restId = ctx.positionByName.get('מנוחה');
+  if (restId !== undefined) {
+    for (const st of g.state.values()) {
+      if (st.level1 === restId) {
+        g.issues.push(`${st.soldier.name} נותר במנוחה — כל חייל זמין אמור לעבוד`);
+      }
+    }
+  }
+
   return { day, assignments: g.assignments, level1: g.level1, issues: g.issues };
 }

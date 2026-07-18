@@ -111,6 +111,9 @@ export interface Context {
   yesterdayPosition: Map<number, number>;
   /** consecutive static-only days ending yesterday, per soldier */
   staticStreak: Map<number, number>;
+  /** T6 (soft): consecutive days of only static+readiness work (constant
+   *  on-call) ending yesterday, per soldier */
+  onCallStreak: Map<number, number>;
   /** consecutive nights ending yesterday, per soldier (R6: max 2 in a row) */
   nightStreak: Map<number, number>;
   /** T5 (soft): תורנות count per soldier in the rolling 7 days before `day` */

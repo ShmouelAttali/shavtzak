@@ -160,11 +160,13 @@ test('תורנים and קצין מוצב run the full schedule day (14:00→14:0
   }
 });
 
-test('seat override changes crew size, continuity keeps existing members', async () => {
+test('seat override enlarges the crew beyond flex max, continuity keeps existing members', async () => {
   const D4 = '2026-08-04';
   const magen = `(select id from positions where name = 'מגן')`;
+  // flex is 10-12 and the surplus fixture already fills 12 — an explicit
+  // override above the flex max must win (manual decision)
   await query(`insert into seat_overrides (position_id, valid_from, seats, note)
-               values ((select id from positions where name = 'מגן'), $1, 12, 'test')`, [D4]);
+               values ((select id from positions where name = 'מגן'), $1, 14, 'test')`, [D4]);
   const res = await generate(D4);
   await persist(res);
   const rows = await query(`
@@ -172,8 +174,8 @@ test('seat override changes crew size, continuity keeps existing members', async
            count(*) filter (where exists (select 1 from day_assignments y
              where y.day = $2 and y.soldier_id = da.soldier_id and y.position_id = ${magen})) kept
     from day_assignments da where da.day = $1 and da.position_id = ${magen}`, [D4, D3]);
-  assert.equal(Number(rows[0].total), 12);
-  assert.equal(Number(rows[0].kept), 10);
+  assert.equal(Number(rows[0].total), 14);
+  assert.equal(Number(rows[0].kept), 12, 'the full D3 crew (flex-max 12) must return');
   await query(`delete from seat_overrides where note = 'test'`);
   await query(`delete from shift_assignments where day = $1`, [D4]);
   await query(`delete from day_assignments where day = $1`, [D4]);
@@ -261,9 +263,12 @@ test('rationale: fewest_nights claims are honest vs the pick-time median', async
   assert.ok(seen > 0, 'no fewest_nights entries to check');
 });
 
-test('fairness spread: nights differ by at most 2 across active soldiers', async () => {
+test('fairness spread: nights differ by at most 3 across active soldiers', async () => {
   // dedicated crews (חפק named seats, מגן continuity) never rotate into
-  // nights — measure the spread over the actual night-rotation pool
+  // nights — measure the spread over the actual night-rotation pool.
+  // Bound is 3 (was 2): the owner decided rotation (T3/T6) outranks night
+  // fairness (P2), and the hard driver rule pins the few נהג דוד to patrol,
+  // so nights spread a little wider by design.
   const rows = await query(`
     select min(night_count_7d) lo, max(night_count_7d) hi
     from soldier_fairness($1) f
@@ -273,6 +278,6 @@ test('fairness spread: nights differ by at most 2 across active soldiers', async
         select da.soldier_id from day_assignments da
         join positions p on p.id = da.position_id
         where p.name in ('חפק', 'מגן'))`, ['2026-08-04']);
-  assert.ok(Number(rows[0].hi) - Number(rows[0].lo) <= 2,
+  assert.ok(Number(rows[0].hi) - Number(rows[0].lo) <= 3,
     `nights spread too wide: ${rows[0].lo}-${rows[0].hi}`);
 });

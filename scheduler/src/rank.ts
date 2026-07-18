@@ -58,13 +58,16 @@ function staticCommanderAt(g: Gen, start: Minutes): boolean {
 /** Priority-list comparator (SPEC §6.1) for position/slot selection.
  *  When ranking for a concrete slot, pass its start so candidates with a
  *  full 8h rest before it win over short-rest ones (keeps 4h shifts spaced
- *  8h apart: 06&18, 10&22, 14&02). */
+ *  8h apart: 06&18, 10&22, 14&02). Pass the slot's sub-position id as
+ *  `forSub` so a soldier rotates between different posts within the same
+ *  24h round (P4b). */
 export function rank(g: Gen, candidates: SoldierState[], positionId: number,
-                     forNight: boolean, atStart?: Minutes): SoldierState[] {
+                     forNight: boolean, atStart?: Minutes, forSub?: number | null): SoldierState[] {
   const restIdeal = g.ctx.tunables.restIdealH * 60;
   const dailyCap = g.ctx.tunables.dailyCapH;
   const pos = g.ctx.positions.get(positionId)!;
   const posName = pos.name;
+  const cls = pos.missionClass;
   return [...candidates].sort((a, b) => {
     const ka = key(a), kb = key(b);
     for (let i = 0; i < ka.length; i++) if (ka[i] !== kb[i]) return ka[i] - kb[i];
@@ -72,11 +75,25 @@ export function rank(g: Gen, candidates: SoldierState[], positionId: number,
   });
   function key(st: SoldierState): number[] {
     const restAt = restBefore(g, st, atStart ?? g.dRange[0]);
+    const staticStreak = g.ctx.staticStreak.get(st.soldier.id) ?? 0;
+    const onCallStreak = g.ctx.onCallStreak.get(st.soldier.id) ?? 0;
     return [
       atStart !== undefined && restAt < restIdeal ? 1 : 0,                   // R1 quasi-constraint
       // T5 (soft): at most one תורנות per rolling 7 days — anyone with a
       // recent תורנות sorts after everyone without one (never a hard block)
       posName === 'תורנים' && (g.ctx.toranutCount7d.get(st.soldier.id) ?? 0) > 0 ? 1 : 0,
+      // T3 above P2 (owner decision): a constant static position is WORSE
+      // than repeated nights — streak-breaking outranks night fairness.
+      cls === 'static' && staticStreak >= 2 ? 1
+        : cls === 'dynamic' && staticStreak >= 2 ? -1 : 0,                   // T3 (over P2)
+      // T6 (soft, over P2 like T3): avoid a 3rd consecutive day of only
+      // static + התקפי work — the soldier would be in constant on-call
+      onCallStreak >= 2 && (cls === 'static' || cls === 'readiness') ? 1 : 0, // T6
+      // P4b sub-position rotation (over P2 — owner: "make sure to split"):
+      // within the same 24h round a soldier mans a DIFFERENT post each shift
+      // (e.g. not שג twice today)
+      forSub != null ? g.assignments.filter((a) => a.soldierId === st.soldier.id
+        && a.subPositionId === forSub).length : 0,                           // P4b
       nightsOf(st, forNight),                                                // P2
       // P3 bucketed to one duty-day (dailyCapH hours): soldiers within the
       // same load bucket are equal, letting rotation (P4) actually decide.

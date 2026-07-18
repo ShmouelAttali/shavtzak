@@ -6,7 +6,7 @@
 import { Minutes, fmtHM, overlaps } from './time.js';
 import { Slot } from './model.js';
 import { RationaleEntry } from './rationale.js';
-import { normalizeName as nrm } from './text.js';
+import { normalizeName as nrm, hasQualification } from './text.js';
 import { Gen, SoldierState, allowedIn, assign } from './state.js';
 import { fits, restInfo, fitText, fitTexts, FitReason, FIT_RATIONALE } from './rest.js';
 import { rank, rotationPenalty, nightsOf, loadOf } from './rank.js';
@@ -172,15 +172,24 @@ export function fillLevel2(g: Gen, plan1: Level1Plan): void {
 
     const group = [...state.values()].filter((st) => st.level1 === pid);
     const sorted = [...slots].sort((a, b) => a.period[0] - b.period[0]);
+    // H6d hard driver rule (config.driver_qual): every crew must include a
+    // qualified driver — the seat right after the commander seat is a driver
+    // seat until the crew has one
+    const driverQual: string | undefined = ctx.positions.get(pid)!.config?.driver_qual;
+    const isDriver = (st: SoldierState) => !!driverQual
+      && hasQualification(st.soldier.quals, st.soldier.role, driverQual);
     for (const slot of sorted) {
       const slotReadiness = ctx.positions.get(slot.positionId)!.missionClass === 'readiness';
       const slotNightExempt = ctx.positions.get(slot.positionId)!.config?.night_exempt ?? false;
       const takenThisSlot = new Set<number>();   // H7: no duplicate soldier in a crew
       for (let seat = 1; seat <= slot.seats; seat++) {
         const commanderSeat = slot.commanderFirstSeat && seat === 1;
+        const driverSeat = !!driverQual && seat === (slot.commanderFirstSeat ? 2 : 1)
+          && ![...takenThisSlot].some((id) => isDriver(state.get(id)!));
         const forNight = overlaps(slot.period, g.night);
         const evals = group
           .filter((st) => !takenThisSlot.has(st.soldier.id))
+          .filter((st) => !driverSeat || isDriver(st))
           .map((st) => ({ st, fit: fits(g, st, slot.period, commanderSeat, slotReadiness, slotNightExempt) }));
         const primary = evals.filter((e) => e.fit.ok && !e.fit.fallback).map((e) => e.st);
         const fallback = evals.filter((e) => e.fit.ok && e.fit.fallback);
@@ -189,19 +198,29 @@ export function fillLevel2(g: Gen, plan1: Level1Plan): void {
         // later state
         const groupNights = primary.map((st) => nightsOf(st, forNight));
         const groupLoads = primary.map(loadOf);
-        let picked = rank(g, primary, pid, forNight, slot.period[0])[0];
+        // positions with commander seats (סיור/התקפי): a regular seat prefers
+        // non-commanders so the group's few commanders stay available for the
+        // remaining commander seats (e.g. the 06:00 patrol) — soft: when only
+        // commanders fit, one is still taken
+        const preserveCommanders = !commanderSeat && slots.some((s) => s.commanderFirstSeat);
+        const primaryPreferred = preserveCommanders
+          ? primary.filter((st) => !st.soldier.isCommander) : primary;
+        let picked = rank(g, primaryPreferred, pid, forNight, slot.period[0], slot.subPositionId)[0]
+          ?? (preserveCommanders
+            ? rank(g, primary, pid, forNight, slot.period[0], slot.subPositionId)[0] : undefined);
         let pickedFrom: 'primary' | 'rest' | 'fallback' = 'primary';
         let viol: string[] = [];
         if (!picked) {
           // prefer a fully-rested soldier from מנוחה over an in-group בדוחק pick
           const resters = [...state.values()].filter((st) => st.level1 === restId
             && allowedIn(g, st.soldier, posName)
-            && (!commanderSeat || st.soldier.isCommander));
+            && (!commanderSeat || st.soldier.isCommander)
+            && (!driverSeat || isDriver(st)));
           const fitting = resters.filter((st) => {
             const f = fits(g, st, slot.period, commanderSeat, slotReadiness, slotNightExempt);
             return f.ok && !f.fallback;
           });
-          const pulled = rank(g, fitting, pid, forNight, slot.period[0])[0];
+          const pulled = rank(g, fitting, pid, forNight, slot.period[0], slot.subPositionId)[0];
           if (pulled) {
             pulled.level1 = pid;
             level1.set(pulled.soldier.id, pid);
@@ -211,7 +230,7 @@ export function fillLevel2(g: Gen, plan1: Level1Plan): void {
             viol = ['הושלם ממנוחה'];
           }
         }
-        if (!picked && !slotReadiness) {
+        if (!picked && !slotReadiness && !driverSeat) {
           const paired = tryReplacementPair(g, {
             slot, seat, pid, posName, commanderSeat, forNight, slotNightExempt,
             takenThisSlot, group, restId,
@@ -223,13 +242,13 @@ export function fillLevel2(g: Gen, plan1: Level1Plan): void {
           if (paired) continue;   // seat covered by the pair — next seat
         }
         if (!picked && fallback.length) {
-          const f = rank(g, fallback.map((e) => e.st), pid, forNight, slot.period[0])[0];
+          const f = rank(g, fallback.map((e) => e.st), pid, forNight, slot.period[0], slot.subPositionId)[0];
           const fe = fallback.find((e) => e.st === f)!;
           picked = f; pickedFrom = 'fallback';
           viol = fe.fit.reasons.map((r) => `בדוחק: ${fitText(r)}`);
         }
         if (!picked) {
-          issues.push(`${posName} ${fmtHM(slot.period[0])}-${fmtHM(slot.period[1])} מושב ${seat}${commanderSeat ? ' (מפקד)' : ''}: לא אויש`);
+          issues.push(`${posName} ${fmtHM(slot.period[0])}-${fmtHM(slot.period[1])} מושב ${seat}${commanderSeat ? ' (מפקד)' : driverSeat ? ' (נהג)' : ''}: לא אויש`);
           continue;
         }
         takenThisSlot.add(picked.soldier.id);
@@ -238,6 +257,7 @@ export function fillLevel2(g: Gen, plan1: Level1Plan): void {
           pickedFrom, fitReasons: fit.reasons, commanderSeat, groupNights, groupLoads,
           myNights: nightsOf(picked, forNight), myLoad: loadOf(picked),
         });
+        if (driverSeat) rationale.push({ code: 'driver_seat', params: { qual: driverQual! } });
         assign(g, picked, slot, seat, commanderSeat,
           [...viol, ...(viol.length ? [] : fitTexts(fit.reasons))], 'auto', rationale);
       }

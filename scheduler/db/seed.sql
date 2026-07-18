@@ -9,13 +9,18 @@
 -- effectiveConfig). An explicit key overrides the implied value
 -- (e.g. תורנים opts out of full_rest_after).
 insert into positions (id, name, mission_class, is_scheduled, config) values
-  ( 1, 'סיור',        'dynamic',   true,  '{}'),
+  -- סיור: flex 3-4 seats per shift (shrinks to 3 only on soldier shortage);
+  -- every crew must include a נהג דוד (H6d hard driver rule)
+  ( 1, 'סיור',        'dynamic',   true,  '{"flex_seats":{"min":3,"max":4},"driver_qual":"נהג דוד"}'),
   ( 2, 'עמדות הגנה',  'static',    true,  '{}'),
-  ( 3, 'מגן',         'other',     true,  '{"daily":true,"continuity":true,"same_platoon":true}'),
+  -- מגן: flex 10-12 — absorbs surplus soldiers (everyone works, no מנוחה)
+  ( 3, 'מגן',         'other',     true,  '{"daily":true,"continuity":true,"same_platoon":true,"flex_seats":{"min":10,"max":12}}'),
   -- התקפי: standing 8-soldier readiness crew (14:00-14:00); ad-hoc attack
   -- missions are separate rows and may not overlap the readiness (H3 strict).
   -- Explicit full_rest_after (NOT daily): readiness class, not a yomi duty.
-  ( 4, 'התקפי',       'readiness', true,  '{"full_rest_after":true}'),
+  -- Crew must include a נהג טיגריס (H6d); group_size 4 = two groups of
+  -- (1 commander + 3), each preferably from one מחלקה (P5 soft).
+  ( 4, 'התקפי',       'readiness', true,  '{"full_rest_after":true,"driver_qual":"נהג טיגריס","group_size":4}'),
   -- תגבצ: history tombstone (owner decision 2026-07-17) — imported rows
   -- (24/6–16/7) reference it; never scheduled again, no slot templates
   ( 5, 'תגבצ',        'other',     false, '{}'),
@@ -31,13 +36,19 @@ insert into positions (id, name, mission_class, is_scheduled, config) values
   -- R5 exemption; the normal R1 regime applies (>= 4h rest, earliest 18:00)
   ( 7, 'תורנים',      'other',     true,  '{"daily":true,"full_rest_after":false}'),
   ( 8, 'כונן גשש',    'readiness', true,  '{}'),
-  ( 9, 'קצין מוצב',   'other',     true,  '{"daily":true}'),
+  -- קצין מוצב: manned ONLY from the fixed candidate list (H6-pool) —
+  -- unordered (rotates by fairness); members serve anywhere when not picked
+  ( 9, 'קצין מוצב',   'other',     true,  '{"daily":true,"candidate_pool":["שמואל אטלי","צבי שור","יוחאי יעקבסון","אורי שאג","אלעד זיו","אביאל גיאת","עמיחי ברוורמן","גלעד דביר"]}'),
   (10, 'כרמל חטיבה',  'readiness', true,  '{}'),
   -- חמל: standing crew — every present role-חמל soldier staffs it daily,
   -- full schedule day; readiness class = rest-transparent (internal shifts)
   (11, 'חמל',         'readiness', true,  '{"staff_all_roles":["חמל"]}'),
   (12, 'מנוחה',       'rest',      true,  '{}'),
   (13, 'בבית',        'rest',      true,  '{}'),  -- fully unavailable (H1) — not on base
+  -- מפלג: the רס"פ/סרס"פ/מנהלה staff — they do no shifts (role-restricted to
+  -- this position, like חמל) but appear in the שבצק when present on base.
+  -- Presence follows the מפלג sheet tab's סטטוס (לא מגיע -> is_schedulable=false).
+  (14, 'מפלג',        'other',     true,  '{"daily":true,"staff_all_roles":["רס\"פ","סרס\"פ","מנהלה"]}'),
   -- אחר: catch-all for imported history rows whose position no longer exists
   (99, 'אחר',         'other',     false, '{}');
 
@@ -74,9 +85,10 @@ cross join (values (time '06:00'),('10:00'),('14:00'),('18:00'),('22:00'),('02:0
 insert into slot_templates (position_id, start_time, duration_minutes, seats, valid_from)
 values (3, '14:00', 1440, 10, '2026-07-19');
 
--- התקפי: 8 seats, full readiness day 14:00–14:00
-insert into slot_templates (position_id, start_time, duration_minutes, seats, valid_from)
-values (4, '14:00', 1440, 8, '2026-07-15');
+-- התקפי: 8 seats, full readiness day 14:00–14:00; first seat = commander
+-- (H6 hard — a commander mans the standing crew)
+insert into slot_templates (position_id, start_time, duration_minutes, seats, commander_first_seat, valid_from)
+values (4, '14:00', 1440, 8, true, '2026-07-15');
 
 -- חפק: 4 named seats (מפקד/קשר/חובש/נהג), full schedule day 14:00–14:00
 -- (re-anchored effective 2026-07-19; earlier days ran 06:00–22:00)
@@ -101,6 +113,10 @@ values (11, '14:00', 1440, 5, '2026-07-15');
 -- קצין מוצב: 1 seat, full schedule day 14:00–14:00 (blocks day)
 insert into slot_templates (position_id, start_time, duration_minutes, seats, valid_from)
 values (9, '14:00', 1440, 1, '2026-07-15');
+
+-- מפלג: staff crew, full schedule day (seats is a cap — staff_all_roles)
+insert into slot_templates (position_id, start_time, duration_minutes, seats, valid_from)
+values (14, '14:00', 1440, 6, '2026-07-17');
 
 -- כרמל חטיבה: 3 regular + 1 commander × 6 shifts × 4h (same grid as עמדות הגנה)
 insert into slot_templates (position_id, sub_position_id, start_time, duration_minutes, seats, valid_from)

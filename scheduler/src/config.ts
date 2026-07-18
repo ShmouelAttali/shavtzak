@@ -4,7 +4,8 @@
 // which stay hardcoded mirrors in time.ts + db/schema.sql by design.
 
 export interface Tunables {
-  /** H8/R1 hard rest floor (hours) — less than this blocks (בדוחק fallback only) */
+  /** H8/R1 hard rest floor (hours) — less than this blocks absolutely (no
+   *  בדוחק; only the R5 duty-rest exemption applies) */
   restMinH: number;
   /** R1 ideal rest (hours) — 4–8h is allowed-with-warning for short tasks */
   restIdealH: number;

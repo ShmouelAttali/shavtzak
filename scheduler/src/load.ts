@@ -144,6 +144,27 @@ export async function loadContext(day: string): Promise<Context> {
     if (streak) staticStreak.set(sid, streak);
   }
 
+  // On-call streak (T6, soft): consecutive days ending yesterday where the
+  // soldier had ONLY static missions and/or readiness (התקפי/כרמל) — no
+  // dynamic task and no daily duty. Such a soldier is in constant on-call;
+  // a 3rd day like that is avoided (ranking demotion + validator warning).
+  const onCallStreak = new Map<number, number>();
+  for (const [sid, list] of existing) {
+    let streak = 0;
+    for (let d = 1; d <= 7; d++) {
+      const dr: [Minutes, Minutes] = [dayStart(addDays(day, -d)), dayEnd(addDays(day, -d))];
+      let hasOnCall = false, hasOther = false;
+      for (const a of list) {
+        if (!overlaps(a.period, dr)) continue;
+        if (a.missionClass === 'static' || a.missionClass === 'readiness') hasOnCall = true;
+        else hasOther = true;
+      }
+      if (hasOnCall && !hasOther) streak++;
+      else break;
+    }
+    if (streak) onCallStreak.set(sid, streak);
+  }
+
   // Consecutive-night streak (R6): days ending yesterday where the soldier
   // held a non-readiness assignment overlapping that day's night window.
   // night_exempt 24h duties (מגן/חפק/תורנים/קצין מוצב — the soldier sleeps)
@@ -199,7 +220,7 @@ export async function loadContext(day: string): Promise<Context> {
 
   return {
     day, soldiers, positions, positionByName, slots, fairness, existing,
-    yesterdayPosition, staticStreak, nightStreak, toranutCount7d, blocked,
+    yesterdayPosition, staticStreak, onCallStreak, nightStreak, toranutCount7d, blocked,
     lockedShift, lockedDay, chainRules, config, tunables: loadTunables(config),
   };
 }

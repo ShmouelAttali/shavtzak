@@ -111,20 +111,23 @@ test('תורנים exception: an immediate 14:00 start is flagged as a rest erro
     && x.message.includes('תורן אתמול')), JSON.stringify(f));
 });
 
-test('תורנים exception: generator takes him at 14:00 only בדוחק (fallback)', async () => {
+test('תורנים exception: generator NEVER takes him at 14:00 (hard rest floor, seat stays empty)', async () => {
   await toranimOnly();
   await addSoldier('R006', 'רגיל אחד');
   await addSoldier('R007', 'תורן אתמול');
   await manualRow('תורן אתמול', 'תורנים', Y, '2026-08-19 14:00', '2026-08-20 14:00');
-  await persist(await generate(D));
-  const rows = await query<{ violations: string[] }>(`
-    select sa.violations from shift_assignments sa
+  const res = await generate(D);
+  await persist(res);
+  // < 4h rest is an absolute block (no בדוחק): yesterday's תורן cannot start
+  // again at 14:00 sharp — the second seat stays empty and is reported
+  const rows = await query(`
+    select 1 from shift_assignments sa
     join positions p on p.id = sa.position_id
     join soldiers s on s.id = sa.soldier_id
     where sa.day = $1 and p.name = 'תורנים' and s.full_name = 'תורן אתמול'`, [D]);
-  assert.equal(rows.length, 1, JSON.stringify(rows));
-  assert.ok(rows[0].violations.some((v) => v.includes('בדוחק') && v.includes('פחות מ-4')),
-    JSON.stringify(rows[0].violations));
+  assert.equal(rows.length, 0, 'yesterday\'s תורן must not be re-assigned at 14:00');
+  assert.ok(res.issues.some((i) => i.includes('תורנים') && i.includes('לא אויש')),
+    JSON.stringify(res.issues));
 });
 
 test('תורנים exception: eligible at 18:00 for a short task (warning only, not בדוחק)', async () => {

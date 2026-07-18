@@ -88,8 +88,12 @@ export function runChain(g: Gen, rule: ChainRule): void {
   let commanderAssigned = false;
   for (const slot of targetSlots) {
     const isCmdSlot = slot.subName === 'מפקד כרמל חטיבה';
+    // commander seat: prefer a real מפקד (מ"מ/סמל/מ"כ/מ"ח) from the crew;
+    // only when none exists fall back to the highest רובאי
     const take = isCmdSlot
-      ? [...pool].sort((a, b) => b.soldier.rifle - a.soldier.rifle).slice(0, slot.seats)
+      ? [...pool].sort((a, b) =>
+          Number(b.soldier.isCommander) - Number(a.soldier.isCommander)
+          || b.soldier.rifle - a.soldier.rifle).slice(0, slot.seats)
       : pool.filter((st) => !g.assignments.some((a) => a.soldierId === st.soldier.id
           && a.period[0] === slot.period[0] && a.positionId === rule.targetPosition)).slice(0, slot.seats);
     take.forEach((st, i) => {
@@ -101,10 +105,13 @@ export function runChain(g: Gen, rule: ChainRule): void {
       if (isCmdSlot) rationale.push({ code: 'chain_commander' });
       assign(g, st, slot, i + 1, isCmdSlot, [], 'chain', rationale);
       if (targetName === 'כונן גשש') {
-        if (st.trackerMinutes === 0) st.trackerMinutes += slot.period[1] - slot.period[0];
-        // R3: a fresh גשש night window contributes its effective end to
-        // same-day rest checks (tasks starting 07:00–14:00 next morning)
+        // R3 (owner decision): ONLY the night window (22:00–07:00) counts as
+        // גשש load — day windows (07–14, 14–22) accrue no tracker hours and
+        // contribute no effective-rest end.
         if (isGashashNight(g, { positionId: slot.positionId, period: slot.period })) {
+          st.trackerMinutes += slot.period[1] - slot.period[0];
+          // R3: a fresh גשש night window contributes its effective end to
+          // same-day rest checks (tasks starting 07:00–14:00 next morning)
           st.gashashNightEnds.push(gashashEffEnd(g, slot.period));
         }
       }

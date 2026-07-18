@@ -14,18 +14,24 @@ before(async () => {
 });
 after(closePool);
 
-test('P5: נהג טיגריס preferred for התקפי over equal-fairness non-drivers', async () => {
-  // 'חייל 57' sorts near-last by name — without the P5 key an equal-fairness
-  // day would never place him in the 8-man התקפי crew
+test('H6d quota: with the regular tigers out, a late-sorting tiger is drafted into התקפי', async () => {
+  // 'חייל 57' sorts near-last by name — only the hard driver quota (H6d)
+  // places him in the 8-man crew when the usual tigers are unavailable.
+  // (The old soft "prefer extra tigers" premise is obsolete: once the crew
+  // has its required tiger, the platoon-group preference fills the rest.)
   await query(`insert into soldier_qualifications (soldier_id, qualification)
                select id, 'נהג טיגריס' from soldiers where full_name = 'חייל 57'`);
+  await query(`insert into unavailability (soldier_id, period, kind)
+               select id, tsrange(day_start($1), day_start($1) + interval '1 day'), 'חופש'
+               from soldiers where full_name in ('חייל 13', 'חייל 14')`, [D1]);
   await persist(await generate(D1));
   const rows = await query(`
     select 1 from day_assignments da
     join positions p on p.id = da.position_id
     join soldiers s on s.id = da.soldier_id
     where da.day = $1 and p.name = 'התקפי' and s.full_name = 'חייל 57'`, [D1]);
-  assert.equal(rows.length, 1, 'tiger driver must be in the התקפי crew');
+  assert.equal(rows.length, 1, 'the only available tiger must be in the התקפי crew');
+  await query(`delete from unavailability`);
 });
 
 test('P5: non-driver still picked when the drivers are unavailable', async () => {
@@ -44,25 +50,24 @@ test('P5: non-driver still picked when the drivers are unavailable', async () =>
   await query(`delete from day_assignments where day = $1`, [D2]);
 });
 
-test('P5: נהג דוד preferred for the night patrol slot (22:00, overlaps 00-06)', async () => {
+test('H6d: every patrol shift crew includes a נהג דוד (hard driver rule)', async () => {
   const D3 = '2026-08-03';
-  // put a late-sorting driver INTO the patrol group via a locked Level-1 row,
-  // then check WHICH shift Level-2 hands him: without the P5 key the equal-
-  // fairness tie-break (Hebrew name) would give the night slot to an earlier
-  // name; the driver key must win the 22:00 slot for him
-  await query(`insert into soldier_qualifications (soldier_id, qualification)
-               select id, 'נהג דוד' from soldiers where full_name = 'חייל 59'`);
-  const sid = await soldierId('חייל 59');
-  await query(`insert into schedule_days (day) values ($1) on conflict do nothing`, [D3]);
-  await query(`insert into day_assignments (day, soldier_id, position_id, source, locked)
-               values ($1, $2, (select id from positions where name = 'סיור'), 'manual', true)`, [D3, sid]);
+  // the soft night-preference key is superseded by the hard rule: EVERY
+  // patrol crew must carry a qualified driver, night and day alike
   await persist(await generate(D3));
-  const rows = await query<{ lo: string }>(`
-    select lower(sa.period)::text lo from shift_assignments sa
+  const rows = await query<{ lo: string; drivers: string }>(`
+    select lower(sa.period)::text lo,
+           count(*) filter (where exists (
+             select 1 from soldier_qualifications q
+             where q.soldier_id = sa.soldier_id and q.qualification = 'נהג דוד')) drivers
+    from shift_assignments sa
     join positions p on p.id = sa.position_id
-    where sa.day = $1 and sa.soldier_id = $2 and p.name = 'סיור'`, [D3, sid]);
-  assert.equal(rows.length, 1, 'locked patrol member must hold exactly one patrol shift');
-  assert.ok(rows[0].lo.includes('22:00:00'), `driver got ${rows[0].lo}, expected the 22:00 night shift`);
+    where sa.day = $1 and p.name = 'סיור'
+    group by 1 order by 1`, [D3]);
+  assert.equal(rows.length, 3, 'three patrol shifts exist');
+  for (const r of rows) {
+    assert.ok(Number(r.drivers) >= 1, `patrol ${r.lo}: no נהג דוד in crew`);
+  }
   await query(`delete from shift_assignments where day = $1`, [D3]);
   await query(`delete from day_assignments where day = $1`, [D3]);
 });

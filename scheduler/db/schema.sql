@@ -306,8 +306,12 @@ language sql stable as $$
              filter (where b.period && tsrange(w.t_start, w.t_end)), 0) as weighted_hours_7d,
     coalesce(sum(hours(b.period * tsrange(w.t_start, w.t_end)))
              filter (where b.mission_class = 'readiness'), 0)          as readiness_hours_7d,
+    -- R3 (owner decision): only the גשש NIGHT window (22:00-07:00, i.e. a row
+    -- overlapping its schedule day's night range) counts as tracker load —
+    -- day windows (07-14, 14-22) are free
     coalesce(sum(hours(b.period))
              filter (where b.position_name = 'כונן גשש'
+                       and b.period && night_range(b.day)
                        and lower(b.period) < w.t_end), 0)              as tracker_hours_total,
     coalesce(jsonb_object_agg(b.position_name, cnt) filter (where b.position_name is not null),
              '{}'::jsonb)                                              as position_counts

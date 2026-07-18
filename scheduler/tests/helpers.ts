@@ -24,8 +24,12 @@ export async function freshSchema(): Promise<void> {
 /**
  * Synthetic roster: 60 schedulable soldiers.
  *  - 6 static commanders (מ"כ), 2 senior (סמל), 2 senior (מ"מ)
- *  - 2 נהג דוד, 2 נהג טיגריס
+ *  - 4 נהג דוד, 2 נהג טיגריס (H6d hard driver rule: 3 patrol shifts need 3
+ *    free נהג דוד every day, plus rotation slack)
  *  - platoons cycle 1/2/3, rifle levels vary
+ * seed.sql's קצין מוצב candidate_pool names real soldiers — remapped here to
+ * the synthetic senior commanders so generated days stay fully staffable
+ * (suites remap חפק's seat_rules themselves when they need staffed seats).
  */
 export async function seedSoldiers(): Promise<void> {
   const values: string[] = [];
@@ -38,9 +42,11 @@ export async function seedSoldiers(): Promise<void> {
   await query(`insert into soldiers (personal_number, full_name, platoon, role, rifle_level)
                values ${values.join(',')}`);
   await query(`insert into soldier_qualifications (soldier_id, qualification)
-               select id, 'נהג דוד' from soldiers where full_name in ('חייל 11','חייל 12')`);
+               select id, 'נהג דוד' from soldiers where full_name in ('חייל 11','חייל 12','חייל 15','חייל 16')`);
   await query(`insert into soldier_qualifications (soldier_id, qualification)
                select id, 'נהג טיגריס' from soldiers where full_name in ('חייל 13','חייל 14')`);
+  await query(`update positions set config = config || $1::jsonb where name = 'קצין מוצב'`,
+    [JSON.stringify({ candidate_pool: ['חייל 07', 'חייל 08', 'חייל 09', 'חייל 10'] })]);
 }
 
 export async function soldierId(name: string): Promise<number> {

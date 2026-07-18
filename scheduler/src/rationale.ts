@@ -26,7 +26,12 @@ export type RationaleCode =
   | 'role_crew'             // staff_all_roles position (חמל): the whole role staffs daily
   | 'chain'                 // T4 overlay: crew descends from a source shift
   | 'chain_min_tracker'     // chain pick rule: minimum tracker hours
-  | 'chain_commander'       // chain commander slot: highest rifle level
+  | 'chain_commander'       // chain commander slot: commander in crew / highest rifle
+  | 'magen_commander'       // the weekly מגן commander decision (config)
+  | 'driver_quota'          // picked in the position's Level-1 driver quota
+  | 'driver_seat'           // seat requires a qualified driver
+  | 'platoon_group'         // P5: joins a commander's same-platoon group (התקפי)
+  | 'no_rest_fill'          // everyone works: leftover soldier joins מגן
   // caveats (⚠)
   | 'caveat_rest_lt4'       // בדוחק: under the 4h hard rest floor
   | 'caveat_rest_lt8_long'  // בדוחק: under 8h rest before a long task
@@ -61,7 +66,12 @@ export const TEMPLATES: Record<RationaleCode, string> = {
   role_crew: 'צוות {position} — כל חיילי {role} הנוכחים מאיישים יומית',
   chain: '{target}: ירד מ{source} של {sourceStart} (שרשור)',
   chain_min_tracker: 'נבחר מהצוות היורד עם מינימום שעות גשש',
-  chain_commander: 'מפקד הכונן — הרובאי הבכיר בצוות',
+  chain_commander: 'מפקד הכונן — מפקד מהצוות, או הרובאי הבכיר באין מפקד',
+  magen_commander: 'מפקד המגן שנקבע לשבוע — מוביל את צוות המגן',
+  driver_quota: 'שובץ במכסת הנהגים של {position} (נדרש {qual})',
+  driver_seat: 'מושב נהג — נדרש {qual} בצוות',
+  platoon_group: 'מצטרף לקבוצה של {commander} (מחלקה {platoon})',
+  no_rest_fill: 'צורף ל{position} — כל חייל זמין משובץ (אין מנוחה)',
   caveat_rest_lt4: 'פחות מ-4 שעות מנוחה לפני המשמרת',
   caveat_rest_lt8_long: 'פחות מ-8 שעות מנוחה לפני משימה ארוכה',
   caveat_short_rest: 'מנוחה קצרה: {restH} שעות בלבד',

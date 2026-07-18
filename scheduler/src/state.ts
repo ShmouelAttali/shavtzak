@@ -61,16 +61,25 @@ export const isBlocked = (g: Gen, sid: number, p: [Minutes, Minutes]): boolean =
 export const fullyBlocked = (g: Gen, sid: number): boolean => isBlocked(g, sid, g.dRange) &&
   (g.ctx.blocked.get(sid) ?? []).some((b) => b[0] <= g.dRange[0] && b[1] >= g.dRange[1]);
 
-/** One position-whitelist mechanism for all three restriction sources:
+/** One position-whitelist mechanism for all the restriction sources:
  *  H6c allowed_positions (DB column, per-soldier cases like אריאל ביר),
  *  H6b seat-rule reservation (candidates of a seat-rule position serve only
- *  there; a release rule removes its unchosen candidates again), and the
- *  staff_all_roles derivation (role חמל → position חמל only). */
+ *  there; a release rule removes its unchosen candidates again), the
+ *  staff_all_roles derivation (role חמל → position חמל only), and the
+ *  H6-pool inverse: a position with config.candidate_pool (קצין מוצב) admits
+ *  ONLY its named candidates — through every fill path. */
 export const allowedIn = (g: Gen, s: Soldier, posName: string): boolean => {
   const reserved = g.seatRestrict.get(s.id);
   if (reserved !== undefined && nrm(reserved) !== nrm(posName)) return false;
   const roleHome = g.roleRestrict.get(s.id);
   if (roleHome !== undefined && nrm(roleHome) !== nrm(posName)) return false;
+  const pid = g.ctx.positionByName.get(posName);
+  const pool: string[] | undefined = pid !== undefined
+    ? g.ctx.positions.get(pid)?.config?.candidate_pool : undefined;
+  if (pool && !pool.some((n) => nrm(n) === nrm(s.name))) return false;
+  // H6 role gate: מ"מ/סמל never man עמדות הגנה — enforced here so the Level-2
+  // pull-from-מנוחה and pair paths can't bypass Level 1's eligibility filter
+  if (s.isSeniorCommander && nrm(posName) === nrm('עמדות הגנה')) return false;
   return !s.allowedPositions || s.allowedPositions.some((p) => nrm(p) === nrm(posName));
 };
 

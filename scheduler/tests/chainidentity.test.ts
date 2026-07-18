@@ -18,23 +18,34 @@ before(async () => {
 });
 after(closePool);
 
-test('T4a: carmel commander is the highest-rifle member of the descending crew', async () => {
-  const rows = await query<{ start: string; sub: string; soldier_id: string; rifle: number }>(`
-    select lower(sa.period)::text start, sp.name sub, sa.soldier_id::text, s.rifle_level rifle
+test('T4a: carmel commander is a real מפקד from the crew, else the highest rifle', async () => {
+  const rows = await query<{ start: string; sub: string; soldier_id: string; rifle: number; role: string }>(`
+    select lower(sa.period)::text start, sp.name sub, sa.soldier_id::text, s.rifle_level rifle,
+           coalesce(s.role, '') role
     from shift_assignments sa
     join positions p on p.id = sa.position_id
     join sub_positions sp on sp.id = sa.sub_position_id
     join soldiers s on s.id = sa.soldier_id
     where p.name = 'כרמל חטיבה' and sa.day = $1`, [D2]);
+  const isCmdRole = (role: string) => ['מ"מ', 'סמל', 'מ"כ', 'מ"ח'].includes(role);
   const byStart = new Map<string, typeof rows>();
   for (const r of rows) (byStart.get(r.start) ?? byStart.set(r.start, []).get(r.start)!).push(r);
   assert.ok(byStart.size >= 4, 'carmel shifts exist');
   for (const [start, crew] of byStart) {
     const cmd = crew.find((r) => r.sub === 'מפקד כרמל חטיבה');
     assert.ok(cmd, `${start}: commander seat filled`);
-    const maxRifle = Math.max(...crew.map((r) => Number(r.rifle)));
-    assert.equal(Number(cmd!.rifle), maxRifle,
-      `${start}: commander rifle ${cmd!.rifle} != crew max ${maxRifle}`);
+    const commanders = crew.filter((r) => isCmdRole(r.role));
+    if (commanders.length) {
+      // owner rule: prefer a defined מפקד from the crew (highest rifle among them)
+      const maxCmdRifle = Math.max(...commanders.map((r) => Number(r.rifle)));
+      assert.ok(isCmdRole(cmd!.role), `${start}: crew has a מפקד but seat went to role "${cmd!.role}"`);
+      assert.equal(Number(cmd!.rifle), maxCmdRifle,
+        `${start}: commander rifle ${cmd!.rifle} != commanders' max ${maxCmdRifle}`);
+    } else {
+      const maxRifle = Math.max(...crew.map((r) => Number(r.rifle)));
+      assert.equal(Number(cmd!.rifle), maxRifle,
+        `${start}: commander rifle ${cmd!.rifle} != crew max ${maxRifle}`);
+    }
   }
 });
 

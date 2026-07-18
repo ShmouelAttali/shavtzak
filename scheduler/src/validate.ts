@@ -273,6 +273,17 @@ export async function validateDay(day: string): Promise<Finding[]> {
         });
       }
     }
+    // everyone works (owner rule): an available soldier bucketed to מנוחה is
+    // a planning exception — every present soldier must do a shift
+    for (const r of dayAssignRows as any[]) {
+      if (r.pos_name !== 'מנוחה' || fullyOut.has(r.soldier_id)) continue;
+      const s = schedulable.get(r.soldier_id);
+      if (!s?.ok) continue;
+      findings.push({
+        severity: 'warning', rule: 'rest_bucket', soldierId: r.soldier_id,
+        message: `${s.name} במנוחה — כל חייל זמין אמור לעבוד`,
+      });
+    }
   }
   for (const r of today) {
     const s = schedulable.get(r.soldierId);
@@ -391,10 +402,15 @@ export async function validateDay(day: string): Promise<Finding[]> {
       .filter((t) => t >= period[0] && t < period[1]);
     const n = Math.min(...points.map((t) =>
       covering.filter((c) => c[0] <= t && t < c[1]).length));
-    if (n < ds.seats) {
+    // flex positions (config.flex_seats, e.g. מגן 10-12, סיור 3-4/shift):
+    // the generator may staff below the template seat count down to the flex
+    // minimum — coverage is judged against that minimum
+    const flexMin: number | undefined = posConfig.get(ds.position_id)?.flex_seats?.min;
+    const required = flexMin !== undefined ? Math.min(ds.seats, flexMin) : ds.seats;
+    if (n < required) {
       findings.push({
         severity: 'error', rule: 'coverage',
-        message: `${p.name}${ds.sub_name ? ` ${ds.sub_name}` : ''} ${fmtHM(period[0])}: אוישו ${n}/${ds.seats} מושבים`,
+        message: `${p.name}${ds.sub_name ? ` ${ds.sub_name}` : ''} ${fmtHM(period[0])}: אוישו ${n}/${required} מושבים`,
       });
     }
   }
@@ -429,7 +445,16 @@ export async function validateDay(day: string): Promise<Finding[]> {
     if (r.missionClass === 'rest') continue;
     const f = flagsBySoldier.get(r.soldierId);
     if (!f) continue;
-    if (r.positionName === 'קצין מוצב' && !f.isSeniorCommander) {
+    // H6-pool: a position with config.candidate_pool (קצין מוצב) is manned
+    // only from its named list. Import rows predate the rule — not judged.
+    const namePool = posConfig.get(r.positionId)?.candidate_pool as string[] | undefined;
+    if (namePool && r.source !== 'import' && !namePool.some((n) => nrm(n) === nrm(r.soldierName))) {
+      findings.push({
+        severity: 'error', rule: 'role_gate', soldierId: r.soldierId,
+        message: `${r.soldierName} משובץ ל${r.positionName} אך אינו ברשימת המועמדים הקבועה`,
+      });
+    }
+    if (!namePool && r.positionName === 'קצין מוצב' && !f.isSeniorCommander) {
       findings.push({
         severity: 'error', rule: 'role_gate', soldierId: r.soldierId,
         message: `${r.soldierName} משובץ לקצין מוצב אך אינו סמל/מ"מ`,
@@ -468,6 +493,31 @@ export async function validateDay(day: string): Promise<Finding[]> {
         severity: 'error', rule: 'role_gate',
         message: `${posInfo.get(ds.position_id)?.name ?? ds.position_id} ${fmtHM(period[0])}: אין מפקד במשמרת (המושב הראשון הוא מושב מפקד)`,
       });
+    }
+  }
+
+  // ── 11c: H6d driver requirement — every crew of a position with
+  // config.driver_qual (סיור → נהג דוד, התקפי → נהג טיגריס) must include a
+  // qualified driver. Import rows predate the rule — crews that are entirely
+  // imported are excused. ──────────────────────────────────────────────────
+  for (const p of posRows as any[]) {
+    const dq: string | undefined = posConfig.get(p.id)?.driver_qual;
+    if (!dq) continue;
+    const crews = new Map<Minutes, Row[]>();
+    for (const r of today) {
+      if (r.positionId !== p.id) continue;
+      (crews.get(r.period[0]) ?? crews.set(r.period[0], []).get(r.period[0])!).push(r);
+    }
+    for (const [start, crew] of crews) {
+      if (crew.every((r) => r.source === 'import')) continue;
+      const hasDriver = crew.some((r) => hasQualification(
+        qualsBySoldier.get(r.soldierId) ?? [], soldierInfo.get(r.soldierId)?.role ?? '', dq));
+      if (!hasDriver) {
+        findings.push({
+          severity: 'error', rule: 'driver',
+          message: `${p.name} ${fmtHM(start)}: אין ${dq} בצוות`,
+        });
+      }
     }
   }
 
@@ -529,6 +579,50 @@ export async function validateDay(day: string): Promise<Finding[]> {
       findings.push({
         severity: 'warning', rule: 'static_streak', soldierId: sid,
         message: `${name}: ${streak + 1} ימי עמדה ברצף ללא יום דינמי`,
+      });
+    }
+  }
+
+  // ── 13a: sub-position rotation (P4b, soft): a soldier should man a
+  // DIFFERENT static post each shift within one schedule day ────────────────
+  {
+    const seen = new Map<string, { name: string; sub: string; n: number }>();
+    for (const r of today) {
+      if (r.missionClass !== 'static' || r.source === 'import' || !r.subName) continue;
+      const key = `${r.soldierId}|${r.positionId}|${nrm(r.subName)}`;
+      const cur = seen.get(key) ?? { name: r.soldierName, sub: r.subName, n: 0 };
+      cur.n++;
+      seen.set(key, cur);
+    }
+    for (const [key, { name, sub, n }] of seen) {
+      if (n < 2) continue;
+      findings.push({
+        severity: 'warning', rule: 'sub_rotation', soldierId: Number(key.split('|')[0]),
+        message: `${name}: ${n} משמרות באותה עמדה (${sub}) באותה יממה`,
+      });
+    }
+  }
+
+  // ── 13b: on-call streak (T6, soft): 3+ consecutive days of ONLY static +
+  // readiness (התקפי/כרמל) work — the soldier is in constant on-call ────────
+  const onCallOnly = (sid: number, d: string): boolean => {
+    const dr: [Minutes, Minutes] = [dayStart(d), dayEnd(d)];
+    let hasOnCall = false, hasOther = false;
+    for (const h of history) {
+      if (h.soldierId !== sid || !overlaps(h.period, dr)) continue;
+      if (h.missionClass === 'static' || h.missionClass === 'readiness') hasOnCall = true;
+      else hasOther = true;
+    }
+    return hasOnCall && !hasOther;
+  };
+  for (const [sid, name] of activeToday) {
+    if (!onCallOnly(sid, day)) continue;
+    let streak = 0;
+    while (streak < 7 && onCallOnly(sid, addDays(day, -(streak + 1)))) streak++;
+    if (streak >= 2) {
+      findings.push({
+        severity: 'warning', rule: 'oncall_streak', soldierId: sid,
+        message: `${name}: ${streak + 1} ימים ברצף של עמדות/כוננות בלבד (זמינות מתמדת)`,
       });
     }
   }
