@@ -24,11 +24,13 @@ insert into positions (id, name, mission_class, is_scheduled, config) values
   -- תגבצ: history tombstone (owner decision 2026-07-17) — imported rows
   -- (24/6–16/7) reference it; never scheduled again, no slot templates
   ( 5, 'תגבצ',        'other',     false, '{}'),
+  -- Seat-rule metadata only — the named candidate lists are id-based rows in
+  -- position_candidates, seeded by seed-candidates.sql AFTER the roster import
   ( 6, 'חפק',         'other',     true,  '{"daily": true, "seat_rules": [
       {"sub": "מפקד", "roles": ["מ\"פ", "סמ\"פ"], "commander": true},
-      {"sub": "קשר",  "soldiers": ["יהודה חושן", "אור חיים בלונדר", "יחיעם אושפיזאי"], "ordered": true, "release_unpicked": true},
-      {"sub": "חובש", "soldiers": ["כפיר לנדסמן", "שחר מיכאלי"], "qual": "חובש"},
-      {"sub": "נהג",  "soldiers": ["אמיר יונייב", "יאיר מובשוביץ"], "qual": "נהג דוד"}
+      {"sub": "קשר",  "ordered": true, "release_unpicked": true},
+      {"sub": "חובש", "qual": "חובש"},
+      {"sub": "נהג",  "qual": "נהג דוד"}
     ]}'),
   -- תורנים: mission_class 'other' — outside T2/T3 rotation; soft rule T5:
   -- at most one תורנות per rolling 7 days (ranking preference + validator
@@ -37,8 +39,9 @@ insert into positions (id, name, mission_class, is_scheduled, config) values
   ( 7, 'תורנים',      'other',     true,  '{"daily":true,"full_rest_after":false}'),
   ( 8, 'כונן גשש',    'readiness', true,  '{}'),
   -- קצין מוצב: manned ONLY from the fixed candidate list (H6-pool) —
-  -- unordered (rotates by fairness); members serve anywhere when not picked
-  ( 9, 'קצין מוצב',   'other',     true,  '{"daily":true,"candidate_pool":["שמואל אטלי","צבי שור","יוחאי יעקובסון","אורי שאג","אלעד זיו","אביאל גיאת","עמיחי ברוורמן","גלעד דביר"]}'),
+  -- unordered (rotates by fairness); members serve anywhere when not picked.
+  -- The pool itself is id-based rows in position_candidates (seed-candidates.sql).
+  ( 9, 'קצין מוצב',   'other',     true,  '{"daily":true,"candidate_pool":true}'),
   (10, 'כרמל חטיבה',  'readiness', true,  '{}'),
   -- חמל: standing crew — every present role-חמל soldier staffs it daily,
   -- full schedule day; readiness class = rest-transparent (internal shifts)

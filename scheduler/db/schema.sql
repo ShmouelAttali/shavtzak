@@ -43,18 +43,29 @@ $$ select case when ts::time >= time '14:00' then ts::date else ts::date - 1 end
 
 -- ── Source tables (small, hand-editable) ────────────────────────────────────
 
+-- A soldier's name appears ONCE in the DB (owner decision 2026-07-19); every
+-- other reference is a soldier_id FK (position_candidates,
+-- magen_commander_history, soldier_allowed_positions below). full_name is
+-- unique — a real-life namesake must be entered with a disambiguator.
 create table soldiers (
   id              bigint generated always as identity primary key,
   personal_number text unique not null,
-  full_name       text not null,
-  platoon         text not null,          -- עלי / שילה / גבעות צפון / גבעות דרום / מפלג
-  role            text,                   -- מ"פ / מ"מ / סמל / מ"כ / לוחם ...
+  full_name       text unique not null,
+  platoon         text not null,          -- 1 / 2 / 3 / חמ"ל / מפל"ג / לא ידוע
+  role            text check (role <> ''),-- מ"פ / מ"מ / סמל / מ"כ / לוחם ...
   rifle_level     int,                    -- רובאי
   phone           text,
   email           text,
   is_schedulable  boolean not null default true,  -- H2: מפלג / חמ"ל => false
-  allowed_positions text[],                -- H6c: null = all; else only these positions
   notes           text
+);
+
+-- H6c whitelist: no rows = soldier may serve anywhere; else only these
+-- positions (replaces the old soldiers.allowed_positions text[] of names).
+create table soldier_allowed_positions (
+  soldier_id  bigint   not null references soldiers on delete cascade,
+  position_id smallint not null,          -- FK added after positions is created
+  primary key (soldier_id, position_id)
 );
 
 create table soldier_qualifications (
@@ -68,7 +79,7 @@ create table soldier_qualifications (
 create table unavailability (
   id         bigint generated always as identity primary key,
   soldier_id bigint not null references soldiers on delete cascade,
-  period     tsrange not null,
+  period     tsrange not null check (upper(period) > lower(period)),
   -- known kinds only: the full-day + partial statuses import/cleanup.py emits
   -- (FULL_BLOCK + PARTIAL), plus 'יציאה' (the short-exits tab import)
   kind       text not null check (kind in (
@@ -78,6 +89,11 @@ create table unavailability (
   note       text
 );
 create index unavailability_soldier_period on unavailability using gist (soldier_id, period);
+-- Same-kind overlaps are double entry (the sheet import must uphold this);
+-- CROSS-kind overlaps are intentional (a return-day partial row overlays the
+-- tail of the full-block range) and stay allowed.
+alter table unavailability add constraint unavailability_no_same_kind_overlap
+  exclude using gist (soldier_id with =, kind with =, period with &&);
 
 -- Half-day exit requests (H9). Own table — NOT unavailability, which the sheet
 -- import truncates and rebuilds; requests must survive re-imports. A row IS an
@@ -88,7 +104,9 @@ create table exit_requests (
   soldier_id  bigint not null references soldiers on delete cascade,
   period      tsrange not null check (upper(period) > lower(period)),
   created_by  text,                        -- requester email (audit only)
-  created_at  timestamp not null default now(),
+  -- naive LOCAL wall-clock (server TZ is UTC on Supabase — bare now() would
+  -- store UTC and skew 2-3h vs every other timestamp in the schema)
+  created_at  timestamp not null default timezone('Asia/Jerusalem', now()),
   note        text
 );
 create index exit_requests_soldier_period on exit_requests using gist (soldier_id, period);
@@ -110,7 +128,32 @@ create table sub_positions (
   id            smallint primary key,
   position_id   smallint not null references positions,
   name          text not null,            -- 'שג','בונקר','מזרחית','דרומית','מפקד כרמל חטיבה',...
-  unique (position_id, name)
+  unique (position_id, name),
+  unique (position_id, id)                -- composite-FK target (position_candidates)
+);
+
+alter table soldier_allowed_positions
+  add constraint soldier_allowed_positions_position_id_fkey
+  foreign key (position_id) references positions;
+
+-- Closed candidate lists, id-based (replaces the name arrays that lived in
+-- positions.config: 'candidate_pool' and 'seat_rules'[].soldiers — a spelling
+-- mismatch there silently hid a soldier for a week, 2026-07-19):
+--   sub_position_id NULL = position-level pool (קצין מוצב candidate_pool)
+--   sub_position_id set  = named candidates for that seat (חפק seat_rules)
+-- priority: NULL = unordered (fairness-rotated); 1..n = ordered list (קשר).
+-- Seat-rule METADATA (roles/qual/ordered/commander/release_unpicked) stays in
+-- positions.config->'seat_rules'; only the soldier lists live here.
+-- Seeded per-deployment by db/seed-candidates.sql (after the roster import).
+create table position_candidates (
+  id              smallint generated always as identity primary key,
+  position_id     smallint not null references positions,
+  sub_position_id smallint,
+  soldier_id      bigint   not null references soldiers,
+  priority        smallint check (priority >= 1),
+  foreign key (position_id, sub_position_id)
+    references sub_positions (position_id, id),
+  unique nulls not distinct (position_id, sub_position_id, soldier_id)
 );
 
 -- Versioned slot template; concrete per-day slots are derived (day_slots view).
@@ -119,8 +162,8 @@ create table slot_templates (
   position_id          smallint not null references positions,
   sub_position_id      smallint references sub_positions,
   start_time           time not null,
-  duration_minutes     int  not null,
-  seats                smallint not null default 1,
+  duration_minutes     int  not null check (duration_minutes > 0),
+  seats                smallint not null default 1 check (seats > 0),
   commander_first_seat boolean not null default false,  -- H6: first seat = commander
   valid_from           date not null,
   valid_to             date                              -- null = still active
@@ -144,7 +187,7 @@ create table seat_overrides (
   id          smallint generated always as identity primary key,
   position_id smallint not null references positions,
   valid_from  date not null,
-  seats       smallint not null,
+  seats       smallint not null check (seats > 0),
   note        text,
   unique (position_id, valid_from)
 );
@@ -158,7 +201,9 @@ create table chain_rules (
   source_start     time not null,
   source_day_offset int not null default 0,                 -- -1 = source shift from previous schedule day
   pick             text not null default 'all'
-                   check (pick in ('all','min_tracker_hours'))
+                   check (pick in ('all','min_tracker_hours')),
+  -- a duplicated rule would double-fill a chained window
+  unique (target_position, target_start, source_position, source_start, source_day_offset)
 );
 
 -- Tunables actually read by the code (src/config.ts loadTunables):
@@ -169,6 +214,17 @@ create table chain_rules (
 create table config (
   key   text primary key,
   value jsonb not null
+);
+
+-- The weekly מגן-commander decision (§7 step 5), id-based with history —
+-- replaces the old config key 'magen_commander' (a soldier NAME string).
+-- The decision effective on schedule day D = the row with the latest
+-- valid_from <= D. Written by the weekly-shavtzak flow.
+create table magen_commander_history (
+  valid_from date primary key,             -- first schedule day the decision applies to
+  soldier_id bigint not null references soldiers,
+  decided_at timestamp not null default timezone('Asia/Jerusalem', now()),
+  note       text
 );
 
 -- ── Decision / fact tables (generator + human locks) ────────────────────────
@@ -199,8 +255,8 @@ create table shift_assignments (
   position_id       smallint not null references positions,
   sub_position_id   smallint references sub_positions,
   soldier_id        bigint not null references soldiers,
-  period            tsrange not null,
-  seat_index        smallint not null default 1,
+  period            tsrange not null check (upper(period) > lower(period)),
+  seat_index        smallint not null default 1 check (seat_index >= 1),
   is_commander_seat boolean not null default false,
   locked            boolean not null default false,
   source            text not null default 'auto'
@@ -212,6 +268,13 @@ create table shift_assignments (
 create index shift_assignments_day on shift_assignments (day);
 create index shift_assignments_soldier on shift_assignments (soldier_id);
 
+-- One row per concrete seat. Imported history is exempt: the sheet had no
+-- seat concept, so source='import' rows all carry seat_index=1 within a slot.
+create unique index shift_assignments_seat_key
+  on shift_assignments (day, position_id, sub_position_id, period, seat_index)
+  nulls not distinct
+  where source <> 'import';
+
 -- H3 at the DB level: overlapping assignments are impossible for blocking rows.
 alter table shift_assignments add constraint no_double_booking
   exclude using gist (soldier_id with =, period with &&) where (blocks_overlap);
@@ -221,7 +284,7 @@ alter table shift_assignments add constraint no_double_booking
 create table shavtzak_admins (
   email    text primary key,     -- lowercased
   note     text,
-  added_at timestamp not null default now()
+  added_at timestamp not null default timezone('Asia/Jerusalem', now())
 );
 
 create table sheet_sync_log (
@@ -231,7 +294,7 @@ create table sheet_sync_log (
   day        date,
   status     text,
   detail     jsonb,
-  created_at timestamp not null default now()
+  created_at timestamp not null default timezone('Asia/Jerusalem', now())
 );
 
 -- ── Derived views ───────────────────────────────────────────────────────────
