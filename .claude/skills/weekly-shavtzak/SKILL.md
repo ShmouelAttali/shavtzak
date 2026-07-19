@@ -1,6 +1,6 @@
 ---
 name: weekly-shavtzak
-description: Generate a weekly שבצ"ק (7 days of drafts) against the Supabase scheduler DB — asks who commands the מגן this week, persists that decision (config key magen_commander) so the next run reuses it, generates day by day, validates, and reports issues. Use for "צור שבצק שבועי", "generate next week", "generate the weekly schedule", or any multi-day draft generation request.
+description: Generate a weekly שבצ"ק (7 days of drafts) against the Supabase scheduler DB — asks who commands the מגן this week, persists that decision (magen_commander_history table) so the next run reuses it, generates day by day, validates, and reports issues. Use for "צור שבצק שבועי", "generate next week", "generate the weekly schedule", or any multi-day draft generation request.
 ---
 
 # Weekly שבצ"ק generation
@@ -18,26 +18,37 @@ export SCHEDULER_DATABASE_URL="postgres://postgres.yoaymfryftsqqjjyvwym:${DB_PAS
 
 The מגן crew is anchored on a weekly commander decision: the generator
 reserves him to מגן first and prefers his מחלקה for the rest of the crew
-(config key `magen_commander`, read by Level 1).
+(the `magen_commander_history` table, read by Level 1 — the decision for
+day D is the row with the latest `valid_from` <= D, so history is kept).
 
-1. Read the current decision:
+1. Read the decision currently effective for the week:
    ```sql
-   select value from config where key = 'magen_commander';
+   select s.full_name
+   from magen_commander_history h
+   join soldiers s on s.id = h.soldier_id
+   where h.valid_from <= '<week-start>'
+   order by h.valid_from desc limit 1;
    ```
 2. **Ask the user** who commands the מגן this week, showing the persisted name
    (if any) as the default — e.g. "מי מפקד המגן השבוע? (הפעם הקודמת: X)".
    If the user confirms the existing name, skip the write.
-3. Validate the answer against the roster (exact spelling matters — quotes are
-   normalized, but prefer the roster spelling):
+3. Validate the answer against the roster (the insert below matches
+   `full_name` EXACTLY — always use the spelling this query returns):
    ```sql
    select full_name, platoon, role from soldiers
    where is_schedulable and full_name like '%<part>%';
    ```
-4. Persist (jsonb string value):
+4. Persist (id-resolved; a new `valid_from` keeps the weekly history):
    ```sql
-   insert into config (key, value) values ('magen_commander', '"<full_name>"')
-   on conflict (key) do update set value = excluded.value;
+   insert into magen_commander_history (valid_from, soldier_id)
+   select '<week-start>'::date, id from soldiers where full_name = '<name>'
+   on conflict (valid_from) do update
+     set soldier_id = excluded.soldier_id,
+         decided_at = timezone('Asia/Jerusalem', now());
    ```
+   **Guard**: `INSERT 0 0` (zero rows) means the name matched nobody in the
+   roster — nothing was persisted. Abort, re-run the step-3 lookup, and
+   re-ask the user; never proceed to generation with an unpersisted decision.
 
 ## Step 2 — pre-flight
 
@@ -97,9 +108,10 @@ draft-only (no sheet sync-out).
 Don't just relay validator errors — check whether they're a data gap the
 generator can't solve:
 
-- **קצין מוצב unfilled** → check pool availability per day
-  (`positions.config->'candidate_pool'` names vs `unavailability`). Note: if
-  the only available pool member is also the persisted `magen_commander`, he's
+- **קצין מוצב unfilled** → check pool availability per day: the pool is
+  `position_candidates` rows with `sub_position_id is null` (join `soldiers`
+  for names) vs `unavailability`. Note: if the only available pool member is
+  also the persisted מגן commander (`magen_commander_history`), he's
   reserved to מגן and the seat stays empty — flag that trade-off to the user.
 - **אין נהג דוד / נהג טיגריס** → count available qualified drivers via
   `soldier_qualifications` (qualification = 'נהג דוד' / 'נהג טיגריס'). 2
@@ -143,7 +155,8 @@ from f join b on b.id=f.soldier_id where b.days_present>0 order by per_day desc;
 - Never run the test suite against this DB; tests use the local Docker
   `shavtzak_test` database only.
 - `unavailability` has a `period` tsrange column (not `range`); the קצין מוצב
-  pool lives in `positions.config->'candidate_pool'`, driver quals in
+  pool lives in `position_candidates` (id-based, `sub_position_id is null`;
+  `config.candidate_pool` is only a boolean marker), driver quals in
   `soldier_qualifications.qualification` — there is no config key for either.
 - A range "20-07 14:00 to 26-07 14:00" is schedule days 2026-07-20..2026-07-25
   (each day is D 14:00 → D+1 14:00) — pass `generate 2026-07-20 2026-07-25`.

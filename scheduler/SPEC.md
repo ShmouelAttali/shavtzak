@@ -33,7 +33,7 @@ History shows 39 distinct position names over 20 days; templates change mid-depl
 |---|---|---|
 | סיור | **3–4** seats (flex) × 06:00, 14:00, 22:00 | 8h; `flex_seats` 3–4 — 4 normally, shrinks one seat per shift down to 3 only on soldier shortage (everyone-works); every crew: **מפקד in the first seat (H6) + נהג דוד (H6d)** |
 | עמדות הגנה (שג/בונקר/מזרחית/דרומית) | 4 posts × 06,10,14,18,22,02 | 4h |
-| מגן | **10–12** seats (flex), **14:00–14:00** | daily; **continuity crew, one מחלקה** (kept day-to-day unless seat count or a manual change intervenes; repeats back-to-back at gap 0 — R5); a returning member with a **half-day exit stays on the crew** (H9 stickiness — the מגן officer covers his absence internally); `flex_seats` 10–12 — absorbs surplus soldiers up to 12 (everyone-works); commander = the persisted weekly `magen_commander` decision, and his מחלקה anchors the crew's same-platoon preference (§7) |
+| מגן | **10–12** seats (flex), **14:00–14:00** | daily; **continuity crew, one מחלקה** (kept day-to-day unless seat count or a manual change intervenes; repeats back-to-back at gap 0 — R5); a returning member with a **half-day exit stays on the crew** (H9 stickiness — the מגן officer covers his absence internally); `flex_seats` 10–12 — absorbs surplus soldiers up to 12 (everyone-works); commander = the persisted weekly מגן-commander decision (`magen_commander_history`), and his מחלקה anchors the crew's same-platoon preference (§7) |
 | התקפי | 8 seats | **14:00–14:00** standing readiness crew; **first seat = מפקד (H6 hard)**; crew must include a **נהג טיגריס (H6d)**; soft composition (`group_size` 4): two groups of (1 מפקד + 3 soldiers), each group preferably from one מחלקה (the groups may differ) — implemented as a commander quota of 2 + same-platoon group fill (P5). Ad-hoc attack missions are recorded as separate mission rows and **must not overlap the readiness row** (H3) |
 | חפק | 4 named seats (מפקד/קשר/חובש/נהג), **14:00–14:00** | daily; **dedicated candidates per seat — see H6b** |
 | תורנים | 2 seats, **14:00–14:00** | full schedule day; class `other` — outside T2/T3 rotation; **soft T5**: at most one תורנות per soldier per rolling 7 days |
@@ -126,10 +126,12 @@ that did cross the boundary — §10).
   templates. מ"מ/סמל never on עמדות הגנה. קצין מוצב is governed by H6-pool
   below; only when no candidate pool is configured for a position does a
   senior-commander (סמל/מ"מ) role gate apply to it as fallback.
-- **H6-pool Candidate-pool positions** (`candidate_pool` on the position
-  config; currently קצין מוצב): the position is manned **ONLY** from its fixed
-  name list — שמואל אטלי, צבי שור, יוחאי יעקובסון, אורי שאג, אלעד זיו,
-  אביאל גיאת, עמיחי ברוורמן, גלעד דביר. The list is **unordered** — the duty
+- **H6-pool Candidate-pool positions** (`candidate_pool: true` marker on the
+  position config; currently קצין מוצב): the position is manned **ONLY** from
+  its fixed candidate list — id-based `position_candidates` rows with
+  `sub_position_id` NULL (§9); currently שמואל אטלי, צבי שור, יוחאי יעקובסון,
+  אורי שאג, אלעד זיו, אביאל גיאת, עמיחי ברוורמן, גלעד דביר. The list is
+  **unordered** (`priority` NULL) — the duty
   rotates among the members by fairness (P2–P6). **Non-exclusive** (unlike
   H6b): list members serve anywhere normally when not picked. **Staffed
   first**: a closed-list position gets its pick before any other
@@ -139,9 +141,12 @@ that did cross the boundary — §10).
   emits a substitute-commander issue. Enforced through every fill path (the
   same `allowedIn` whitelist mechanism as H6b/H6c) and validated (`role_gate`
   error; imported history rows predate the rule and are excused).
-- **H6b Named-seat positions** (`seat_rules` on the position config; currently חפק):
-  each sub-position seat is filled only from its dedicated candidate list, in
-  priority order —
+- **H6b Named-seat positions** (`seat_rules` on the position config — seat
+  METADATA only: sub/roles/qual/ordered/commander/release_unpicked; currently
+  חפק): each sub-position seat is filled only from its dedicated candidate
+  list — id-based `position_candidates` rows carrying the seat's
+  `sub_position_id` (`priority` 1..n = ordered list, NULL = unordered; §9) —
+  in priority order —
   מפקד: role מ"פ, else סמ"פ; קשר: יהודה חושן → אור חיים בלונדר → יחיעם אושפיזאי
   (ordered); חובש: כפיר לנדסמן / שחר מיכאלי; נהג: אמיר יונייב / יאיר מובשוביץ
   (unordered pairs rotate by fairness P2-P6).
@@ -163,8 +168,8 @@ that did cross the boundary — §10).
   any other assignment. Exception (`release_unpicked`, the קשר rule): once the
   seat is covered, the unchosen candidates return to the general pool for that
   day. Unchosen candidates of non-release rules go to מנוחה.
-- **H6c Per-soldier position whitelist** (`soldiers.allowed_positions`, null =
-  unrestricted): a listed soldier may serve ONLY in those positions (chains
+- **H6c Per-soldier position whitelist** (`soldier_allowed_positions` rows;
+  no rows = unrestricted): a listed soldier may serve ONLY in those positions (chains
   included) — he competes normally inside them and rests otherwise. Currently:
   אריאל ביר → סיור; יהונתן רוט → עמדות הגנה + כרמל חטיבה (its T4a chain) +
   תורנים. Enforced with H6b through one generator mechanism
@@ -172,8 +177,8 @@ that did cross the boundary — §10).
   **Derived whitelist — `staff_all_roles`**: a soldier whose role matches a
   `staff_all_roles` position (role חמל → position חמל) is implicitly
   restricted to that position, through the same `allowedIn` mechanism and the
-  same validator rule — no explicit `allowed_positions` row needed (an
-  explicit row, when present, wins). H6c's column stays for genuine
+  same validator rule — no explicit `soldier_allowed_positions` row needed (an
+  explicit row, when present, wins). H6c's table stays for genuine
   per-soldier cases.
   Contrast: H2 `is_schedulable=false` = outside the system entirely;
   H6b = must-serve in a dedicated seat; H6c (explicit or role-derived) =
@@ -389,15 +394,16 @@ night_count first, weighted_hours second, per-position counts third.
      קצין מוצב) is staffed now, from its fixed list only, by the pool's
      fairness rotation — BEFORE the מגן-commander reservation, continuity, or
      any later fill can consume a pool member (the list is small and has no
-     substitutes, so its pick always wins). The persisted `magen_commander`
+     substitutes, so its pick always wins). The persisted מגן commander
      is taken from the pool only as a **last resort** — when another member
      can hold the seat, מגן keeps its commander; rationale `candidate_pool`;
   4. **flex sizing** (everyone-works): מגן seats = the free pool minus the
      other positions' demand, clamped to the flex range (10–12; a manual seat
      override may raise the max); on shortage, flex positions (סיור) shrink
      one seat per shift down to their min (3) until מגן's minimum crew fits;
-  5. **מגן commander reservation**: the persisted weekly decision (config key
-     `magen_commander`) names the מגן commander — he is reserved to מגן before
+  5. **מגן commander reservation**: the persisted weekly decision (the
+     `magen_commander_history` row with the latest `valid_from` ≤ the day —
+     §9) names the מגן commander — he is reserved to מגן before
      anything else except a closed list can take him, and his מחלקה anchors
      the crew's same-platoon preference. If the closed-list pre-pass already
      took him (he was the only available pool member), מגן falls back with a
@@ -498,6 +504,12 @@ or **warning** tagged with a rule key:
   rest by design (H6b).
 - `unknown_soldier` — an assignment to an unknown soldier (error) or to one
   marked not-schedulable (warning).
+- `config_roles` — a configured role string (`staff_all_roles`,
+  `seat_rules[].roles`) matching no roster soldier's role, or a configured
+  qualification string (`driver_qual`, a seat rule's `qual`) matching no
+  known qualification: warning. (The former `config_names` check is gone —
+  soldier lists are FK tables now, so dangling names are impossible;
+  role/qualification strings remain free text and still need the lint.)
 - `seat_rules` — H6b: an unmanned seat (warning); an occupant outside the
   seat's candidate list, a reserved candidate serving elsewhere (unless
   released or blocked for the seat window), or a commander-rule seat without
@@ -549,22 +561,49 @@ generation-time record.
 
 ## 9. Database design
 
-See `db/schema.sql` (full DDL) and `db/seed.sql` (current template seed).
+See `db/schema.sql` (full DDL), `db/seed.sql` (current template seed) and
+`db/seed-candidates.sql` (id-based candidate/whitelist lists — applied AFTER
+the roster import; see the name-appears-once principle below).
 
 Principles:
 - **Small hand-managed source tables; derived data = views.** e.g. no stored presence
   matrix — sparse `unavailability` periods; no row ⇒ soldier available; the per-day
-  presence matrix and all fairness counters are views.
+  presence matrix and all fairness counters are views. Same-**kind** overlapping
+  `unavailability` periods are excluded at the DB level (they are double entry);
+  cross-kind overlaps stay allowed — a return-day partial row legitimately
+  overlays the tail of a full-block range (import shape).
+- **Soldier identity = FK; a name appears ONCE in the DB** (`soldiers.full_name`
+  is UNIQUE — a real-life namesake gets a disambiguator). Every soldier list is
+  an id-based table, never a name array:
+  - `position_candidates` (position_id, sub_position_id, soldier_id, priority) —
+    the closed lists: `sub_position_id` NULL = position-level pool (H6-pool,
+    קצין מוצב), set = named candidates for that seat (H6b, חפק);
+    `priority` NULL = unordered (fairness-rotated), 1..n = ordered (קשר).
+  - `magen_commander_history` (valid_from pk, soldier_id, decided_at, note) —
+    the weekly מגן-commander decision, with history: the commander effective on
+    schedule day D = the row with the latest `valid_from` ≤ D (§7 step 5).
+    Written by the weekly-shavtzak flow.
+  - `soldier_allowed_positions` (soldier_id, position_id) — the H6c whitelist
+    (replaced the dropped `soldiers.allowed_positions` text[]); no rows =
+    all positions allowed.
+  The only file where soldier names may appear outside the roster is
+  `db/seed-candidates.sql` — the human-editable manifest, applied AFTER the
+  roster import; it resolves each name once (normalized) and aborts the whole
+  transaction on any unresolved name.
 - **Seat counts change over time via `seat_overrides`** (position, valid_from,
   seats-per-slot; latest wins) — resolved by the `day_slots` view, managed by hand.
 - **Position behavior flags live in `positions.config` jsonb**: `daily`
   (sleeping 14:00–14:00 day duty — implies `night_exempt` + `full_rest_after`
   + `yomi_display`, each overridable by an explicit key; e.g. תורנים sets
   `full_rest_after: false`), `continuity`, `same_platoon` (מגן), `seat_rules`
-  (H6b), `staff_all_roles` (חמל, מפלג), `flex_seats` (min/max — מגן 10–12,
+  (H6b — seat METADATA only: sub/roles/qual/ordered/commander/release_unpicked;
+  the candidate lists themselves are `position_candidates` rows),
+  `staff_all_roles` (חמל, מפלג), `flex_seats` (min/max — מגן 10–12,
   סיור 3–4; everyone-works sizing + coverage minimum), `driver_qual` (H6d —
   סיור → נהג דוד, התקפי → נהג טיגריס), `group_size` (התקפי 4 — commander
-  groups), `candidate_pool` (H6-pool — קצין מוצב). Resolution happens once per
+  groups), `candidate_pool` (H6-pool — קצין מוצב; a boolean **marker** that
+  the position is closed-list — membership lives in `position_candidates`,
+  never in the jsonb). Resolution happens once per
   read boundary
   (`effectiveConfig` in `src/config.ts`; mirrored by a `coalesce` in
   `soldier_fairness`).
@@ -585,9 +624,9 @@ Principles:
   (`minimum_hours` 4, `ideal_hours` 8, `long_task_hours` 4,
   `gashash_effective_hours` 1.5), `daily_cap_hours` (8),
   `readiness_hour_weight` (0.25, also read by `soldier_fairness` in SQL).
-  One more config key is read directly (not a numeric tunable):
-  `magen_commander` — the persisted weekly מגן-commander decision (a soldier
-  name; §7 step 5).
+  (`magen_commander` is **no longer** a config key — the weekly מגן-commander
+  decision lives in `magen_commander_history`; see the FK principle above and
+  §7 step 5.)
   The 14:00 day anchor and the 00:00–06:00 night window are **hardcoded
   mirrors** in `src/time.ts` + `db/schema.sql` by design — changing them
   mid-deployment would silently reinterpret all stored data.
@@ -606,6 +645,11 @@ Principles:
   counters with real accumulated load.
 - `יציאות לזמן קצר` → `unavailability` (kind='יציאה').
 - שבצק slot list → `positions` / `sub_positions` / `slot_templates` / `chain_rules`.
+- **After the roster import**: apply `db/seed-candidates.sql` — resolves the
+  candidate/whitelist names against the freshly imported roster into id rows
+  (`position_candidates`, `soldier_allowed_positions`); aborts on any
+  unresolved name, so it must run last in the fresh-DB flow
+  (schema → seed → import → seed-candidates).
 
 ### Sheet sync-out
 
