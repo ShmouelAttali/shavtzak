@@ -26,17 +26,19 @@ test('regenerating D removes only colliding unlocked future drafts; locked + non
   const other = res.assignments.find((x) => x.soldierId !== a.soldierId && x.soldierId !== b.soldierId)!;
   await query(`insert into schedule_days (day) values ($1) on conflict do nothing`, [D2]);
   const mkIso = minToIso;
+  // (explicit distinct seat_index values — a's and b's periods may coincide,
+  // and the seat uniqueness index rejects two rows on the same seat)
   // colliding UNLOCKED draft row on D2 (overlaps a's period) — must be deleted
-  await query(`insert into shift_assignments (day, position_id, soldier_id, period, source, blocks_overlap, locked)
-               values ($1, 1, $2, tsrange($3::timestamp, $4::timestamp), 'auto', false, false)`,
+  await query(`insert into shift_assignments (day, position_id, soldier_id, period, source, blocks_overlap, locked, seat_index)
+               values ($1, 1, $2, tsrange($3::timestamp, $4::timestamp), 'auto', false, false, 1)`,
     [D2, a.soldierId, mkIso(a.period[0]), mkIso(a.period[1])]);
   // colliding LOCKED row on D2 — must survive
-  await query(`insert into shift_assignments (day, position_id, soldier_id, period, source, blocks_overlap, locked)
-               values ($1, 1, $2, tsrange($3::timestamp, $4::timestamp), 'auto', false, true)`,
+  await query(`insert into shift_assignments (day, position_id, soldier_id, period, source, blocks_overlap, locked, seat_index)
+               values ($1, 1, $2, tsrange($3::timestamp, $4::timestamp), 'auto', false, true, 2)`,
     [D2, b.soldierId, mkIso(b.period[0]), mkIso(b.period[1])]);
   // NON-colliding unlocked D2 draft row (starts well after D1's window) — survives
-  await query(`insert into shift_assignments (day, position_id, soldier_id, period, source, blocks_overlap, locked)
-               values ($1, 1, $2, tsrange(day_start($1) + interval '2 hours', day_start($1) + interval '6 hours'), 'auto', false, false)`,
+  await query(`insert into shift_assignments (day, position_id, soldier_id, period, source, blocks_overlap, locked, seat_index)
+               values ($1, 1, $2, tsrange(day_start($1) + interval '2 hours', day_start($1) + interval '6 hours'), 'auto', false, false, 3)`,
     [D2, other.soldierId]);
 
   await persist(res);

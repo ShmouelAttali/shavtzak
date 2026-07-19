@@ -30,7 +30,7 @@ export type RationaleCode =
   | 'chain_min_tracker'     // chain pick rule: minimum tracker hours
   | 'chain_commander'       // chain commander slot: commander in crew / highest rifle
   | 'chain_completion'      // chain crew short (source went home) — completed fresh
-  | 'magen_commander'       // the weekly מגן commander decision (config)
+  | 'magen_commander'       // the weekly מגן commander decision (magen_commander_history)
   | 'candidate_pool'        // H6-pool: reserved first from the position's fixed candidate list
   | 'driver_quota'          // picked in the position's Level-1 driver quota
   | 'driver_seat'           // seat requires a qualified driver

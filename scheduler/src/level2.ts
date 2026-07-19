@@ -92,6 +92,18 @@ function buildRationale(g: Gen, st: SoldierState, slot: Slot, pid: number, opts:
   return out;
 }
 
+/** Locked/manual rows already holding seats of this exact slot (same
+ *  position, sub and period — the tuple the DB's seat uniqueness index
+ *  guards). The generator keeps them (persist never deletes them) and must
+ *  neither re-issue their seat indexes nor re-book their soldiers in the
+ *  same crew. */
+function lockedInSlot(g: Gen, sl: Slot) {
+  return g.ctx.lockedShift.filter((l) =>
+    l.positionId === sl.positionId
+    && (l.subPositionId ?? null) === (sl.subPositionId ?? null)
+    && l.period[0] === sl.period[0] && l.period[1] === sl.period[1]);
+}
+
 /** H9 pre-pass: pack each exit-day soldier's shifts around his exit window
  *  BEFORE the general ranked fill. His relaxed-rest picks are fallback-tier
  *  by construction, so the general fill would starve him of the very shifts
@@ -119,10 +131,22 @@ function exitPrePass(g: Gen, plan1: Level1Plan): void {
     const targetH = Math.min(ctx.tunables.dailyCapH - st.missionHoursToday, 24 - outMin / 60);
     if (targetH <= 0) continue;
 
-    // pre-pass rows already in a slot (earlier exit soldiers) count against it
+    // pre-pass rows already in a slot (earlier exit soldiers) count against
+    // it, and so do locked/manual rows kept in the DB
     const occupancy = (sl: Slot) => g.assignments.filter((a) =>
       a.positionId === sl.positionId && a.subPositionId === sl.subPositionId
-      && a.period[0] === sl.period[0]).length;
+      && a.period[0] === sl.period[0]).length + lockedInSlot(g, sl).length;
+    // highest seat index not already held (generation rows or locked rows)
+    const freeSeat = (sl: Slot): number => {
+      const used = new Set<number>([
+        ...g.assignments.filter((a) => a.positionId === sl.positionId
+          && a.subPositionId === sl.subPositionId && a.period[0] === sl.period[0])
+          .map((a) => a.seatIndex),
+        ...lockedInSlot(g, sl).map((l) => l.seatIndex),
+      ]);
+      for (let s = sl.seats; s >= 1; s--) if (!used.has(s)) return s;
+      return sl.seats;
+    };
     const usable = slots.filter((sl) => occupancy(sl) < sl.seats
       && fits(g, st, sl.period, false, false, nightExempt).ok);
 
@@ -190,8 +214,8 @@ function exitPrePass(g: Gen, plan1: Level1Plan): void {
         }
       }
       rationale.push({ code: 'exit_packed', params: { from: winFrom, to: winTo } });
-      // top-down seat index — the general fill hands out 1..(seats-taken)
-      assign(g, st, sl, sl.seats - occupancy(sl), false,
+      // top-down seat index — the general fill hands out the bottom seats
+      assign(g, st, sl, freeSeat(sl), false,
         fit.reasons.map((r) => fit.fallback ? `בדוחק: ${fitText(r)}` : fitText(r)),
         'auto', rationale);
     }
@@ -295,14 +319,30 @@ export function fillLevel2(g: Gen, plan1: Level1Plan): void {
       const slotReadiness = ctx.positions.get(slot.positionId)!.missionClass === 'readiness';
       const slotNightExempt = ctx.positions.get(slot.positionId)!.config?.night_exempt ?? false;
       const slotDaily = ctx.positions.get(slot.positionId)!.config?.daily ?? false;
-      // rows the exit pre-pass already put in this slot occupy its top seats
+      // rows the exit pre-pass already put in this slot occupy its top seats;
+      // locked/manual DB rows keep their exact seat indexes — the fill must
+      // neither re-issue those (DB seat uniqueness) nor re-book their
+      // soldiers in the same crew (H7)
       const pre = g.assignments.filter((a) => a.positionId === slot.positionId
         && a.subPositionId === slot.subPositionId && a.period[0] === slot.period[0]);
-      const takenThisSlot = new Set<number>(pre.map((a) => a.soldierId));   // H7: no duplicate soldier in a crew
-      for (let seat = 1; seat <= slot.seats - pre.length; seat++) {
+      const lockedRows = lockedInSlot(g, slot);
+      const takenThisSlot = new Set<number>(
+        [...pre.map((a) => a.soldierId), ...lockedRows.map((l) => l.soldierId)]);
+      const usedSeats = new Set<number>(
+        [...pre.map((a) => a.seatIndex), ...lockedRows.map((l) => l.seatIndex)]);
+      // locked soldiers may be outside the loaded state (e.g. import rows)
+      const crewHasDriver = () => [...takenThisSlot].some((id) => {
+        const s = state.get(id);
+        return !!s && isDriver(s);
+      });
+      let driverTried = false;
+      for (let seat = 1; seat <= slot.seats; seat++) {
+        if (usedSeats.has(seat)) continue;
         const commanderSeat = slot.commanderFirstSeat && seat === 1;
-        const driverSeat = !!driverQual && seat === (slot.commanderFirstSeat ? 2 : 1)
-          && ![...takenThisSlot].some((id) => isDriver(state.get(id)!));
+        // H6d: the first free non-commander seat is the driver seat until the
+        // crew (pre-pass + locked rows included) has a qualified driver
+        const driverSeat = !!driverQual && !commanderSeat && !driverTried && !crewHasDriver();
+        if (driverSeat) driverTried = true;
         const forNight = overlaps(slot.period, g.night);
         // H9 מגן stickiness: a returning continuity member's exit window does
         // not block his own crew's daily row (fits' ignoreExitWindows flag)

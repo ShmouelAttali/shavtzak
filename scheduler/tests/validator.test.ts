@@ -8,11 +8,16 @@ const D = '2026-09-01';
 
 async function manualRow(name: string, position: string, start: string, end: string) {
   const sid = await soldierId(name);
-  // readiness rows don't block overlaps (mirrors the generator)
+  // readiness rows don't block overlaps (mirrors the generator); seat_index
+  // auto-increments per (day, position, period) — the seat uniqueness index
+  // rejects two rows on the same seat
   await query(`
-    insert into shift_assignments (day, position_id, soldier_id, period, source, blocks_overlap)
+    insert into shift_assignments (day, position_id, soldier_id, period, source, blocks_overlap, seat_index)
     select $1, p.id, $3, tsrange($4::timestamp, $5::timestamp), 'manual',
-           p.mission_class <> 'readiness'
+           p.mission_class <> 'readiness',
+           coalesce((select max(sa.seat_index) + 1 from shift_assignments sa
+                     where sa.day = $1 and sa.position_id = p.id
+                       and sa.period = tsrange($4::timestamp, $5::timestamp)), 1)
     from positions p where p.name = $2`,
     [D, position, sid, start, end]);
 }
@@ -88,18 +93,34 @@ test('R5: post-attack morning counts as rest (no error for 14:00 start)', async 
     && x.message.includes('חייל 35')), JSON.stringify(f));
 });
 
-test('config_names lint: a misspelled pool/seat/commander name is flagged', async () => {
-  // one-letter misspelling (the יעקבסון/יעקובסון class of bug) must warn —
-  // an unmatched configured name means that soldier can never be picked
-  await query(`update positions set config = jsonb_set(config, '{candidate_pool}',
-               '["חייל 01", "חייל שלא קיים"]'::jsonb) where name = 'קצין מוצב'`);
-  await query(`insert into config (key, value) values ('magen_commander', '"שם שגוי"')
-               on conflict (key) do update set value = excluded.value`);
+test('config_roles lint: unmatched role/qual strings are flagged, matched ones are not', async () => {
+  // a role string no roster soldier carries (the config_names successor:
+  // soldier names are now FKs, but role/qual strings can still dangle)
+  await query(`update positions set config = config || $1::jsonb where name = 'חמל'`,
+    [JSON.stringify({ staff_all_roles: ['לוחם', 'תפקיד דמיוני'] })]);
+  await query(`update positions set config = config || $1::jsonb where name = 'סיור'`,
+    [JSON.stringify({ driver_qual: 'הסמכה דמיונית' })]);
   const f = await validateDay(D);
-  const lint = f.filter((x) => x.rule === 'config_names');
-  assert.ok(lint.some((x) => x.severity === 'warning' && x.message.includes('חייל שלא קיים')
-    && x.message.includes('קצין מוצב')), JSON.stringify(lint));
-  assert.ok(lint.some((x) => x.message.includes('שם שגוי') && x.message.includes('magen_commander')), JSON.stringify(lint));
-  assert.ok(!lint.some((x) => x.message.includes('"חייל 01"')), JSON.stringify(lint));
-  await query(`delete from config where key = 'magen_commander'`);
+  const lint = f.filter((x) => x.rule === 'config_roles');
+  assert.ok(lint.some((x) => x.severity === 'warning' && x.message.includes('תפקיד דמיוני')
+    && x.message.includes('חמל')), JSON.stringify(lint));
+  assert.ok(lint.some((x) => x.severity === 'warning' && x.message.includes('הסמכה דמיונית')
+    && x.message.includes('סיור')), JSON.stringify(lint));
+  // matched strings stay silent: 'לוחם' is a real role, 'נהג דוד' a real qual
+  assert.ok(!lint.some((x) => x.message.includes('"לוחם"')), JSON.stringify(lint));
+  assert.ok(!lint.some((x) => x.message.includes('"נהג דוד"')), JSON.stringify(lint));
+  // restore the seed config so later suites/tests see the real rules
+  await query(`update positions set config = config || $1::jsonb where name = 'חמל'`,
+    [JSON.stringify({ staff_all_roles: ['חמל'] })]);
+  await query(`update positions set config = config || $1::jsonb where name = 'סיור'`,
+    [JSON.stringify({ driver_qual: 'נהג דוד' })]);
+});
+
+test('FK integrity: a position_candidates row with an unknown soldier_id is rejected', async () => {
+  // the DB now guarantees what the config_names lint used to warn about —
+  // a dangling soldier reference cannot be stored at all
+  await assert.rejects(
+    query(`insert into position_candidates (position_id, sub_position_id, soldier_id)
+           select id, null, 999999 from positions where name = 'קצין מוצב'`),
+    /foreign key|violates/);
 });

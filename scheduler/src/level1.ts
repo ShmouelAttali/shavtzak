@@ -111,14 +111,18 @@ export function runLevel1(g: Gen): Level1Plan {
   const seatPlan = new Map<number, Map<string, SeatPick>>();
   const seatRuleBySub = new Map<number, Map<string, SeatRule>>();
   {
-    const byName = new Map([...state.values()].map((st) => [nrm(st.soldier.name), st]));
     for (const pos of ctx.positions.values()) {
       const rules: SeatRule[] = pos.config?.seat_rules ?? [];
       if (!rules.length || !slotsByPosition.has(pos.id)) continue;
       const plan = new Map<string, SeatPick>();
       const ruleMap = new Map<string, SeatRule>();
-      const subPeriod = new Map(slotsByPosition.get(pos.id)!
+      const posSlots = slotsByPosition.get(pos.id)!;
+      const subPeriod = new Map(posSlots
         .map((sl) => [nrm(sl.subName ?? ''), sl.period] as const));
+      // seat name -> sub id (the join key into the position's candidate rows)
+      const subIdByName = new Map(posSlots
+        .filter((sl) => sl.subPositionId !== null)
+        .map((sl) => [nrm(sl.subName ?? ''), sl.subPositionId] as const));
       // H6b qual guard: the named lists stay authoritative, but a pick that
       // lacks the seat's expected qualification is flagged (issue here +
       // validator warning `seat_qualification`)
@@ -130,10 +134,14 @@ export function runLevel1(g: Gen): Level1Plan {
       for (const rule of rules) {
         ruleMap.set(nrm(rule.sub), rule);
         const window = subPeriod.get(nrm(rule.sub)) ?? g.dRange;
-        // candidates in priority order: explicit list, or role matches ordered
-        // by the roles list (e.g. מ"פ before סמ"פ)
-        const cands = (rule.soldiers
-          ? rule.soldiers.map((n) => byName.get(nrm(n))).filter((x): x is SoldierState => !!x)
+        // candidates in priority order: the seat's position_candidates rows
+        // (loaded pre-sorted by priority — id-matched, no name comparison), or
+        // role matches ordered by the roles list (e.g. מ"פ before סמ"פ)
+        const subId = subIdByName.get(nrm(rule.sub));
+        const named = subId === undefined ? []
+          : (pos.candidates ?? []).filter((c) => c.subPositionId === subId);
+        const cands = (named.length
+          ? named.map((c) => state.get(c.soldierId)).filter((x): x is SoldierState => !!x)
           : [...state.values()]
               .filter((st) => (rule.roles ?? []).some((r) => nrm(r) === nrm(st.soldier.role)))
               .sort((a, b) =>
@@ -229,10 +237,11 @@ export function runLevel1(g: Gen): Level1Plan {
     const pos = ctx.positions.get(pid)!;
     if (pos.config?.seat_rules || pos.config?.staff_all_roles) return null;   // staffed by pre-pass only
     const slots = slotsByPosition.get(pid)!;
-    // H6-pool (config.candidate_pool, e.g. קצין מוצב): manned ONLY from the
-    // named list — unordered, rotating by fairness, NON-exclusive (members
-    // serve anywhere when not picked). Enforced inside allowedIn().
-    const namePool: string[] | undefined = pos.config?.candidate_pool;
+    // H6-pool (config.candidate_pool marker, e.g. קצין מוצב): manned ONLY
+    // from the position's position_candidates rows — unordered, rotating by
+    // fairness, NON-exclusive (members serve anywhere when not picked).
+    // Enforced inside allowedIn().
+    const hasPool = !!pos.config?.candidate_pool;
     const eligible = (st: SoldierState) => {
       const s = st.soldier;
       if (st.level1 !== null || fullyBlocked(g, s.id)) return false;
@@ -241,7 +250,7 @@ export function runLevel1(g: Gen): Level1Plan {
       // (a soldier leaving/arriving mid-day can't hold a window he'd miss)
       if (!slots.some((sl) => !isBlocked(g, s.id, sl.period))) return false;
       // H6 fallback role gate — only when no candidate_pool is configured
-      if (!namePool && posName === 'קצין מוצב' && !s.isSeniorCommander) return false;
+      if (!hasPool && posName === 'קצין מוצב' && !s.isSeniorCommander) return false;
       if (posName === 'עמדות הגנה' && s.isSeniorCommander) return false;         // H6
       return true;
     };
@@ -266,8 +275,7 @@ export function runLevel1(g: Gen): Level1Plan {
   // LAST resort — when another member can hold the seat, מגן keeps its
   // commander (the forced case emits a מגן issue below).
   {
-    const magenCmd = typeof ctx.config.magen_commander === 'string'
-      ? nrm(ctx.config.magen_commander) : undefined;
+    const magenCmdId = ctx.magenCommander?.soldierId;
     for (const pos of ctx.positions.values()) {
       if (!pos.config?.candidate_pool) continue;
       const c = posCtx(pos.name);
@@ -277,8 +285,8 @@ export function runLevel1(g: Gen): Level1Plan {
       if (need <= 0) continue;
       const pool = rank(g, [...state.values()].filter(eligible), pid, false, atStart)
         // stable sort: the מגן commander sinks to the end, fairness order kept
-        .sort((a, b) => Number(nrm(a.soldier.name) === magenCmd)
-          - Number(nrm(b.soldier.name) === magenCmd));
+        .sort((a, b) => Number(a.soldier.id === magenCmdId)
+          - Number(b.soldier.id === magenCmdId));
       for (const st of pool) {
         if (need <= 0) break;
         take(st); need--;
@@ -339,25 +347,26 @@ export function runLevel1(g: Gen): Level1Plan {
     }
   }
 
-  // ── מגן commander (weekly decision, config key `magen_commander`) ─────────
+  // ── מגן commander (weekly decision, magen_commander_history) ─────────────
   // Reserved to מגן before anything else can take him; his platoon anchors
   // the crew's same-platoon preference.
   {
-    const name = ctx.config.magen_commander;
-    if (magenId !== undefined && typeof name === 'string' && slotsByPosition.has(magenId)) {
-      const st = [...state.values()].find((s) => nrm(s.soldier.name) === nrm(name));
+    const cmd = ctx.magenCommander;
+    if (magenId !== undefined && cmd && slotsByPosition.has(magenId)) {
+      const st = state.get(cmd.soldierId);
       if (!st) {
-        issues.push(`מגן: המפקד המוגדר "${name}" לא נמצא במצבת`);
+        // decided commander is not in today's loaded roster (not schedulable)
+        issues.push(`מגן: המפקד המוגדר "${cmd.name}" לא נמצא במצבת`);
       } else if (fullyBlocked(g, st.soldier.id) || !allowedIn(g, st.soldier, 'מגן')) {
-        issues.push(`מגן: המפקד המוגדר ${name} אינו זמין היום`);
+        issues.push(`מגן: המפקד המוגדר ${cmd.name} אינו זמין היום`);
       } else if (st.level1 !== null && st.level1 !== magenId) {
         const other = ctx.positions.get(st.level1);
         if (other?.config?.candidate_pool) {
           // closed-list positions staff first (owner decision 2026-07-19):
           // the pool pick wins — the officer must name a substitute
-          issues.push(`מגן: המפקד המוגדר ${name} שובץ ל${other.name} — נדרש מפקד מגן חלופי`);
+          issues.push(`מגן: המפקד המוגדר ${cmd.name} שובץ ל${other.name} — נדרש מפקד מגן חלופי`);
         } else {
-          issues.push(`מגן: המפקד המוגדר ${name} כבר משובץ לעמדה אחרת (נעילה)`);
+          issues.push(`מגן: המפקד המוגדר ${cmd.name} כבר משובץ לעמדה אחרת (נעילה)`);
         }
       } else if (st.level1 === null) {
         st.level1 = magenId; level1.set(st.soldier.id, magenId);

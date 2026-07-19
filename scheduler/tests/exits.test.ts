@@ -4,7 +4,7 @@
 import './env.js';
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { freshSchema, seedSoldiers, soldierId, closePool, query } from './helpers.js';
+import { freshSchema, seedSoldiers, addCandidates, setAllowedPositions, soldierId, closePool, query } from './helpers.js';
 import { generate, persist } from '../src/generate.js';
 import { validateDay } from '../src/validate.js';
 import { RationaleEntry } from '../src/rationale.js';
@@ -41,11 +41,14 @@ before(async () => {
   await query(`update positions set config = config || $1::jsonb where name = 'חפק'`, [JSON.stringify({
     seat_rules: [
       { sub: 'מפקד', roles: ['מ"פ'], commander: true },
-      { sub: 'קשר', soldiers: ['חייל 20', 'חייל 21'], ordered: true, release_unpicked: true },
-      { sub: 'חובש', soldiers: ['חייל 23', 'חייל 24'] },
-      { sub: 'נהג', soldiers: ['חייל 25', 'חייל 26'] },
+      { sub: 'קשר', ordered: true, release_unpicked: true },
+      { sub: 'חובש' },
+      { sub: 'נהג' },
     ],
   })]);
+  await addCandidates('חפק', 'קשר', ['חייל 20', 'חייל 21'], true);
+  await addCandidates('חפק', 'חובש', ['חייל 23', 'חייל 24']);
+  await addCandidates('חפק', 'נהג', ['חייל 25', 'חייל 26']);
   for (const d of [D1, D2, D3]) await persist(await generate(d));
 });
 after(closePool);
@@ -99,7 +102,7 @@ test('exit day: shift position only, ~8h packed outside the window', async () =>
 
 test('16h exit: back-to-back shifts allowed for the exit soldier (R7, בדוחק)', async () => {
   const sid = await soldierId('חייל 31');
-  await query(`update soldiers set allowed_positions = '{"עמדות הגנה"}' where id = $1`, [sid]);
+  await setAllowedPositions('חייל 31', ['עמדות הגנה']);
   await addExit('חייל 31', D5, 8, 24);   // 22:00 → next 14:00, only 14:00-22:00 remains
   await persist(await generate(D5));
 
@@ -118,9 +121,17 @@ test('16h exit: back-to-back shifts allowed for the exit soldier (R7, בדוחק
 
 test('14:00 start right after a 14:00 end across the rotation boundary', async () => {
   const sid = await soldierId('חייל 32');
-  await query(`update soldiers set allowed_positions = '{"עמדות הגנה"}' where id = $1`, [sid]);
-  // plant a locked manual shift on D5 ending exactly at D6 14:00
+  await setAllowedPositions('חייל 32', ['עמדות הגנה']);
+  // plant a locked manual shift on D5 ending exactly at D6 14:00 — the manual
+  // edit REPLACES the slot's generated occupant (the DB's seat uniqueness
+  // would reject a second row on the same seat)
   await query(`delete from shift_assignments where soldier_id = $1 and day = $2`, [sid, D5]);
+  await query(`delete from shift_assignments
+               where day = $1
+                 and position_id = (select id from positions where name = 'עמדות הגנה')
+                 and sub_position_id = (select id from sub_positions where name = 'שג')
+                 and period = tsrange(day_start($2) - interval '4 hours', day_start($2))`,
+    [D5, D6]);
   await query(`insert into shift_assignments
                  (day, position_id, sub_position_id, soldier_id, period, seat_index, source, locked)
                values ($1, (select id from positions where name = 'עמדות הגנה'),
@@ -139,7 +150,7 @@ test('14:00 start right after a 14:00 end across the rotation boundary', async (
 
 test('exit soldier is excluded from chains — standby completed by others (T4/H9)', async () => {
   const sid = await soldierId('חייל 33');
-  await query(`update soldiers set allowed_positions = '{"עמדות הגנה"}' where id = $1`, [sid]);
+  await setAllowedPositions('חייל 33', ['עמדות הגנה']);
   await addExit('חייל 33', D7, 12, 24);   // 02:00 → 14:00; he works 14:00-02:00 shifts
   await persist(await generate(D7));
 

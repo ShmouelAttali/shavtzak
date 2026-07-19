@@ -13,27 +13,61 @@ export interface Soldier {
   isSeniorCommander: boolean;  // מ"מ/סמל
   isDudDriver: boolean;
   isTigerDriver: boolean;
-  /** H6c: null = unrestricted; else the only positions this soldier may fill */
+  /** H6c: null = unrestricted; else the only positions this soldier may fill
+   *  (position NAMES, loaded from the soldier_allowed_positions FK table) */
   allowedPositions: string[] | null;
 }
+
+/** One position_candidates row (id-based closed lists, owner decision
+ *  2026-07-19): subPositionId NULL = position-level pool (קצין מוצב);
+ *  set = named candidate for that seat (חפק). priority NULL = unordered
+ *  (fairness-rotated); 1..n = ordered preference (קשר). The name rides along
+ *  from the soldiers join for display — never used for matching. */
+export interface PositionCandidate {
+  subPositionId: number | null;
+  soldierId: number;
+  name: string;
+  priority: number | null;
+}
+
+/** EFFECTIVE positions.config (daily-implied keys resolved by
+ *  effectiveConfig). A type alias (not interface) on purpose — its implicit
+ *  index signature keeps it assignable to the Record<string, any> helpers. */
+export type PositionConfig = {
+  /** 14:00–14:00 sleeping day duty; implies night_exempt + full_rest_after +
+   *  yomi_display (explicit keys override) */
+  daily?: boolean;
+  continuity?: boolean;
+  same_platoon?: boolean;
+  night_exempt?: boolean;
+  full_rest_after?: boolean;
+  yomi_display?: boolean;
+  /** H6b seat metadata; the candidate lists live in position_candidates */
+  seat_rules?: SeatRule[];
+  staff_all_roles?: string[];
+  /** H6-pool closed-list MARKER (boolean): membership = the position's
+   *  position_candidates rows with sub_position_id NULL */
+  candidate_pool?: boolean;
+  flex_seats?: { min: number; max: number };
+  group_size?: number;
+  driver_qual?: string;
+};
 
 export interface Position {
   id: number;
   name: string;
   missionClass: 'static' | 'dynamic' | 'readiness' | 'rest' | 'other';
   isScheduled: boolean;
-  /** EFFECTIVE jsonb flags (daily-implied keys resolved by effectiveConfig):
-   *  daily, continuity, same_platoon, night_exempt, full_rest_after,
-   *  yomi_display, seat_rules, staff_all_roles */
-  config: Record<string, any>;
+  config: PositionConfig;
+  /** position_candidates rows for this position (closed pools + named seats) */
+  candidates?: PositionCandidate[];
 }
 
-/** H6b named-seat rule (positions.config.seat_rules, e.g. חפק): each
- *  sub-position seat is filled only from its dedicated candidate list. */
+/** H6b named-seat rule METADATA (positions.config.seat_rules, e.g. חפק): each
+ *  sub-position seat is filled only from its dedicated candidate list — the
+ *  soldier list itself is the position_candidates rows for the seat's sub. */
 export interface SeatRule {
   sub: string;
-  /** explicit candidate names, in priority order when `ordered` */
-  soldiers?: string[];
   /** role-based candidates, ordered by this list (e.g. מ"פ before סמ"פ) */
   roles?: string[];
   ordered?: boolean;
@@ -115,7 +149,8 @@ export interface ReportMeta {
   /** flex decisions: positions whose per-shift seat count changed (max seats
    *  across the position's slots, before vs after Level 1) */
   flex: { positionId: number; before: number; after: number }[];
-  /** the persisted weekly מגן-commander decision (config), when set */
+  /** the persisted weekly מגן-commander decision (magen_commander_history) —
+   *  the commander's display NAME, resolved from his soldier_id at load */
   magenCommander?: string;
   /** sub-position id -> display name */
   subNames: Record<string, string>;
@@ -170,10 +205,16 @@ export interface Context {
    *  `blocked`); presence here means "exit day" — no daily duty, no readiness
    *  row, shifts packed around the window */
   exits: Map<number, [Minutes, Minutes][]>;
-  /** locked rows for this day already in DB (kept as-is) */
-  lockedShift: { soldierId: number; positionId: number; period: [Minutes, Minutes] }[];
+  /** locked rows for this day already in DB (kept as-is). sub/seat identify
+   *  the exact seat they hold — the generator must not re-fill it (the DB's
+   *  seat uniqueness index rejects a duplicated (slot, seat)). */
+  lockedShift: { soldierId: number; positionId: number; subPositionId: number | null;
+                 seatIndex: number; period: [Minutes, Minutes] }[];
   lockedDay: Map<number, number>; // soldier -> position
   chainRules: ChainRule[];
+  /** the מגן-commander decision effective for `day` (magen_commander_history:
+   *  latest valid_from <= day), with the display name joined from soldiers */
+  magenCommander?: { soldierId: number; name: string };
   config: Record<string, any>;
   /** resolved numeric tunables from `config` (see src/config.ts) */
   tunables: Tunables;

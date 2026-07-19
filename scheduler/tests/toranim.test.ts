@@ -16,10 +16,15 @@ async function addSoldier(pn: string, name: string) {
 async function manualRow(name: string, position: string, day: string, start: string, end: string) {
   const sid = await soldierId(name);
   await query(`insert into schedule_days (day) values ($1) on conflict do nothing`, [day]);
+  // seat_index auto-increments per (day, position, period) — the seat
+  // uniqueness index rejects two rows on the same seat
   await query(`
-    insert into shift_assignments (day, position_id, soldier_id, period, source, blocks_overlap)
+    insert into shift_assignments (day, position_id, soldier_id, period, source, blocks_overlap, seat_index)
     select $1, p.id, $3, tsrange($4::timestamp, $5::timestamp), 'manual',
-           p.mission_class <> 'readiness'
+           p.mission_class <> 'readiness',
+           coalesce((select max(sa.seat_index) + 1 from shift_assignments sa
+                     where sa.day = $1 and sa.position_id = p.id
+                       and sa.period = tsrange($4::timestamp, $5::timestamp)), 1)
     from positions p where p.name = $2`, [day, position, sid, start, end]);
 }
 
