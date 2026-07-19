@@ -118,6 +118,24 @@ covers whole schedule days and doesn't re-import already-covered sheet dates.
   block's start to the real descent time (`max(upper(shift))`) or the day
   flags false `availability` errors.
 
+- **כונן גשש 8h windows (sheet format since 19/07)**: rows now come as
+  סוג=`נוספים` with a single time (14:00/22:00/06:00) meaning an 8-hour
+  chained window. FIXED 19/07: `SINGLE_TIME_DURATION` in
+  `import_history.py` now has a `כונן גשש: 8` entry, so these parse
+  normally (`blocks_overlap=false` comes from the existing canon list). On
+  an older checkout without the fix they are silently skipped by import AND
+  by cleanup/diff want-sets and show up as false "stale" rows in a reverse
+  diff.
+- **Real rows that cross 14:00 into a still-draft next day** (e.g. תורנים
+  with explicit times `7:30-20:30`) collide with that draft's rows on
+  `no_double_booking`. Delete the conflicting unlocked `auto` row (drafts are
+  regenerable/stale anyway) and insert the real row blocking — do NOT
+  mislabel a real blocking duty with `blocks_overlap=false`.
+- **Stored validation snapshots** (`schedule_days.validation`) are NOT NULL,
+  default `'[]'::jsonb`; published import days conventionally hold `[]`.
+  If `cli validate` can't be run (e.g. scheduler/src mid-edit), reset
+  refreshed days to `'[]'::jsonb` rather than leaving the stale draft-era
+  snapshot.
 - Sheet position names map to DB positions via keyword matching
   (`POSITION_MAP` in `import_history.py`); unmatched names fall to the
   catch-all `אחר` (id 99). **When a new position name appears in the sheet,

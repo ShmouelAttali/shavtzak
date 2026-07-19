@@ -1,16 +1,18 @@
 # shavtzak — project guide
 
-## Working style (owner request, 2026-07-19)
+## Working style (owner request, 2026-07-19; cost-tuned 2026-07-19)
 
-- **Parallelize aggressively**: when the owner gives several independent tasks,
-  run each in its own subagent concurrently instead of working through them
-  serially. Keep file-scope disjoint between concurrent agents (scheduler
-  src files, docs, tests) and do only quick glue work inline.
-- **Fan out recursively**: a subagent given a multi-part task should itself
-  launch nested subagents for its independent pieces (e.g. one for SPEC+LOGIC
-  doc updates, one for code, one for tests), keep their file scopes disjoint,
-  pass each full context, and verify their diffs before integrating. Every
-  agent prompt should propagate this instruction.
+- **Subagents for large independent tasks only**: when the owner gives several
+  substantial, independent tasks (a feature, a DB import, a broad analysis),
+  run each in its own subagent concurrently with disjoint file scopes. Do
+  small edits, quick lookups, and sequentially-dependent work **inline** —
+  each subagent restarts with an empty context and re-pays setup (reading
+  CLAUDE.md/SPEC, rediscovering files), so for small tasks it costs several
+  times the tokens of inline work.
+- **No recursive fan-out by default**: a subagent handles its own sub-pieces
+  (docs+code+tests) inline unless each piece is itself substantial enough to
+  justify a fresh agent's setup cost. Don't propagate fan-out instructions
+  into agent prompts automatically.
 - Ask the owner questions **in English** (options/labels may quote Hebrew
   domain terms).
 
