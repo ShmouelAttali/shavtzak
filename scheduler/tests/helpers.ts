@@ -27,9 +27,11 @@ export async function freshSchema(): Promise<void> {
  *  - 4 נהג דוד, 2 נהג טיגריס (H6d hard driver rule: 3 patrol shifts need 3
  *    free נהג דוד every day, plus rotation slack)
  *  - platoons cycle 1/2/3, rifle levels vary
- * seed.sql's קצין מוצב candidate_pool names real soldiers — remapped here to
- * the synthetic senior commanders so generated days stay fully staffable
- * (suites remap חפק's seat_rules themselves when they need staffed seats).
+ * seed.sql's קצין מוצב carries the candidate_pool MARKER; its id-based member
+ * rows (position_candidates, normally seed-candidates.sql over the real
+ * roster) are seeded here from the synthetic senior commanders so generated
+ * days stay fully staffable (suites seed חפק's seat candidates themselves
+ * when they need staffed seats).
  */
 export async function seedSoldiers(): Promise<void> {
   const values: string[] = [];
@@ -45,8 +47,46 @@ export async function seedSoldiers(): Promise<void> {
                select id, 'נהג דוד' from soldiers where full_name in ('חייל 11','חייל 12','חייל 15','חייל 16')`);
   await query(`insert into soldier_qualifications (soldier_id, qualification)
                select id, 'נהג טיגריס' from soldiers where full_name in ('חייל 13','חייל 14')`);
-  await query(`update positions set config = config || $1::jsonb where name = 'קצין מוצב'`,
-    [JSON.stringify({ candidate_pool: ['חייל 07', 'חייל 08', 'חייל 09', 'חייל 10'] })]);
+  await addCandidates('קצין מוצב', null, ['חייל 07', 'חייל 08', 'חייל 09', 'חייל 10']);
+}
+
+/** Insert position_candidates rows by NAME lookup (testing policy: never
+ *  hardcode seed ids). sub = null → position-level closed pool (candidate_pool
+ *  membership); a sub name → the named candidates of that H6b seat.
+ *  ordered = true stores priority 1..n (the list order); else unordered. */
+export async function addCandidates(position: string, sub: string | null,
+                                    names: string[], ordered = false): Promise<void> {
+  for (let i = 0; i < names.length; i++) {
+    const priority = ordered ? i + 1 : null;
+    const inserted = sub === null
+      ? await query(`
+          insert into position_candidates (position_id, sub_position_id, soldier_id, priority)
+          select p.id, null, s.id, $3
+          from positions p cross join soldiers s
+          where p.name = $1 and s.full_name = $2
+          returning id`, [position, names[i], priority])
+      : await query(`
+          insert into position_candidates (position_id, sub_position_id, soldier_id, priority)
+          select p.id, sp.id, s.id, $4
+          from positions p
+          join sub_positions sp on sp.position_id = p.id and sp.name = $3
+          cross join soldiers s
+          where p.name = $1 and s.full_name = $2
+          returning id`, [position, names[i], sub, priority]);
+    if (inserted.length !== 1) {
+      throw new Error(`addCandidates: no match for ${position}/${sub ?? '-'}/${names[i]}`);
+    }
+  }
+}
+
+/** Set / replace the H6c whitelist (soldier_allowed_positions) by name. */
+export async function setAllowedPositions(name: string, positions: string[] | null): Promise<void> {
+  const sid = await soldierId(name);
+  await query(`delete from soldier_allowed_positions where soldier_id = $1`, [sid]);
+  for (const p of positions ?? []) {
+    await query(`insert into soldier_allowed_positions (soldier_id, position_id)
+                 select $1, id from positions where name = $2`, [sid, p]);
+  }
 }
 
 export async function soldierId(name: string): Promise<number> {

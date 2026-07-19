@@ -3,7 +3,7 @@
 import './env.js';
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { freshSchema, seedSoldiers, soldierId, closePool, query } from './helpers.js';
+import { freshSchema, seedSoldiers, addCandidates, soldierId, closePool, query } from './helpers.js';
 import { generate, persist } from '../src/generate.js';
 import { validateDay } from '../src/validate.js';
 
@@ -19,11 +19,14 @@ before(async () => {
   await query(`update positions set config = config || $1::jsonb where name = 'חפק'`, [JSON.stringify({
     seat_rules: [
       { sub: 'מפקד', roles: ['מ"פ'], commander: true },
-      { sub: 'קשר', soldiers: ['חייל 20'], ordered: true, release_unpicked: true },
-      { sub: 'חובש', soldiers: ['חייל 23'], qual: 'חובש' },
-      { sub: 'נהג', soldiers: ['חייל 25'], qual: 'נהג דוד' },
+      { sub: 'קשר', ordered: true, release_unpicked: true },
+      { sub: 'חובש', qual: 'חובש' },
+      { sub: 'נהג', qual: 'נהג דוד' },
     ],
   })]);
+  await addCandidates('חפק', 'קשר', ['חייל 20'], true);
+  await addCandidates('חפק', 'חובש', ['חייל 23']);
+  await addCandidates('חפק', 'נהג', ['חייל 25']);
 });
 after(closePool);
 

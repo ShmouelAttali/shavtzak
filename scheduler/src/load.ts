@@ -23,17 +23,32 @@ export async function loadContext(day: string): Promise<Context> {
   // ONE round trip for everything — per-query round trips (and per-connection
   // TLS handshakes) dominate wall-clock over the WAN pooler. Day literals are
   // regex-validated above; no user input reaches this SQL.
-  const [, posRows, soldierRows, fairRows, slotRows, existRows, ydayRows,
+  const [, posRows, candRows, soldierRows, allowedRows, magenRows, fairRows, slotRows, existRows, ydayRows,
     blockRows, exitRows, lockShiftRows, lockDayRows, chainRows, configRows] = await multiQuery([
     `insert into schedule_days (day) values ('${day}') on conflict do nothing`,
     `select id, name, mission_class, is_scheduled, config from positions`,
+    // id-based closed lists (position_candidates); the name is joined for
+    // display only — it rides along even for non-schedulable members
+    `select pc.position_id, pc.sub_position_id, pc.soldier_id, pc.priority, s.full_name
+     from position_candidates pc join soldiers s on s.id = pc.soldier_id
+     order by pc.position_id, pc.priority nulls last, pc.id`,
     `select s.id, s.full_name, s.platoon, coalesce(s.role,'') role,
-            coalesce(s.rifle_level,0) rifle, s.allowed_positions,
+            coalesce(s.rifle_level,0) rifle,
             coalesce(array_agg(q.qualification) filter (where q.qualification is not null), '{}') quals
      from soldiers s
      left join soldier_qualifications q on q.soldier_id = s.id
      where s.is_schedulable
      group by s.id`,
+    // H6c whitelist (soldier_allowed_positions): loaded as position NAMES so
+    // allowedIn()'s name comparison stays unchanged; no rows = unrestricted
+    `select sap.soldier_id, array_agg(p.name) as names
+     from soldier_allowed_positions sap join positions p on p.id = sap.position_id
+     group by sap.soldier_id`,
+    // the מגן-commander decision effective for this day (weekly history)
+    `select h.soldier_id, s.full_name
+     from magen_commander_history h join soldiers s on s.id = h.soldier_id
+     where h.valid_from <= '${day}'
+     order by h.valid_from desc limit 1`,
     `select * from soldier_fairness('${day}')`,
     `select ds.position_id, ds.sub_position_id, sp.name sub_name, ds.period::text, ds.seats, ds.commander_first_seat
      from day_slots ds left join sub_positions sp on sp.id = ds.sub_position_id
@@ -49,7 +64,7 @@ export async function loadContext(day: string): Promise<Context> {
      where period && tsrange(day_start('${day}'), day_start('${day}') + interval '1 day')`,
     `select soldier_id, period::text from exit_requests
      where period && tsrange(day_start('${day}'), day_start('${day}') + interval '1 day')`,
-    `select soldier_id, position_id, period::text from shift_assignments
+    `select soldier_id, position_id, sub_position_id, seat_index, period::text from shift_assignments
      where day = '${day}' and (locked or source in ('manual','import'))`,
     `select soldier_id, position_id from day_assignments
      where day = '${day}' and (locked or source = 'manual')`,
@@ -67,7 +82,17 @@ export async function loadContext(day: string): Promise<Context> {
     });
     positionByName.set(p.name, p.id);
   }
+  for (const c of candRows) {
+    const p = positions.get(c.position_id);
+    if (!p) continue;
+    (p.candidates ??= []).push({
+      subPositionId: c.sub_position_id, soldierId: c.soldier_id,
+      name: c.full_name, priority: c.priority,
+    });
+  }
 
+  const allowedBySoldier = new Map<number, string[]>(
+    allowedRows.map((r) => [r.soldier_id, r.names]));
   const soldiers = new Map<number, Soldier>();
   for (const r of soldierRows) {
     const flags = roleFlags(r.role);
@@ -79,7 +104,7 @@ export async function loadContext(day: string): Promise<Context> {
       // the role (תפקיד), so check both the quals table and the role itself
       isDudDriver: [...quals, r.role].some((q) => normalizeName(q).includes('נהג דוד')),
       isTigerDriver: [...quals, r.role].some((q) => normalizeName(q).includes('נהג טיגריס')),
-      allowedPositions: r.allowed_positions ?? null,
+      allowedPositions: allowedBySoldier.get(r.id) ?? null,
     });
   }
 
@@ -216,7 +241,11 @@ export async function loadContext(day: string): Promise<Context> {
   }
 
   const lockedShift = lockShiftRows
-    .map((r) => ({ soldierId: r.soldier_id, positionId: r.position_id, period: parseRange(r.period) as [Minutes, Minutes] }));
+    .map((r) => ({
+      soldierId: r.soldier_id, positionId: r.position_id,
+      subPositionId: r.sub_position_id ?? null, seatIndex: r.seat_index,
+      period: parseRange(r.period) as [Minutes, Minutes],
+    }));
   const lockedDay = new Map<number, number>();
   for (const r of lockDayRows) {
     lockedDay.set(r.soldier_id, r.position_id);
@@ -234,6 +263,10 @@ export async function loadContext(day: string): Promise<Context> {
   return {
     day, soldiers, positions, positionByName, slots, fairness, existing,
     yesterdayPosition, staticStreak, onCallStreak, nightStreak, toranutCount7d, blocked, exits,
-    lockedShift, lockedDay, chainRules, config, tunables: loadTunables(config),
+    lockedShift, lockedDay, chainRules,
+    magenCommander: magenRows[0]
+      ? { soldierId: magenRows[0].soldier_id, name: magenRows[0].full_name }
+      : undefined,
+    config, tunables: loadTunables(config),
   };
 }

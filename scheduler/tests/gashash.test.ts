@@ -19,10 +19,16 @@ after(closePool);
 
 async function gashashNight(name: string) {
   const sid = await soldierId(name);
+  // seat_index auto-increments — the tests plant the SAME night window for
+  // several soldiers, and the seat uniqueness index rejects a shared seat
   await query(`
-    insert into shift_assignments (day, position_id, soldier_id, period, source, blocks_overlap)
-    values ($1, (select id from positions where name = 'כונן גשש'), $2,
-            tsrange('2026-09-01 22:00'::timestamp, '2026-09-02 07:00'::timestamp), 'manual', false)`,
+    insert into shift_assignments (day, position_id, soldier_id, period, source, blocks_overlap, seat_index)
+    select $1, p.id, $2,
+           tsrange('2026-09-01 22:00'::timestamp, '2026-09-02 07:00'::timestamp), 'manual', false,
+           coalesce((select max(sa.seat_index) + 1 from shift_assignments sa
+                     where sa.day = $1 and sa.position_id = p.id
+                       and sa.period = tsrange('2026-09-01 22:00'::timestamp, '2026-09-02 07:00'::timestamp)), 1)
+    from positions p where p.name = 'כונן גשש'`,
     [D, sid]);
   return sid;
 }

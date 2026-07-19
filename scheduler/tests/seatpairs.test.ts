@@ -1,7 +1,7 @@
 import './env.js';
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { freshSchema, seedSoldiers, closePool, query } from './helpers.js';
+import { freshSchema, seedSoldiers, addCandidates, closePool, query } from './helpers.js';
 import { generate, persist } from '../src/generate.js';
 import { validateDay } from '../src/validate.js';
 import { RationaleEntry } from '../src/rationale.js';
@@ -22,11 +22,14 @@ before(async () => {
                where name = 'חפק'`, [JSON.stringify({
     seat_rules: [
       { sub: 'מפקד', roles: ['מ"פ'], commander: true },
-      { sub: 'קשר', soldiers: ['חייל 20'], ordered: true },
-      { sub: 'חובש', soldiers: ['חייל 23', 'חייל 24'] },
-      { sub: 'נהג', soldiers: ['חייל 25'] },
+      { sub: 'קשר', ordered: true },
+      { sub: 'חובש' },
+      { sub: 'נהג' },
     ],
   })]);
+  await addCandidates('חפק', 'קשר', ['חייל 20'], true);
+  await addCandidates('חפק', 'חובש', ['חייל 23', 'חייל 24']);
+  await addCandidates('חפק', 'נהג', ['חייל 25']);
   // חייל 23 departs on D1's mid-window bus; חייל 24 returns on it
   await query(`insert into unavailability (soldier_id, period, kind)
                select id, tsrange('2026-08-11 10:00', '2026-08-14 10:00'), 'חופש'

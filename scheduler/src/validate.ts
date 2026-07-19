@@ -37,7 +37,7 @@ interface Row {
 export async function validateDay(day: string): Promise<Finding[]> {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) throw new Error(`bad day: ${day}`);
   const yesterday = addDays(day, -1);
-  const [rows, prevRows, unavailRows, dayAssignRows, soldierRows, chainRows, seatRulePosRows, daySlotRows, posRows, historyRows, configRows, qualRows, exitRows] = await multiQuery([
+  const [rows, prevRows, unavailRows, dayAssignRows, soldierRows, allowedRows, candRows, subPosRows, chainRows, seatRulePosRows, daySlotRows, posRows, historyRows, configRows, qualRows, exitRows] = await multiQuery([
     ...[day, yesterday].map((d) => `
       select sa.soldier_id, s.full_name, sa.position_id, p.name pos_name, p.mission_class,
              sp.name sub_name, sa.period::text, sa.blocks_overlap, sa.is_commander_seat, sa.source
@@ -50,7 +50,16 @@ export async function validateDay(day: string): Promise<Finding[]> {
      where period && tsrange(day_start('${day}'), day_start('${day}') + interval '1 day')`,
     `select da.soldier_id, p.name pos_name from day_assignments da
      join positions p on p.id = da.position_id where da.day = '${day}'`,
-    `select id, full_name, is_schedulable, coalesce(role,'') role, allowed_positions from soldiers`,
+    `select id, full_name, is_schedulable, coalesce(role,'') role from soldiers`,
+    // H6c whitelist (soldier_allowed_positions), as position NAMES per soldier
+    `select sap.soldier_id, array_agg(p.name) as names
+     from soldier_allowed_positions sap join positions p on p.id = sap.position_id
+     group by sap.soldier_id`,
+    // id-based closed lists: position-level pools (sub null) + named seats
+    `select pc.position_id, pc.sub_position_id, pc.soldier_id, pc.priority
+     from position_candidates pc
+     order by pc.position_id, pc.priority nulls last, pc.id`,
+    `select id, position_id, name from sub_positions`,
     `select cr.*, tp.name target_name, sp2.name source_name from chain_rules cr
      join positions tp on tp.id = cr.target_position
      join positions sp2 on sp2.id = cr.source_position order by cr.id`,
@@ -98,6 +107,29 @@ export async function validateDay(day: string): Promise<Finding[]> {
   // for starts at/after 14:00 of the following schedule day (חפק/התקפי/קצין
   // מוצב carry full_rest_after; תורנים deliberately does not — R1 applies)
   const posConfig = new Map((posRows as any[]).map((p) => [p.id as number, effectiveConfig(p.config)]));
+
+  // ── id-based config lookups (FK tables, owner decision 2026-07-19) ────────
+  // H6c whitelist (soldier_allowed_positions): soldier -> position names;
+  // absent soldier = unrestricted
+  const allowedNamesBySoldier = new Map<number, string[]>(
+    (allowedRows as any[]).map((r) => [r.soldier_id as number, r.names as string[]]));
+  // position_candidates: seat name -> sub id, per-seat candidate rows, and
+  // position-level pool member ids (sub NULL — the candidate_pool membership)
+  const subIdByPosSub = new Map<string, number>(
+    (subPosRows as any[]).map((sp) => [`${sp.position_id}|${nrm(sp.name)}`, sp.id as number]));
+  const seatCandidateIds = (pid: number, sub: string): number[] => {
+    const subId = subIdByPosSub.get(`${pid}|${nrm(sub)}`);
+    return subId === undefined ? []
+      : (candRows as any[])
+          .filter((c) => c.position_id === pid && c.sub_position_id === subId)
+          .map((c) => c.soldier_id as number);
+  };
+  const poolMembers = new Map<number, Set<number>>();
+  for (const c of candRows as any[]) {
+    if (c.sub_position_id !== null) continue;
+    (poolMembers.get(c.position_id)
+      ?? poolMembers.set(c.position_id, new Set()).get(c.position_id)!).add(c.soldier_id);
+  }
 
   // H9: half-day exit windows (±1 day); "exit at minute t" = an exit window
   // touching t's schedule day
@@ -253,8 +285,6 @@ export async function validateDay(day: string): Promise<Finding[]> {
     const targetWindow: [Minutes, Minutes] = [tStart,
       Math.max(...targets.map((t) => t.period[1]))];
     const usedSrc = new Set(targets.filter((t) => srcIds.has(t.soldierId)).map((t) => t.soldierId));
-    const allowedPosBySoldier = new Map((soldierRows as any[])
-      .map((s) => [s.id as number, s.allowed_positions as string[] | null]));
     const availableUnused = srcPool.filter((s) =>
       !usedSrc.has(s.soldierId)
       // blocked by an unavailability window during the standby
@@ -263,8 +293,8 @@ export async function validateDay(day: string): Promise<Finding[]> {
       // of him is legitimate
       && !exitTodayIds.has(s.soldierId)
       // H6c: a whitelisted member may not hold the target position at all
-      && (allowedPosBySoldier.get(s.soldierId) == null
-          || allowedPosBySoldier.get(s.soldierId)!.some((p) => nrm(p) === nrm(cr.target_name)))
+      && (allowedNamesBySoldier.get(s.soldierId) == null
+          || allowedNamesBySoldier.get(s.soldierId)!.some((p) => nrm(p) === nrm(cr.target_name)))
       // or already holding another blocking assignment overlapping it
       && !today.some((r) => r.soldierId === s.soldierId && r.blocksOverlap
            && r.missionClass !== 'rest' && overlaps(r.period, targetWindow)
@@ -410,10 +440,10 @@ export async function validateDay(day: string): Promise<Finding[]> {
     for (const p of posRows as any[]) {
       for (const rule of (p.config?.seat_rules ?? []) as any[]) {
         if (rule.release_unpicked) continue;
-        const names = new Set(((rule.soldiers ?? []) as string[]).map(nrm));
+        for (const cid of seatCandidateIds(p.id, rule.sub)) seatReserved.add(cid);
         const roles = new Set(((rule.roles ?? []) as string[]).map(nrm));
         for (const s of soldierRows as any[]) {
-          if (names.has(nrm(s.full_name)) || roles.has(nrm(s.role ?? ''))) seatReserved.add(s.id);
+          if (roles.has(nrm(s.role ?? ''))) seatReserved.add(s.id);
         }
       }
     }
@@ -456,10 +486,11 @@ export async function validateDay(day: string): Promise<Finding[]> {
     if (!posSubs.size) continue;   // position has no slots this day
     for (const rule of rules) {
       if (!posSubs.has(nrm(rule.sub))) continue;   // seat not in effect this day
-      const candIds = rule.soldiers
-        ? (soldierRows as any[])
-            .filter((s) => rule.soldiers!.some((n) => nrm(n) === nrm(s.full_name)))
-            .map((s) => s.id as number)
+      // named candidates from position_candidates (id-matched); a seat with
+      // no rows falls back to its role-based list
+      const named = seatCandidateIds(p.id, rule.sub);
+      const candIds = named.length
+        ? named
         : (soldierRows as any[])
             .filter((s) => (rule.roles ?? []).some((r) => nrm(r) === nrm(s.role)))
             .map((s) => s.id as number);
@@ -567,7 +598,7 @@ export async function validateDay(day: string): Promise<Finding[]> {
   }
   for (const s of soldierRows as any[]) {
     const home = roleHome.get(nrm(s.role));
-    const allowed: string[] | null = s.allowed_positions ?? (home ? [home] : null);
+    const allowed: string[] | null = allowedNamesBySoldier.get(s.id) ?? (home ? [home] : null);
     if (!allowed) continue;
     const allowedSet = new Set(allowed.map(nrm));
     for (const r of today) {
@@ -588,15 +619,16 @@ export async function validateDay(day: string): Promise<Finding[]> {
     const f = flagsBySoldier.get(r.soldierId);
     if (!f) continue;
     // H6-pool: a position with config.candidate_pool (קצין מוצב) is manned
-    // only from its named list. Import rows predate the rule — not judged.
-    const namePool = posConfig.get(r.positionId)?.candidate_pool as string[] | undefined;
-    if (namePool && r.source !== 'import' && !namePool.some((n) => nrm(n) === nrm(r.soldierName))) {
+    // only from its position_candidates members (sub NULL, id-matched).
+    // Import rows predate the rule — not judged.
+    const hasPool = !!posConfig.get(r.positionId)?.candidate_pool;
+    if (hasPool && r.source !== 'import' && !poolMembers.get(r.positionId)?.has(r.soldierId)) {
       findings.push({
         severity: 'error', rule: 'role_gate', soldierId: r.soldierId,
         message: `${r.soldierName} משובץ ל${r.positionName} אך אינו ברשימת המועמדים הקבועה`,
       });
     }
-    if (!namePool && r.positionName === 'קצין מוצב' && !f.isSeniorCommander) {
+    if (!hasPool && r.positionName === 'קצין מוצב' && !f.isSeniorCommander) {
       findings.push({
         severity: 'error', rule: 'role_gate', soldierId: r.soldierId,
         message: `${r.soldierName} משובץ לקצין מוצב אך אינו סמל/מ"מ`,
@@ -787,31 +819,44 @@ export async function validateDay(day: string): Promise<Finding[]> {
     }
   }
 
-  // ── 15: config-name lint — every soldier NAME in config lists must match a
-  // roster soldier (normalized). A one-letter mismatch silently removes the
-  // soldier from the list (the pool/seat gate just never matches him), so an
-  // unmatched name is a data bug, not a preference. Legacy until name lists
-  // are migrated to soldier_id FKs (CLAUDE.md owner decision 2026-07-19).
+  // ── 15: config-role/qualification lint — soldier NAMES left the config
+  // (position_candidates FKs make dangling names impossible), but role and
+  // qualification STRINGS remain data keys: every role in staff_all_roles /
+  // seat_rules[].roles must match at least one roster soldier's role, and
+  // every qualification in driver_qual / seat_rules[].qual must match at
+  // least one soldier (soldier_qualifications rows, or the role free-text —
+  // mirroring hasQualification, the gate that actually selects). An unmatched
+  // string means the gate can never pick anyone — a data bug, not a
+  // preference. ─────────────────────────────────────────────────────────────
   {
-    const rosterNames = new Set((soldierRows as any[]).map((s) => nrm(s.full_name)));
-    const lint = (pos: string, listName: string, names: string[]) => {
-      for (const n of names) {
-        if (!rosterNames.has(nrm(n))) {
+    const rosterRoles = new Set((soldierRows as any[]).map((s) => nrm(s.role ?? '')));
+    const lintRoles = (pos: string, listName: string, roles: string[]) => {
+      for (const r of roles) {
+        if (!rosterRoles.has(nrm(r))) {
           findings.push({
-            severity: 'warning', rule: 'config_names',
-            message: `${pos}: השם "${n}" ב-${listName} לא נמצא במצבת — החייל לא ייבחר לעולם`,
+            severity: 'warning', rule: 'config_roles',
+            message: `${pos}: התפקיד "${r}" ב-${listName} לא תואם אף חייל במצבת — הכלל לא יבחר אף אחד`,
           });
         }
       }
     };
-    for (const p of posRows as any[]) {
-      if (p.config?.candidate_pool) lint(p.name, 'candidate_pool', p.config.candidate_pool);
-      for (const r of (p.config?.seat_rules ?? []) as SeatRule[]) {
-        if (r.soldiers) lint(p.name, `seat_rules/${r.sub}`, r.soldiers);
+    const lintQual = (pos: string, listName: string, qual: string) => {
+      const anyMatch = (soldierRows as any[]).some((s) =>
+        hasQualification(qualsBySoldier.get(s.id) ?? [], s.role ?? '', qual));
+      if (!anyMatch) {
+        findings.push({
+          severity: 'warning', rule: 'config_roles',
+          message: `${pos}: ההסמכה "${qual}" ב-${listName} לא תואמת אף חייל במצבת — הכלל לא יבחר אף אחד`,
+        });
       }
-    }
-    if (typeof config.magen_commander === 'string') {
-      lint('מגן', 'magen_commander', [config.magen_commander]);
+    };
+    for (const p of posRows as any[]) {
+      lintRoles(p.name, 'staff_all_roles', (p.config?.staff_all_roles ?? []) as string[]);
+      if (p.config?.driver_qual) lintQual(p.name, 'driver_qual', p.config.driver_qual);
+      for (const r of (p.config?.seat_rules ?? []) as SeatRule[]) {
+        lintRoles(p.name, `seat_rules/${r.sub}`, r.roles ?? []);
+        if (r.qual) lintQual(p.name, `seat_rules/${r.sub}`, r.qual);
+      }
     }
   }
 

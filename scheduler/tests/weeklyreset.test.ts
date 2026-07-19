@@ -32,13 +32,15 @@ before(async () => {
                  values ($1, $2, '1', $3, 3)`,
       [`W${String(i).padStart(2, '0')}`, `שבועי ${i}`, i === 1 ? 'מ"כ' : 'לוחם']);
   }
-  await query(`insert into config (key, value) values ('magen_commander', $1::jsonb)
-               on conflict (key) do update set value = excluded.value`,
-    [JSON.stringify('שבועי 1')]);
+  // weekly decision effective before SAT — id-based history row (name lookup
+  // per testing policy)
+  await query(`insert into magen_commander_history (valid_from, soldier_id)
+               select $1, id from soldiers where full_name = $2`,
+    ['2026-08-02', 'שבועי 1']);
   for (const d of [SAT, SUN, MON]) await persist(await generate(d));
 });
 after(async () => {
-  await query(`delete from config where key = 'magen_commander'`);
+  await query(`delete from magen_commander_history`);
   await closePool();
 });
 

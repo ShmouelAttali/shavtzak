@@ -34,8 +34,10 @@ the numbered steps of the day page's ניתוח התהליך (process) section. 
   absorb into מגן; validator `rest_bucket` warning; coverage judged vs flex
   min. Manual seat_override may enlarge מגן beyond 12 (manual wins); shrinking
   below min loses to everyone-works.
-- **קצין מוצב**: `candidate_pool` (8 names) — unordered, fairness-rotated,
+- **קצין מוצב**: closed pool of 8 — unordered, fairness-rotated,
   NON-exclusive; enforced in `allowedIn()` (every fill path) + validator.
+  (Since 19/7: id rows in `position_candidates`; `candidate_pool` is just a
+  boolean marker.)
 - **Hard rules H6d**: every סיור crew ≥1 נהג דוד, התקפי ≥1 נהג טיגריס
   (L1 driver quota after commander quota; L2 driver seat after commander
   seat; validator `driver`). התקפי template now `commander_first_seat=true`.
@@ -55,10 +57,13 @@ the numbered steps of the day page's ניתוח התהליך (process) section. 
 - **מפלג position** (id 14): רס"פ/סרס"פ/מנהלה staff — daily 14:00–14:00 row,
   restricted to it (staff_all_roles); presence follows the sheet's מפלג tab
   סטטוס (לא מגיע → `is_schedulable=false`; that was the בנימין קיי bug).
-- **מגן commander**: weekly decision persisted in `config.magen_commander`;
-  generator reserves him + anchors the crew's platoon. Use the
-  **`weekly-shavtzak` skill** to generate a week (asks + persists).
-- יהונתן רוט: `allowed_positions` = עמדות הגנה/כרמל חטיבה/תורנים.
+- **מגן commander**: weekly decision persisted in `magen_commander_history`
+  (latest valid_from ≤ day wins; was `config.magen_commander` until the
+  2026-07-19 FK migration); generator reserves him + anchors the crew's
+  platoon. Use the **`weekly-shavtzak` skill** to generate a week (asks +
+  persists).
+- יהונתן רוט: whitelist (`soldier_allowed_positions` since 19/7) =
+  עמדות הגנה/כרמל חטיבה/תורנים.
 - Live delta: `db/rules-2026-07-18.sql` (applied); baseline schema/seed
   updated in step.
 
@@ -143,7 +148,12 @@ export SCHEDULER_DATABASE_URL='postgres://USER:PASSWORD@HOST:5432/postgres'
   python3 scheduler/import/import_history.py \
       --roster 'מצבת החיילים.csv' --history 'כל השבצק.csv' \
       | docker exec -i shavtzak-pg psql -U postgres
+  docker exec -i shavtzak-pg psql -U postgres < scheduler/db/seed-candidates.sql
   ```
+
+  Order matters: `seed-candidates.sql` (id-based candidate/whitelist lists)
+  resolves names against the imported roster, so it runs AFTER
+  `import_history.py` — it aborts on any unresolved name.
 
   (CSV files = File → Download → CSV of the sheet tabs; a parsed copy of all tabs may
   exist in the session scratchpad under `tabs/`.)
@@ -179,12 +189,25 @@ silently breaks id-coupled tests). Run the relevant suite before committing.
 - **Soldier identity = foreign key, never a copied name** (owner decision,
   2026-07-19, after a one-letter pool-spelling bug silently hid יוחאי יעקובסון
   from קצין מוצב): a soldier's name may appear ONCE in the DB —
-  `soldiers.full_name`. Every other reference must be a `soldier_id` FK. The
-  current name-list configs (`candidate_pool`, `seat_rules[].soldiers`,
-  `magen_commander`) are legacy — any new list MUST use ids, and migrating the
-  legacy ones to ids is an open task. Such lists always live in the DB, never
-  hardcoded in code. Until the migration, the validator's `config_names` check
-  warns on any configured name that matches no roster soldier.
+  `soldiers.full_name` (UNIQUE). Every other reference is a `soldier_id` FK.
+  **The FK migration is DONE (2026-07-19)** — three id tables replaced the
+  name-list configs: `position_candidates` (closed lists — sub NULL =
+  position pool like קצין מוצב, sub set = named seat candidates like חפק;
+  priority NULL = unordered/fairness, 1..n = ordered; `config.candidate_pool`
+  is now just a boolean marker and `seat_rules` keeps metadata only),
+  `magen_commander_history` (weekly decision, latest valid_from ≤ day wins —
+  the `magen_commander` config key no longer exists), and
+  `soldier_allowed_positions` (H6c — replaced the dropped
+  `soldiers.allowed_positions` text[]). The ONLY file where soldier names may
+  appear outside the roster is `scheduler/db/seed-candidates.sql` — the
+  human-editable manifest, applied AFTER the roster import (aborts on any
+  unresolved name). Any new soldier list MUST be an id table in the DB —
+  never a name array, never hardcoded in code. The old `config_names`
+  validator check is gone (FKs make dangling names impossible); the
+  `config_roles` check now warns on configured role strings
+  (`staff_all_roles`, `seat_rules[].roles`) matching no soldier's role, or
+  qualification strings (`driver_qual`, seat-rule `qual`) matching no known
+  qualification.
 
 - **ALWAYS check if there's already a config that fulfills your need before
   adding a new one** — e.g. daily-duty classification is `positions.config.daily`

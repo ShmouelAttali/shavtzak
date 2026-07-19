@@ -1,5 +1,5 @@
 // מפלג staff crew (staff_all_roles: רס"פ/סרס"פ/מנהלה) and the weekly
-// magen_commander config decision, over one generated day.
+// מגן-commander decision (magen_commander_history), over one generated day.
 import './env.js';
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
@@ -17,13 +17,14 @@ before(async () => {
   await query(`insert into soldiers (personal_number, full_name, platoon, role, rifle_level)
                values ('S001', 'רספ פלוגה', '1', 'רס"פ', 0),
                       ('S002', 'מנהלן פלוגה', '2', 'מנהלה', 0)`);
-  // weekly decision: חייל 35 (platoon '3') leads the מגן crew
-  await query(`insert into config (key, value) values ('magen_commander', $1::jsonb)`,
-    [JSON.stringify('חייל 35')]);
+  // weekly decision: חייל 35 (platoon '3') leads the מגן crew — id-based
+  // history row effective from D (name lookup per testing policy)
+  await query(`insert into magen_commander_history (valid_from, soldier_id)
+               select $1, id from soldiers where full_name = $2`, [D, 'חייל 35']);
   await persist(await generate(D));
 });
 after(async () => {
-  await query(`delete from config where key = 'magen_commander'`);
+  await query(`delete from magen_commander_history`);
   await closePool();
 });
 
@@ -50,7 +51,7 @@ test('מפלג: staff roles land there daily for the full schedule day, and nowh
   assert.deepEqual(f.filter((x) => x.rule === 'allowed_positions'), []);
 });
 
-test('magen_commander config: the named soldier anchors the מגן crew and its platoon', async () => {
+test('magen_commander_history: the decided soldier anchors the מגן crew and its platoon', async () => {
   const crew = await query<{ full_name: string; platoon: string; rationale: RationaleEntry[] }>(`
     select s.full_name, s.platoon, sa.rationale
     from shift_assignments sa join positions p on p.id = sa.position_id

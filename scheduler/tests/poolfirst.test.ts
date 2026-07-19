@@ -14,7 +14,7 @@ import { GenerateResult } from '../src/model.js';
 import { RationaleEntry } from '../src/rationale.js';
 
 const D1 = '2026-08-10', D2 = '2026-08-11';
-// helpers.ts remaps the קצין מוצב candidate_pool to חייל 07–10; the weekly
+// helpers.ts seeds the קצין מוצב pool (position_candidates) as חייל 07–10; the weekly
 // מגן commander decision names a pool member on purpose (the conflict case).
 const CMD = 'חייל 07';
 const OTHER_POOL = ['חייל 08', 'חייל 09', 'חייל 10'];
@@ -24,8 +24,9 @@ let res1: GenerateResult, res2: GenerateResult;
 before(async () => {
   await freshSchema();
   await seedSoldiers();
-  await query(`insert into config (key, value) values ('magen_commander', $1::jsonb)`,
-    [JSON.stringify(CMD)]);
+  // weekly decision effective from D1 (covers D2 too — latest valid_from <= D)
+  await query(`insert into magen_commander_history (valid_from, soldier_id)
+               select $1, id from soldiers where full_name = $2`, [D1, CMD]);
   res1 = await generate(D1);
   await persist(res1);
   // D2: every pool member except the מגן commander is home all day
@@ -38,7 +39,7 @@ before(async () => {
   await persist(res2);
 });
 after(async () => {
-  await query(`delete from config where key = 'magen_commander'`);
+  await query(`delete from magen_commander_history`);
   await closePool();
 });
 

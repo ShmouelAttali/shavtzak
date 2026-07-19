@@ -32,8 +32,13 @@ test('H2: no "present but unassigned" warning for an excluded soldier', async ()
 });
 
 test('H2: manually-inserted row for an excluded soldier → validator warning', async () => {
-  await query(`insert into shift_assignments (day, position_id, soldier_id, period, source)
-               values ($1, 1, $2, tsrange(day_start($1), day_start($1) + interval '8 hours'), 'manual')`,
+  // seat_index above the generated crew — the manual row shares the generated
+  // 14:00–22:00 patrol period, and the seat uniqueness index rejects seat 1
+  await query(`insert into shift_assignments (day, position_id, soldier_id, period, source, seat_index)
+               values ($1, 1, $2, tsrange(day_start($1), day_start($1) + interval '8 hours'), 'manual',
+                       coalesce((select max(sa.seat_index) + 1 from shift_assignments sa
+                                 where sa.day = $1 and sa.position_id = 1
+                                   and sa.period = tsrange(day_start($1), day_start($1) + interval '8 hours')), 1))`,
     [D, sid]);
   const f = await validateDay(D);
   assert.ok(f.some((x) => x.rule === 'unknown_soldier' && x.severity === 'warning'

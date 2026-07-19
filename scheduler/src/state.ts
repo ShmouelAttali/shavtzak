@@ -104,7 +104,8 @@ export const fullyBlocked = (g: Gen, sid: number): boolean => isBlocked(g, sid, 
   (g.ctx.blocked.get(sid) ?? []).some((b) => b[0] <= g.dRange[0] && b[1] >= g.dRange[1]);
 
 /** One position-whitelist mechanism for all the restriction sources:
- *  H6c allowed_positions (DB column, per-soldier cases like אריאל ביר),
+ *  H6c allowedPositions (soldier_allowed_positions FK rows, per-soldier cases
+ *  like אריאל ביר),
  *  H6b seat-rule reservation (candidates of a seat-rule position serve only
  *  there; a release rule removes its unchosen candidates again), the
  *  staff_all_roles derivation (role חמל → position חמל only), and the
@@ -116,9 +117,13 @@ export const allowedIn = (g: Gen, s: Soldier, posName: string): boolean => {
   const roleHome = g.roleRestrict.get(s.id);
   if (roleHome !== undefined && nrm(roleHome) !== nrm(posName)) return false;
   const pid = g.ctx.positionByName.get(posName);
-  const pool: string[] | undefined = pid !== undefined
-    ? g.ctx.positions.get(pid)?.config?.candidate_pool : undefined;
-  if (pool && !pool.some((n) => nrm(n) === nrm(s.name))) return false;
+  const pos = pid !== undefined ? g.ctx.positions.get(pid) : undefined;
+  // H6-pool: config.candidate_pool is a closed-list MARKER — membership is
+  // the position's position_candidates rows with sub NULL, matched by id
+  if (pos?.config?.candidate_pool
+    && !(pos.candidates ?? []).some((c) => c.subPositionId === null && c.soldierId === s.id)) {
+    return false;
+  }
   // H9 half-day exit: on his exit day a soldier takes no daily 14:00–14:00
   // duty and no readiness/on-call row (someone else covers the chain) —
   // enforced here so every fill path (levels, pairs, chains) honors it.
@@ -128,7 +133,6 @@ export const allowedIn = (g: Gen, s: Soldier, posName: string): boolean => {
   // (all windows within 22:00–06:00) additionally allows a night_exit_ok
   // duty (תורנים) — מפקד התורנים covers the night absence.
   if (g.ctx.exits.has(s.id)) {
-    const pos = pid !== undefined ? g.ctx.positions.get(pid) : undefined;
     if (pos && !isShiftPosition(pos)
       && !(isNightExitOk(pos) && isNightExit(g, s.id))
       && !(pid !== undefined && stickyContinuity(g, s.id, pid))) return false;

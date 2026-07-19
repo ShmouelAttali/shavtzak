@@ -1,7 +1,7 @@
 import './env.js';
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { freshSchema, seedSoldiers, soldierId, closePool, query } from './helpers.js';
+import { freshSchema, seedSoldiers, addCandidates, soldierId, closePool, query } from './helpers.js';
 import { generate, persist } from '../src/generate.js';
 import { validateDay } from '../src/validate.js';
 import { RATIONALE_CODES, RationaleEntry } from '../src/rationale.js';
@@ -15,17 +15,20 @@ const D1 = '2026-08-03', D2 = '2026-08-04', D3 = '2026-08-05';
 before(async () => {
   await freshSchema();
   await seedSoldiers();
-  // seed.sql's חפק seat rules name real soldiers — remap to synthetic ones so
-  // the seats fill and the coverage rule sees a fully-staffable roster
+  // חפק seat candidates are per-deployment data (position_candidates) — seed
+  // synthetic ones so the seats fill and coverage sees a staffable roster
   await query(`update soldiers set role = 'מ"פ' where full_name = 'חייל 55'`);
   await query(`update positions set config = config || $1::jsonb where name = 'חפק'`, [JSON.stringify({
     seat_rules: [
       { sub: 'מפקד', roles: ['מ"פ'], commander: true },
-      { sub: 'קשר', soldiers: ['חייל 20', 'חייל 21'], ordered: true, release_unpicked: true },
-      { sub: 'חובש', soldiers: ['חייל 23', 'חייל 24'] },
-      { sub: 'נהג', soldiers: ['חייל 25', 'חייל 26'] },
+      { sub: 'קשר', ordered: true, release_unpicked: true },
+      { sub: 'חובש' },
+      { sub: 'נהג' },
     ],
   })]);
+  await addCandidates('חפק', 'קשר', ['חייל 20', 'חייל 21'], true);
+  await addCandidates('חפק', 'חובש', ['חייל 23', 'חייל 24']);
+  await addCandidates('חפק', 'נהג', ['חייל 25', 'חייל 26']);
   for (const d of [D1, D2, D3]) {
     const res = await generate(d);
     await persist(res);

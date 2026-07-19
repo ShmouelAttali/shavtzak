@@ -15,7 +15,6 @@ import { buildGen, fullyBlocked, Gen } from './state.js';
 import { runLevel1, demand, Level1Plan } from './level1.js';
 import { fillLevel2 } from './level2.js';
 import { runChain } from './chains.js';
-import { normalizeName as nrm } from './text.js';
 
 // Re-exported so cli.ts / api/draft.ts keep importing { generate, persist };
 // trackerPickOrder is re-exported for its unit tests.
@@ -86,18 +85,18 @@ function buildReportMeta(g: Gen, plan: Level1Plan, seatsBefore: Map<number, numb
       })),
     ],
     pools: [...ctx.positions.values()]
-      .filter((p) => Array.isArray(p.config?.candidate_pool))
+      .filter((p) => p.config?.candidate_pool)
       .map((p) => {
-        const members: string[] = p.config.candidate_pool;
-        const byName = new Map([...g.state.values()]
-          .map((st) => [nrm(st.soldier.name), st] as const));
+        // membership = position_candidates rows with sub NULL; names ride
+        // along from the load-time join (display only)
+        const members = (p.candidates ?? []).filter((c) => c.subPositionId === null);
         return {
           position: p.name,
-          members,
-          unavailable: members.filter((n) => {
-            const st = byName.get(nrm(n));
+          members: members.map((c) => c.name),
+          unavailable: members.filter((c) => {
+            const st = g.state.get(c.soldierId);
             return !st || fullyBlocked(g, st.soldier.id);
-          }),
+          }).map((c) => c.name),
         };
       }),
     seatReserved: [...g.seatRestrict.keys()].map(String),
@@ -108,8 +107,7 @@ function buildReportMeta(g: Gen, plan: Level1Plan, seatsBefore: Map<number, numb
       .map(([pid, slots]) => [pid, demand(g, pid, slots)])),
     demandBefore,
     flex,
-    magenCommander: typeof ctx.config.magen_commander === 'string'
-      ? ctx.config.magen_commander : undefined,
+    magenCommander: ctx.magenCommander?.name,
     subNames: Object.fromEntries(ctx.slots
       .filter((s) => s.subPositionId !== null)
       .map((s) => [s.subPositionId!, s.subName ?? ''])),
