@@ -3,14 +3,18 @@
 // the closed-list (candidate_pool) pre-pass, flex seat sizing (everyone
 // works — מנוחה is not a planned outcome), continuity crews, then the
 // demand-driven fill in priority order with hard commander/driver quotas
-// first.
+// first. All ranking here uses the GROUP cascade (rankGroup — no nights, no
+// sub-position keys: those facts only exist once Level 2 picks a concrete
+// slot), and every pick records the DECISIVE key that beat the runner-up
+// (decisiveEntry), not a satisfied-median claim.
 
-import { Minutes, overlaps } from './time.js';
+import { Minutes, overlaps, isSunday } from './time.js';
 import { Slot, SeatRule } from './model.js';
 import { RationaleEntry } from './rationale.js';
 import { normalizeName as nrm, hasQualification } from './text.js';
 import { Gen, SoldierState, allowedIn, countedHours, fullyBlocked, isBlocked } from './state.js';
-import { rank } from './rank.js';
+import { rankGroup, decisiveEntry } from './rank.js';
+import { restBefore } from './rest.js';
 import { partialWindow } from './pairs.js';
 import { isShiftPosition } from './config.js';
 
@@ -49,40 +53,28 @@ export function demand(g: Gen, pid: number, slots: Slot[]): number {
 const commanderQuota = (own: Slot[]) =>
   new Set(own.filter((s) => s.commanderFirstSeat).map((s) => s.period[0])).size;
 
-const median = (xs: number[]): number => {
-  const s = [...xs].sort((a, b) => a - b);
-  const mid = (s.length - 1) / 2;
-  return (s[Math.floor(mid)] + s[Math.ceil(mid)]) / 2;
-};
+/** Already booked during the window for ANOTHER position — previous-day
+ *  chain standbys run BEFORE Level 1 (generate.ts), and H3/H3b make an
+ *  overlapping slot unholdable for a soldier who is on a mission or standing
+ *  by. Same-position rows (e.g. his own locked מגן daily row on a
+ *  regeneration) don't conflict — they reinforce the bucket, not block it. */
+const busyElsewhere = (g: Gen, sid: number, pid: number, p: [Minutes, Minutes]): boolean =>
+  (g.ctx.existing.get(sid) ?? []).some((a) => a.positionId !== pid && overlaps(a.period, p))
+  || g.assignments.some((a) => a.soldierId === sid && a.positionId !== pid && overlaps(a.period, p));
 
-/** Why did the ranked demand fill take this soldier? A comparative fairness
- *  fact snapshotted at pick time against the not-yet-assigned candidate group
- *  — mirroring Level 2's buildRationale honesty rules (comparative claims
- *  only against a real group, >1 candidate): fewest nights (P2), else low
- *  weekly load (P3), else fewest stints in this position (P4); otherwise the
- *  generic priority-cascade entry. */
-function fairnessRationale(g: Gen, st: SoldierState, pid: number,
-                           group: SoldierState[]): RationaleEntry {
-  const posName = g.ctx.positions.get(pid)!.name;
-  const nights = (x: SoldierState) => x.fairness.nightCount7d;
-  const load = (x: SoldierState) => x.fairness.weightedHours7d;
-  const count = (x: SoldierState) => x.fairness.positionCounts[posName] ?? 0;
-  if (group.length > 1) {
-    const mN = median(group.map(nights));
-    const mL = median(group.map(load));
-    const mC = median(group.map(count));
-    if (nights(st) <= mN) {
-      return { code: 'fewest_nights', params: { nights: nights(st), median: mN } };
-    }
-    if (load(st) <= mL) {
-      return { code: 'low_load', params: { hours: load(st).toFixed(1), median: mL.toFixed(1) } };
-    }
-    if (count(st) <= mC) {
-      return { code: 'position_balance', params: { count: count(st), median: mC } };
-    }
-  }
-  return { code: 'fairness_pick' };
-}
+/** Level-1 holdability of one slot window: not blocked, not booked elsewhere,
+ *  and above the H8 absolute rest floor (4h) at the window start — restBefore
+ *  already folds the R5 duty-rest exemption, so a continuity member repeating
+ *  back-to-back passes while e.g. a soldier whose patrol ends exactly at the
+ *  daily 14:00 start does not (he'd be un-seatable at Level 2 and leave a
+ *  ghost in the bucket). */
+const canHold = (g: Gen, st: SoldierState, pid: number, p: [Minutes, Minutes]): boolean =>
+  !isBlocked(g, st.soldier.id, p)
+  && !busyElsewhere(g, st.soldier.id, pid, p)
+  // per-position no_rest_floor (מגן/חפק/קצין מוצב) — the officer schedules the
+  // crew internally, so no entry rest floor applies (owner 2026-07-19)
+  && ((g.ctx.positions.get(pid)?.config?.no_rest_floor ?? false)
+      || restBefore(g, st, p[0]) >= g.ctx.tunables.restMinH * 60);
 
 export function runLevel1(g: Gen): Level1Plan {
   const { ctx, issues, level1, state } = g;
@@ -147,7 +139,7 @@ export function runLevel1(g: Gen): Level1Plan {
         const avail = cands.filter((st) =>
           (st.level1 === null || st.level1 === pos.id) && !isBlocked(g, st.soldier.id, window));
         // ordered/role rules take the first available; unordered pairs rotate by fairness
-        const chosen = (rule.ordered || rule.roles) ? avail[0] : rank(g, avail, pos.id, false)[0];
+        const chosen = (rule.ordered || rule.roles) ? avail[0] : rankGroup(g, avail, pos.id)[0];
         if (!chosen) {
           // H6b pair handover: when no candidate covers the whole window, a
           // departing candidate (available until his leave time) and an
@@ -165,7 +157,7 @@ export function runLevel1(g: Gen): Level1Plan {
           }
           const order = (xs: SoldierState[]) => (rule.ordered || rule.roles)
             ? [...xs].sort((x, y) => cands.indexOf(x) - cands.indexOf(y))
-            : rank(g, xs, pos.id, false);
+            : rankGroup(g, xs, pos.id);
           let pairPick: SeatPair | undefined;
           for (const d of order([...dep.keys()])) {
             const handover = dep.get(d)!;
@@ -237,9 +229,11 @@ export function runLevel1(g: Gen): Level1Plan {
       const s = st.soldier;
       if (st.level1 !== null || fullyBlocked(g, s.id)) return false;
       if (!allowedIn(g, s, posName)) return false;             // H6b/H6c/H6-pool whitelists
-      // must be available for at least one of the position's slot windows
-      // (a soldier leaving/arriving mid-day can't hold a window he'd miss)
-      if (!slots.some((sl) => !isBlocked(g, s.id, sl.period))) return false;
+      // must be able to hold at least one of the position's slot windows
+      // (a soldier leaving/arriving mid-day can't hold a window he'd miss,
+      // a pre-booked chain standby blocks its window — H3/H3b — and the H8
+      // rest floor must hold at the window start)
+      if (!slots.some((sl) => canHold(g, st, pid, sl.period))) return false;
       // H6 fallback role gate — only when no candidate_pool is configured
       if (!namePool && posName === 'קצין מוצב' && !s.isSeniorCommander) return false;
       if (posName === 'עמדות הגנה' && s.isSeniorCommander) return false;         // H6
@@ -275,7 +269,7 @@ export function runLevel1(g: Gen): Level1Plan {
       const { pid, slots, eligible, atStart, assigned, take } = c;
       let need = demand(g, pid, slots) - assigned();
       if (need <= 0) continue;
-      const pool = rank(g, [...state.values()].filter(eligible), pid, false, atStart)
+      const pool = rankGroup(g, [...state.values()].filter(eligible), pid, atStart)
         // stable sort: the מגן commander sinks to the end, fairness order kept
         .sort((a, b) => Number(nrm(a.soldier.name) === magenCmd)
           - Number(nrm(b.soldier.name) === magenCmd));
@@ -369,7 +363,12 @@ export function runLevel1(g: Gen): Level1Plan {
   // Continuity pre-pass (מגן): returning crew members are reserved BEFORE any
   // other position can grab them — the crew repeats day-to-day unless seats
   // shrink, a member is unavailable, or a manual/locked change intervenes.
+  // Continuity holds WITHIN the work week only (owner 2026-07-19): a Sunday
+  // schedule day starts a new week — no member returns by right; the crew is
+  // rebuilt fresh around the weekly מגן commander (reserved above), whose
+  // מחלקה anchors the same-platoon fill.
   for (const pos of ctx.positions.values()) {
+    if (isSunday(g.day)) break;
     if (!pos.config?.continuity || !slotsByPosition.has(pos.id)) continue;
     let room = demand(g, pos.id, slotsByPosition.get(pos.id)!)
       - [...level1.values()].filter((p) => p === pos.id).length;
@@ -383,9 +382,10 @@ export function runLevel1(g: Gen): Level1Plan {
       // on the crew (the מגן officer covers his absence internally), so his
       // exit windows are ignored here (real unavailability still blocks;
       // yesterdayPosition === pos.id below makes him sticky by definition).
-      && posSlots.some((sl) => !isBlocked(g, st.soldier.id, sl.period, ctx.exits.has(st.soldier.id)))
+      && posSlots.some((sl) => !isBlocked(g, st.soldier.id, sl.period, ctx.exits.has(st.soldier.id))
+        && !busyElsewhere(g, st.soldier.id, pos.id, sl.period))
       && ctx.yesterdayPosition.get(st.soldier.id) === pos.id);
-    for (const st of rank(g, returning, pos.id, false)) {
+    for (const st of rankGroup(g, returning, pos.id)) {
       if (room <= 0) break;
       st.level1 = pos.id; level1.set(st.soldier.id, pos.id); room--;
       st.level1Rationale.push({ code: 'continuity_crew', params: { position: pos.name } });
@@ -453,11 +453,16 @@ export function runLevel1(g: Gen): Level1Plan {
       groupSize ? Math.ceil(totalNeed / groupSize) : 0)
       - [...state.values()].filter((st) => st.level1 === pid && st.soldier.isCommander).length;
     if (cmdNeed > 0 && need > 0) {
-      for (const st of rank(g, [...state.values()].filter((x) => eligible(x) && x.soldier.isCommander),
-                            pid, false, atStart)) {
+      const rankedCmd = rankGroup(g, [...state.values()].filter((x) => eligible(x) && x.soldier.isCommander),
+                                  pid, atStart);
+      for (const st of rankedCmd) {
         if (cmdNeed <= 0 || need <= 0) break;
+        // why THIS commander over the others — the first cascade key that
+        // beat the next still-free commander in ranked order
+        const runner = rankedCmd.find((x) => x !== st && x.level1 === null);
         take(st); need--; cmdNeed--;
         st.level1Rationale.push({ code: 'commander_quota', params: { position: posName } });
+        st.level1Rationale.push(decisiveEntry(g, st, runner, pid, atStart));
       }
       if (cmdNeed > 0) issues.push(`${posName}: חסרים ${cmdNeed} מפקדים בשיבוץ היומי`);
     }
@@ -468,11 +473,14 @@ export function runLevel1(g: Gen): Level1Plan {
       // one qualified driver per distinct slot start (each crew needs one)
       let drvNeed = new Set(slots.map((s) => s.period[0])).size
         - [...state.values()].filter((st) => st.level1 === pid && isDriver(st)).length;
-      for (const st of rank(g, [...state.values()].filter((x) => eligible(x) && isDriver(x)),
-                            pid, false, atStart)) {
+      const rankedDrv = rankGroup(g, [...state.values()].filter((x) => eligible(x) && isDriver(x)),
+                                  pid, atStart);
+      for (const st of rankedDrv) {
         if (drvNeed <= 0 || need <= 0) break;
+        const runner = rankedDrv.find((x) => x !== st && x.level1 === null);
         take(st); need--; drvNeed--;
         st.level1Rationale.push({ code: 'driver_quota', params: { position: posName, qual: driverQual } });
+        st.level1Rationale.push(decisiveEntry(g, st, runner, pid, atStart));
       }
       if (drvNeed > 0) issues.push(`${posName}: חסרים ${drvNeed} נהגים (${driverQual})`);
     }
@@ -514,12 +522,12 @@ export function runLevel1(g: Gen): Level1Plan {
           // then let the general fill mix in the remainder by fairness.
           // With flex seats a mixed crew above the minimum is routine — only
           // a core (min-seats) shortage is worth flagging.
-          const rankedSame = rank(g, same, pid, false);
+          const rankedSame = rankGroup(g, same, pid);
           for (const st of rankedSame) {
             if (need <= 0) break;
-            const group = rankedSame.filter((x) => x.level1 === null);
+            const runner = rankedSame.find((x) => x !== st && x.level1 === null);
             pick(st);
-            st.level1Rationale.push(fairnessRationale(g, st, pid, group));
+            st.level1Rationale.push(decisiveEntry(g, st, runner, pid));
           }
           if (same.length < (pos.config?.flex_seats?.min ?? need)) {
             issues.push(`${posName}: אין מספיק חיילים ממחלקה ${platoon} — הצוות מעורב`);
@@ -534,8 +542,8 @@ export function runLevel1(g: Gen): Level1Plan {
       const cmdrs = [...state.values()].filter((st) => st.level1 === pid && st.soldier.isCommander);
       for (const cm of cmdrs) {
         let room = Math.min(groupSize - 1, need);
-        for (const st of rank(g, free.filter((x) => x.level1 === null
-            && x.soldier.platoon === cm.soldier.platoon), pid, false, atStart)) {
+        for (const st of rankGroup(g, free.filter((x) => x.level1 === null
+            && x.soldier.platoon === cm.soldier.platoon), pid, atStart)) {
           if (room <= 0 || need <= 0) break;
           pick(st); room--;
           st.level1Rationale.push({
@@ -545,14 +553,14 @@ export function runLevel1(g: Gen): Level1Plan {
         }
       }
     }
-    // general ranked fill: each pick records the fairness consideration that
-    // selected the soldier, snapshotted against the still-free candidates
-    const ranked = rank(g, free.filter((x) => x.level1 === null), pid, false, atStart);
+    // general ranked fill: each pick records the DECISIVE cascade key — the
+    // first key on which it beat the next still-free candidate in ranked order
+    const ranked = rankGroup(g, free.filter((x) => x.level1 === null), pid, atStart);
     for (const st of ranked) {
       if (need <= 0) break;
-      const group = ranked.filter((x) => x.level1 === null);
+      const runner = ranked.find((x) => x !== st && x.level1 === null);
       pick(st);
-      st.level1Rationale.push(fairnessRationale(g, st, pid, group));
+      st.level1Rationale.push(decisiveEntry(g, st, runner, pid, atStart));
     }
     if (need > 0) issues.push(`${posName}: חסרים ${need} חיילים`);
   }
@@ -564,10 +572,10 @@ export function runLevel1(g: Gen): Level1Plan {
     const flexMax: number | undefined = ctx.positions.get(magenId)?.config?.flex_seats?.max;
     if (flexMax) {
       let crew = [...level1.values()].filter((p) => p === magenId).length;
-      const leftovers = rank(g, [...state.values()].filter((st) =>
+      const leftovers = rankGroup(g, [...state.values()].filter((st) =>
         st.level1 === null && !fullyBlocked(g, st.soldier.id)
         && allowedIn(g, st.soldier, 'מגן')
-        && magenSlots.some((sl) => !isBlocked(g, st.soldier.id, sl.period))), magenId, false);
+        && magenSlots.some((sl) => canHold(g, st, magenId!, sl.period))), magenId);
       for (const st of leftovers) {
         if (crew >= flexMax) break;
         st.level1 = magenId; level1.set(st.soldier.id, magenId); crew++;

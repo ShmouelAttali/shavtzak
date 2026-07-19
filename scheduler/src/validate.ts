@@ -147,6 +147,10 @@ export async function validateDay(day: string): Promise<Finding[]> {
         if (e <= b.period[0] && e > prevEnd) prevEnd = e;   // R3 effective end
       }
       if (prevEnd === -Infinity) continue;
+      // per-position no_rest_floor (מגן/חפק/קצין מוצב): the crew is scheduled
+      // internally by its officer — a soldier may join with no rest, so the
+      // rest rule doesn't judge the gap before it (owner 2026-07-19)
+      if (posConfig.get(b.positionId)?.no_rest_floor) continue;
       const gap = b.period[0] - prevEnd;
       if (gap < REST_MIN) {
         // R7: on an exit day the packed shifts may be back-to-back — the H8

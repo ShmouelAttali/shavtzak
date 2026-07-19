@@ -14,6 +14,17 @@
 - Ask the owner questions **in English** (options/labels may quote Hebrew
   domain terms).
 
+## The generation report ("the report", דוח חילול)
+
+When the owner says **"the report of the shavtzak generation"** he means the
+self-contained HTML pages built by `scheduler/src/report.ts` (pure builders;
+`cli.ts` assembles the inputs and writes them). `cli generate` writes a page
+per generated day + a weekly index to `scheduler/reports/` by default
+(`--report-dir` overrides, `--no-report` skips); a rendered example lives in
+`scheduler/reports/sample/` (e.g. `2026-07-20.html`). "Line/step N" refers to
+the numbered steps of the day page's ניתוח התהליך (process) section. Tests:
+`scheduler/tests/report.test.ts`.
+
 ## Rules overhaul (2026-07-18) — owner's 18-item list, all implemented
 
 - **Everyone works, no מנוחה**: flex seats (`positions.config.flex_seats`) —

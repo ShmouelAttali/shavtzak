@@ -6,7 +6,11 @@ import { generate, persist } from '../src/generate.js';
 import { validateDay } from '../src/validate.js';
 import { RATIONALE_CODES, RationaleEntry } from '../src/rationale.js';
 
-const D1 = '2026-08-01', D2 = '2026-08-02', D3 = '2026-08-03';
+// Mon-Wed on purpose: the range must not cross a Sunday — the weekly reset
+// (continuity + fairness, owner 2026-07-19) rebuilds the מגן crew there and
+// would defeat the continuity assertions; Sunday behavior is covered by
+// weeklyreset.test.ts.
+const D1 = '2026-08-03', D2 = '2026-08-04', D3 = '2026-08-05';
 
 before(async () => {
   await freshSchema();
@@ -161,7 +165,7 @@ test('תורנים and קצין מוצב run the full schedule day (14:00→14:0
 });
 
 test('seat override enlarges the crew beyond flex max, continuity keeps existing members', async () => {
-  const D4 = '2026-08-04';
+  const D4 = '2026-08-06';
   const magen = `(select id from positions where name = 'מגן')`;
   // flex is 10-12 and the surplus fixture already fills 12 — an explicit
   // override above the flex max must win (manual decision)
@@ -277,7 +281,7 @@ test('fairness spread: nights differ by at most 3 across active soldiers', async
       and s.id not in (
         select da.soldier_id from day_assignments da
         join positions p on p.id = da.position_id
-        where p.name in ('חפק', 'מגן'))`, ['2026-08-04']);
+        where p.name in ('חפק', 'מגן'))`, ['2026-08-06']);
   assert.ok(Number(rows[0].hi) - Number(rows[0].lo) <= 3,
     `nights spread too wide: ${rows[0].lo}-${rows[0].hi}`);
 });

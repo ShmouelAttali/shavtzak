@@ -13,8 +13,10 @@ insert into positions (id, name, mission_class, is_scheduled, config) values
   -- every crew must include a נהג דוד (H6d hard driver rule)
   ( 1, 'סיור',        'dynamic',   true,  '{"flex_seats":{"min":3,"max":4},"driver_qual":"נהג דוד"}'),
   ( 2, 'עמדות הגנה',  'static',    true,  '{}'),
-  -- מגן: flex 10-12 — absorbs surplus soldiers (everyone works, no מנוחה)
-  ( 3, 'מגן',         'other',     true,  '{"daily":true,"continuity":true,"same_platoon":true,"flex_seats":{"min":10,"max":12}}'),
+  -- מגן: flex 10-12 — absorbs surplus soldiers (everyone works, no מנוחה).
+  -- no_rest_floor: the crew is scheduled internally by the מגן officer, so a
+  -- soldier may join with no rest at all (owner 2026-07-19).
+  ( 3, 'מגן',         'other',     true,  '{"daily":true,"continuity":true,"same_platoon":true,"flex_seats":{"min":10,"max":12},"no_rest_floor":true}'),
   -- התקפי: standing 8-soldier readiness crew (14:00-14:00); ad-hoc attack
   -- missions are separate rows and may not overlap the readiness (H3 strict).
   -- Explicit full_rest_after (NOT daily): readiness class, not a yomi duty.
@@ -24,7 +26,7 @@ insert into positions (id, name, mission_class, is_scheduled, config) values
   -- תגבצ: history tombstone (owner decision 2026-07-17) — imported rows
   -- (24/6–16/7) reference it; never scheduled again, no slot templates
   ( 5, 'תגבצ',        'other',     false, '{}'),
-  ( 6, 'חפק',         'other',     true,  '{"daily": true, "seat_rules": [
+  ( 6, 'חפק',         'other',     true,  '{"daily": true, "no_rest_floor": true, "seat_rules": [
       {"sub": "מפקד", "roles": ["מ\"פ", "סמ\"פ"], "commander": true},
       {"sub": "קשר",  "soldiers": ["יהודה חושן", "אור חיים בלונדר", "יחיעם אושפיזאי"], "ordered": true, "release_unpicked": true},
       {"sub": "חובש", "soldiers": ["כפיר לנדסמן", "שחר מיכאלי"], "qual": "חובש"},
@@ -38,7 +40,7 @@ insert into positions (id, name, mission_class, is_scheduled, config) values
   ( 8, 'כונן גשש',    'readiness', true,  '{}'),
   -- קצין מוצב: manned ONLY from the fixed candidate list (H6-pool) —
   -- unordered (rotates by fairness); members serve anywhere when not picked
-  ( 9, 'קצין מוצב',   'other',     true,  '{"daily":true,"candidate_pool":["שמואל אטלי","צבי שור","יוחאי יעקובסון","אורי שאג","אלעד זיו","אביאל גיאת","עמיחי ברוורמן","גלעד דביר"]}'),
+  ( 9, 'קצין מוצב',   'other',     true,  '{"daily":true,"no_rest_floor":true,"candidate_pool":["שמואל אטלי","צבי שור","יוחאי יעקובסון","אורי שאג","אלעד זיו","אביאל גיאת","עמיחי ברוורמן","גלעד דביר"]}'),
   (10, 'כרמל חטיבה',  'readiness', true,  '{}'),
   -- חמל: standing crew — every present role-חמל soldier staffs it daily,
   -- full schedule day; readiness class = rest-transparent (internal shifts)

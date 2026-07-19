@@ -47,11 +47,12 @@ test('T5 soft: recent-תורנות soldier loses תורנים to soldiers withou
   await addSoldier('T102', 'ותיק תורן');
   await addSoldier('T103', 'חדש אחד');
   await addSoldier('T104', 'חדש שניים');
-  await manualRow('ותיק תורן', 'תורנים', '2026-08-22', '2026-08-22 14:00', '2026-08-23 14:00');
-  // give the others a night patrol the same week: the pre-T5 ranking (P2
-  // fewest nights) would have preferred the ותיק — only the T5 key flips it
-  await manualRow('חדש אחד', 'סיור', '2026-08-22', '2026-08-22 22:00', '2026-08-23 06:00');
-  await manualRow('חדש שניים', 'סיור', '2026-08-22', '2026-08-22 22:00', '2026-08-23 06:00');
+  // the prior תורנות must sit in the SAME schedule week as D (weeks start on
+  // Sunday — 2026-08-23; fairness and T5 are week-scoped, owner 2026-07-19)
+  await manualRow('ותיק תורן', 'תורנים', '2026-08-23', '2026-08-23 14:00', '2026-08-24 14:00');
+  // give the others same-week load too, so only the T5 key separates them
+  await manualRow('חדש אחד', 'סיור', '2026-08-23', '2026-08-23 22:00', '2026-08-24 06:00');
+  await manualRow('חדש שניים', 'סיור', '2026-08-23', '2026-08-23 22:00', '2026-08-24 06:00');
   await persist(await generate(D));
   const rows = await query<{ name: string }>(`
     select s.full_name name from shift_assignments sa

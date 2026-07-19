@@ -41,6 +41,22 @@ export function addDays(date: string, n: number): string {
 /** Schedule day D = [D 14:00, D+1 14:00) */
 export function dayStart(day: string): Minutes { return toMin(day, '14:00'); }
 
+/** Weekday of a calendar date (0 = Sunday). */
+export function weekdayOf(day: string): number {
+  const [y, m, d] = day.split('-').map(Number);
+  return new Date(Date.UTC(y, m - 1, d)).getUTCDay();
+}
+
+/** Sunday starts the schedule week: continuity and the fairness counters
+ *  reset (owner decision 2026-07-19 — fairness is judged per week only). */
+export const isSunday = (day: string): boolean => weekdayOf(day) === 0;
+
+/** The Sunday opening the schedule week containing `day` (the day itself
+ *  when it is a Sunday — i.e. a Sunday's fairness window is empty). */
+export function weekStart(day: string): string {
+  return addDays(day, -weekdayOf(day));
+}
+
 /** Start (14:00) of the schedule day containing minute `m` —
  *  mirrors schedule_day_of() in db/schema.sql. */
 export function scheduleDayStart(m: Minutes): Minutes {

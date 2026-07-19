@@ -1,6 +1,6 @@
 import { multiQuery } from './db.js';
 import { Context, Soldier, Position, Slot, Fairness, ChainRule } from './model.js';
-import { parseRange, dayStart, dayEnd, addDays, overlaps, nightRange, Minutes } from './time.js';
+import { parseRange, dayStart, dayEnd, addDays, overlaps, nightRange, weekStart, Minutes } from './time.js';
 import { normalizeName } from './text.js';
 import { isCountedNight } from './rest.js';
 import { loadTunables, effectiveConfig } from './config.js';
@@ -184,11 +184,12 @@ export async function loadContext(day: string): Promise<Context> {
     if (streak) nightStreak.set(sid, streak);
   }
 
-  // T5 (soft): תורנות count per soldier in the rolling 7 days before `day`.
+  // T5 (soft): תורנות count per soldier in the CURRENT schedule week (from
+  // its Sunday 14:00 — empty on a Sunday; fairness is judged per week only).
   const toranutCount7d = new Map<number, number>();
   const toranimId = positionByName.get('תורנים');
   if (toranimId !== undefined) {
-    const tw: [Minutes, Minutes] = [dayStart(addDays(day, -7)), dayStart(day)];
+    const tw: [Minutes, Minutes] = [dayStart(weekStart(day)), dayStart(day)];
     for (const [sid, list] of existing) {
       const n = list.filter((a) => a.positionId === toranimId
         && a.period[0] >= tw[0] && a.period[0] < tw[1]).length;

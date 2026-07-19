@@ -117,7 +117,7 @@ export const restBefore = (g: Gen, st: SoldierState, start: Minutes): number =>
  *  not block the crew's daily row (real unavailability still does). */
 export function fits(g: Gen, st: SoldierState, slot: [Minutes, Minutes], commanderSeat: boolean,
                      isReadiness = false, nightExempt = false, slotDaily = false,
-                     ignoreExitWindows = false): Fit {
+                     ignoreExitWindows = false, noRestFloor = false): Fit {
   const T = g.ctx.tunables;
   const s = st.soldier;
   const reasons: FitReason[] = [];
@@ -141,6 +141,12 @@ export function fits(g: Gen, st: SoldierState, slot: [Minutes, Minutes], command
     && (g.ctx.nightStreak.get(s.id) ?? 0) + (st.nightsToday > 0 ? 1 : 0) >= 2) {
     return { ok: true, fallback: true, reasons: [{ code: 'third_night' }] };
   }
+  // Per-position no-rest-floor (owner 2026-07-19, positions config
+  // `no_rest_floor`: מגן/חפק/קצין מוצב): the crew is scheduled INTERNALLY by
+  // its officer, so a soldier may join with no rest at all — rest is a
+  // non-issue for the daily row. Overlap (H3) and the daily cap were already
+  // checked above; these duties are night-exempt so R6 doesn't fire either.
+  if (noRestFloor) return { ok: true, fallback: false, reasons: [] };
   const rest = restBefore(g, st, slot[0]);
   // H8 ABSOLUTE: < 4h rest before a task is a hard block — never a בדוחק
   // fallback. Exemptions: R5 duty-rest (daily positions, folded into

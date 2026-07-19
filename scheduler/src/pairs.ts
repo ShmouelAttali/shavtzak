@@ -53,7 +53,7 @@ export function partialWindow(blocks: [Minutes, Minutes][], p: [Minutes, Minutes
 export function tryReplacementPair(g: Gen, opts: {
   slot: Slot; seat: number; pid: number; posName: string;
   commanderSeat: boolean; forNight: boolean; slotNightExempt: boolean;
-  slotReadiness: boolean; slotDaily: boolean;
+  slotReadiness: boolean; slotDaily: boolean; slotNoFloor?: boolean;
   /** H6d driver seat: both halves must hold the required qualification */
   isDriverSeat?: (st: SoldierState) => boolean;
   takenThisSlot: Set<number>;
@@ -63,6 +63,7 @@ export function tryReplacementPair(g: Gen, opts: {
   buildHalf: (st: SoldierState, half: Slot, fitReasons: FitReason[]) => RationaleEntry[];
 }): boolean {
   const { slot, seat, pid, posName, commanderSeat, forNight, slotNightExempt, slotReadiness, slotDaily } = opts;
+  const slotNoFloor = opts.slotNoFloor ?? false;
   const pool = [...g.state.values()].filter((st) =>
     !opts.takenThisSlot.has(st.soldier.id)
     && (st.level1 === pid || st.level1 === opts.restId)
@@ -79,12 +80,12 @@ export function tryReplacementPair(g: Gen, opts: {
   for (const d of rank(g, [...dep.keys()], pid, forNight, slot.period[0])) {
     const handover = dep.get(d)!;
     const firstHalf: [Minutes, Minutes] = [slot.period[0], handover];
-    const fd = fits(g, d, firstHalf, commanderSeat, slotReadiness, slotNightExempt, slotDaily);
+    const fd = fits(g, d, firstHalf, commanderSeat, slotReadiness, slotNightExempt, slotDaily, false, slotNoFloor);
     if (!fd.ok || fd.fallback) continue;
     const back = [...arr.keys()].filter((st) => arr.get(st)! <= handover);
     for (const a of rank(g, back, pid, forNight, handover)) {
       const secondHalf: [Minutes, Minutes] = [handover, slot.period[1]];
-      const fa = fits(g, a, secondHalf, commanderSeat, slotReadiness, slotNightExempt, slotDaily);
+      const fa = fits(g, a, secondHalf, commanderSeat, slotReadiness, slotNightExempt, slotDaily, false, slotNoFloor);
       if (!fa.ok || fa.fallback) continue;
       for (const st of [d, a]) {
         if (st.level1 !== pid) {

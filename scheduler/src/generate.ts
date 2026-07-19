@@ -124,16 +124,18 @@ export async function generate(day: string): Promise<GenerateResult> {
   const seatsBefore = maxSeatsByPosition(g);
   const demandBefore = baselineDemand(g);
 
+  // Chains run in two passes around the fill: a rule whose source crew
+  // descended on a PREVIOUS day (sourceDayOffset < 0) is fully determined by
+  // yesterday's persisted rows — its picks don't depend on Level-1 state — so
+  // it is applied BEFORE Level 1: the standby row is reserved (H3/H3b) and
+  // Level 1 already sees the commitment (a chained soldier is never handed a
+  // position whose windows he can't hold — e.g. the התקפי driver quota must
+  // not spend a tiger driver on someone standing by for כרמל). Same-day rules
+  // need Level 2's fresh patrol/defense rows and run after it.
+  for (const rule of ctx.chainRules.filter((r) => r.sourceDayOffset < 0)) runChain(g, rule);
+
   // Level 1: partition available soldiers into positions + מנוחה
   const plan = runLevel1(g);
-
-  // Chains run in two passes around Level 2: a rule whose source crew
-  // descended on a PREVIOUS day (sourceDayOffset < 0) is fully determined
-  // before Level 2 runs, so it is applied FIRST — the standby row is reserved
-  // (H3/H3b) and the general fill schedules around it instead of booking the
-  // whole descending crew during the window. Same-day rules need Level 2's
-  // fresh patrol/defense rows and run after it.
-  for (const rule of ctx.chainRules.filter((r) => r.sourceDayOffset < 0)) runChain(g, rule);
   fillLevel2(g, plan);
   for (const rule of ctx.chainRules.filter((r) => r.sourceDayOffset >= 0)) runChain(g, rule);
 

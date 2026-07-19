@@ -22,6 +22,8 @@ export type RationaleCode =
   | 'low_load'              // at/below the candidate group's load median (P3)
   | 'position_balance'      // at/below the group's median count for THIS position (P4)
   | 'fairness_pick'         // ranked fill with no dominant comparative key
+  | 'decisive_key'          // L1 group pick: the first ranking key that beat the runner-up
+  | 'sub_spread'            // static phase 2: post chosen for even in-day spread
   | 'commander_seat'        // seat requires a commander
   | 'pulled_from_rest'      // completed from the מנוחה pool
   | 'seat_rule'             // dedicated-candidate seat (H6b, e.g. חפק)
@@ -66,10 +68,12 @@ export const TEMPLATES: Record<RationaleCode, string> = {
   handover_out: 'זוג מתחלף: מאייש עד {handover}, ואז {partner} מחליף אותו (יציאה)',
   handover_in: 'זוג מתחלף: נכנס ב-{handover} במקום {partner} (חזרה)',
   no_prior: 'ללא משמרת קודמת סמוכה — מנוחה מלאה',
-  fewest_nights: 'מהמעוטים בלילות בקבוצה: {nights} לילות בשבוע האחרון (חציון הקבוצה: {median})',
+  fewest_nights: 'מהמעוטים בלילות בקבוצה: {nights} לילות השבוע (חציון הקבוצה: {median})',
   low_load: 'עומס שבועי נמוך בקבוצה: {hours} שעות משוקללות (חציון הקבוצה: {median})',
   position_balance: 'שירת בעמדה זו הכי מעט פעמים בקבוצה: {count} פעמים (חציון הקבוצה: {median})',
-  fairness_pick: 'נבחר לפי סדר העדיפויות: מנוחה מלאה → שבירת רצפים → מיעוט לילות → עומס נמוך → איזון עמדות',
+  fairness_pick: 'נבחר לפי סדר העדיפויות: מנוחה מלאה → שבירת רצפים → עומס שבועי → רוטציה מאתמול → איזון עמדות (שוויון מלא מול הבא בתור — הסדר ביניהם אקראי)',
+  decisive_key: 'הוכרע מול הבא בתור לפי {dim}: {mine} לעומת {next}',
+  sub_spread: 'שובץ ל{sub} — פיזור אחיד בין העמדות ביממה (לא חוזר על אותה עמדה)',
   commander_seat: 'מושב מפקד — נדרש מפקד למשמרת זו',
   pulled_from_rest: 'הושלם ממנוחה — לא נותר מועמד פנוי בקבוצת העמדה',
   seat_rule: 'מושב {seat} ב{position} — מועמד ייעודי (עדיפות {priority} ברשימה)',

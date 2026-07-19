@@ -30,7 +30,8 @@ export interface ReportSoldier {
   name: string;
   platoon: string;
   role: string;
-  /** fairness snapshot as of generation (7-day rolling) — chip tooltips */
+  /** fairness snapshot as of generation (current schedule week — resets on
+   *  Sunday; the *7d names are legacy) — chip tooltips */
   nights7d: number;
   weightedHours7d: number;
   positionCounts: Record<string, number>;
@@ -217,12 +218,17 @@ const L1_BADGE: Partial<Record<RationaleCode, string>> = {
   exit_shift_fill: 'יציאה קצרה',
   platoon_group: 'קבוצת מחלקה',
   no_rest_fill: 'כולם עובדים',
-  // specific fairness keys (which consideration selected the soldier)
+  // legacy median-claim keys — old persisted drafts still carry them
   fewest_nights: 'מעט לילות',
   low_load: 'עומס נמוך',
   position_balance: 'איזון עמדות',
   fairness_pick: 'הוגנות',
 };
+
+/** Badge text for a Level-1 entry — a decisive_key pick is badged with the
+ *  dimension that beat the runner-up (params.dim, Hebrew). */
+const l1BadgeText = (e: RationaleEntry): string =>
+  e.code === 'decisive_key' ? String(e.params?.dim ?? 'הוגנות') : (L1_BADGE[e.code] ?? 'הוגנות');
 
 /** Level-2 fill order (SPEC §7) — report sections follow it. */
 const FILL_ORDER = ['קצין מוצב', 'סיור', 'התקפי', 'מגן', 'עמדות הגנה', 'חפק', 'תורנים'];
@@ -474,7 +480,7 @@ ${balanceRows.map((r) => `      <tr><td>${esc(r.name)}</td><td>${r.need}</td><td
   for (const [sid, pid] of l1Entries) byPos.set(pid, [...(byPos.get(pid) ?? []), sid]);
   const l1BadgeEntry = (sid: string): RationaleEntry | undefined => {
     for (const e of input.level1Rationale[sid] ?? []) {
-      if (L1_BADGE[e.code]) return e;
+      if (e.code === 'decisive_key' || L1_BADGE[e.code]) return e;
     }
     return undefined;
   };
@@ -496,7 +502,7 @@ ${balanceRows.map((r) => `      <tr><td>${esc(r.name)}</td><td>${r.need}</td><td
       ? entries.map(renderRationale).join('\n')
       : renderRationale({ code: 'fairness_pick' });
     const nums = s
-      ? `לילות (7 ימים): ${s.nights7d} · שעות משוקללות: ${s.weightedHours7d.toFixed(1)}`
+      ? `לילות השבוע: ${s.nights7d} · שעות משוקללות השבוע: ${s.weightedHours7d.toFixed(1)}`
         + ` · פעמים בעמדה זו: ${s.positionCounts[posName(pid)] ?? 0}`
       : '';
     return nums ? `${why}\n${nums}` : why;
@@ -510,7 +516,7 @@ ${balanceRows.map((r) => `      <tr><td>${esc(r.name)}</td><td>${r.need}</td><td
       .map(({ sid }) => {
         if (isSpecial) return `<span class="soldier">${nameHtml(sid)}</span>`;
         const e = l1BadgeEntry(sid);
-        const badge = e ? L1_BADGE[e.code]! : 'הוגנות';
+        const badge = e ? l1BadgeText(e) : 'הוגנות';
         return `<span class="soldier" title="${escTitle(chipTitle(sid, pid))}">` +
           `${nameHtml(sid)} <span class="badge">${esc(badge)}</span></span>`;
       })
@@ -622,6 +628,62 @@ ${narrative.length ? `  <ul class="narrative">\n${narrative.map((n) => `    <li>
     const windowOf = (c: Cell): [Minutes, Minutes] => c.kind === 'pair'
       ? [c.out.start, c.in_.end] : [c.a.start, c.a.end];
     const subOf = (c: Cell): string | null => c.kind === 'pair' ? c.out.subName : c.a.subName;
+    // Two-phase static grid (עמדות הגנה, SPEC §7): the report mirrors the
+    // actual decision order — 2א sets the HOURS (who mans each time window,
+    // post-blind), 2ב distributes the window's soldiers to the concrete posts
+    // by even spread only (rationale sub_spread).
+    if (rows.some((a) => hasCode(a, 'sub_spread'))) {
+      const byWin = new Map<string, { win: [Minutes, Minutes]; cells: Cell[] }>();
+      for (const c of cells) {
+        const win = windowOf(c);
+        const key = `${win[0]}|${win[1]}`;
+        const r = byWin.get(key) ?? { win, cells: [] };
+        r.cells.push(c);
+        byWin.set(key, r);
+      }
+      const wins = [...byWin.values()].sort((a, b) => a.win[0] - b.win[0]);
+      const maxSeats = Math.max(...wins.map((r) => r.cells.length), 1);
+      const headA = ['חלון זמן', ...Array.from({ length: maxSeats }, (_, i) => `חייל ${i + 1}`)]
+        .map((h) => `<th>${esc(h)}</th>`).join('');
+      const bodyA = wins.map((r) => {
+        const tds = Array.from({ length: maxSeats }, (_, i) =>
+          `<td>${r.cells[i] ? cellHtml(r.cells[i]) : '<span class="empty">—</span>'}</td>`).join('');
+        return `<tr><td><b>${winHtml(r.win[0], r.win[1])}</b></td>${tds}</tr>`;
+      }).join('\n');
+      const subs = [...new Set(cells.map(subOf).filter((s): s is string => !!s))]
+        .sort((a, b) => a.localeCompare(b, 'he'));
+      const headB = ['חלון זמן', ...subs].map((h) => `<th>${esc(h)}</th>`).join('');
+      const bodyB = wins.map((r) => {
+        const bySub = new Map(r.cells.map((c) => [subOf(c) ?? '', c]));
+        const tds = subs.map((s) => {
+          const c = bySub.get(s);
+          if (!c) return '<td><span class="empty">—</span></td>';
+          const who = c.kind === 'pair'
+            ? `${nameHtml(c.out.soldierId)} → ${nameHtml(c.in_.soldierId)}`
+            : nameHtml(c.a.soldierId);
+          const viols = c.kind === 'pair' ? [] : c.a.violations;
+          return `<td>${who}${viols.length ? `<div class="viol">⚠ ${esc(viols.join(' | '))}</div>` : ''}</td>`;
+        }).join('');
+        return `<tr><td><b>${winHtml(r.win[0], r.win[1])}</b></td>${tds}</tr>`;
+      }).join('\n');
+      return `
+  <h3>${esc(posName(pid))} — שלב 2א: קביעת השעות</h3>
+  <div class="sub">לכל חלון זמן נבחרים המאיישים לפי סדר העדיפויות של המשמרות — עדיין בלי עמדה ספציפית.</div>
+  <div class="tbl-wrap"><table>
+    <thead><tr>${headA}</tr></thead>
+    <tbody>
+${bodyA}
+    </tbody>
+  </table></div>
+  <h3>${esc(posName(pid))} — שלב 2ב: חלוקה לעמדות</h3>
+  <div class="sub">חיילי כל חלון מחולקים בין העמדות בפיזור אחיד בלבד — אף אחד לא חוזר על אותה עמדה באותה יממה כשיש חלופה.</div>
+  <div class="tbl-wrap"><table>
+    <thead><tr>${headB}</tr></thead>
+    <tbody>
+${bodyB}
+    </tbody>
+  </table></div>`;
+    }
     // rows = distinct windows; a sub-position name distinguishes same-window rows
     const rowKeys = new Map<string, { win: [Minutes, Minutes]; sub: string | null; cells: Cell[] }>();
     for (const c of cells) {
@@ -657,6 +719,7 @@ ${body}
   const stage2 = `
 <div class="card">
   <h2>שלב 2 — איוש משמרות</h2>
+  <div class="sub">בתוך הקבוצה: לכל חלון זמן נבחרים המועמדים לפי המנוחה לפני החלון, פיזור הלילות והעומס. בעמדות סטטיות (עמדות הגנה) האיוש בשני שלבים: <b>שלב 2א</b> — קביעת השעות (מי בכל חלון זמן), <b>שלב 2ב</b> — חלוקה לעמדות הספציפיות בפיזור אחיד ביממה.</div>
 ${grids || '<p class="empty">לא נוצרו שיבוצי משמרות.</p>'}
 </div>`;
 
@@ -840,10 +903,30 @@ function buildProcessSection(input: DayReportInput, h: NameHelpers): string {
   const poolIssues = issuesMatching(/נדרש מפקד מגן חלופי/);
 
   // 5. flex sizing (everyone works)
-  const totalDemand = Object.values(input.demand).reduce((s, n) => s + Number(n), 0);
-  const totalBase = Object.values(input.demandBefore).reduce((s, n) => s + Number(n), 0);
+  // staff crews (חמל/מפלג) staff "everyone present of the role" — their slot
+  // seat count is only a CAP, so both totals count them at their actual crew
+  // size, exactly like the balance table above (otherwise the two disagree)
+  const staffIds = new Set(input.positions
+    .filter((p) => p.staffAllRoles).map((p) => String(p.id)));
+  const assignedCount = (pid: string) => Object.entries(input.level1)
+    .filter(([, p]) => String(p) === pid).length;
+  const sumDemand = (m: Record<string, number>) => Object.entries(m)
+    .reduce((s, [pid, n]) => s
+      + (staffIds.has(String(pid)) ? assignedCount(String(pid)) : Number(n)), 0);
+  const totalDemand = sumDemand(input.demand);
+  const totalBase = sumDemand(input.demandBefore);
   const presentCount = Object.entries(input.level1)
     .filter(([, pid]) => String(pid) !== String(input.homePositionId ?? '')).length;
+  // extra soldiers the flex sizing could NOT absorb — they end the day in
+  // מנוחה (same computation as generate()'s everyone-works check: final rest
+  // bucket minus the by-design seat-reserved resters). Owner request
+  // 2026-07-19: this must be called out IN RED on the flex step.
+  const extraResters = restId
+    ? Object.entries(input.level1)
+      .filter(([sid, pid]) => String(pid) === restId && !input.seatReserved.includes(sid))
+      .map(([sid]) => name(sid))
+      .sort((a, b) => a.localeCompare(b, 'he'))
+    : [];
   const flexLines = [
     `נקודת המוצא (מאזן היום): דרישת בסיס ${totalBase} מול ${presentCount} זמינים` +
     ` → דרישה אחרי הגמישות: ${totalDemand}`,
@@ -853,6 +936,11 @@ function buildProcessSection(input: DayReportInput, h: NameHelpers): string {
         ? `${nm}: הצוות הוגדל מ-${f.before} ל-${f.after} מושבים — קליטת עודף (כולם עובדים)`
         : `${nm}: צומצם מ-${f.before} ל-${f.after} מושבים למשמרת — מחסור בכוח אדם`;
     }),
+    ...(extraResters.length ? [
+      `<span class="viol">⚠ ${extraResters.length === 1
+        ? `חייל עודף אחד שלא נקלט — יסומן במנוחה: ${esc(extraResters[0])}`
+        : `${extraResters.length} חיילים עודפים שלא נקלטו — יסומנו במנוחה: ${esc(extraResters.join(', '))}`}</span>`,
+    ] : []),
     ...issuesMatching(/מגן: חסרים/),
   ];
 
@@ -878,22 +966,73 @@ function buildProcessSection(input: DayReportInput, h: NameHelpers): string {
   });
   const exitIssues = issuesMatching(/יציאה קצרה/);
 
-  // 9. demand fill — pass A hard quotas, pass B fairness
-  const quotaChips = l1Chips(['commander_quota', 'driver_quota']);
-  const fairKeyChips = (() => {
-    const codes: RationaleCode[] = ['platoon_group', 'fewest_nights', 'low_load', 'position_balance', 'fairness_pick'];
-    const seen = new Set<string>();
+  // 9-12. demand fill, split by round (owner request 2026-07-19):
+  // pass A hard quotas (commanders, then drivers) → pass B platoon rounds →
+  // pass B general ranked fill.
+  const FAIR_CODES = new Set<RationaleCode>(
+    ['fewest_nights', 'low_load', 'position_balance', 'fairness_pick', 'decisive_key']);
+  // quota chip: the quota entry + the comparative fairness fact recorded at
+  // pick time (why THIS commander/driver over the other eligible ones)
+  const quotaChips = (code: RationaleCode): string[] => {
     const out: string[] = [];
-    for (const { sid, entry } of l1Occ) {
-      if (!codes.includes(entry.code) || seen.has(sid)) continue;
-      seen.add(sid);
-      const pid = input.level1[sid];
-      out.push(`<span class="soldier" title="${escTitle(renderRationale(entry))}">${nameHtml(sid)}` +
-        ` <span class="why">${esc(posName(pid))}: ${esc(L1_BADGE[entry.code] ?? '')}</span></span>`);
+    for (const [sid, rat] of Object.entries(input.level1Rationale)) {
+      const i = rat.findIndex((e) => e.code === code);
+      if (i < 0) continue;
+      const why = [rat[i], ...(rat[i + 1] && FAIR_CODES.has(rat[i + 1].code) ? [rat[i + 1]] : [])];
+      const text = why.map(renderRationale).join(' · ');
+      out.push(`<span class="soldier" title="${escTitle(text)}">${nameHtml(sid)}` +
+        ` <span class="why">${esc(text)}</span></span>`);
     }
     return out;
+  };
+  const cmdQuotaChips = quotaChips('commander_quota');
+  const drvQuotaChips = quotaChips('driver_quota');
+  const quotaSids = new Set(Object.entries(input.level1Rationale)
+    .filter(([, rat]) => rat.some((e) => e.code === 'commander_quota' || e.code === 'driver_quota'))
+    .map(([sid]) => sid));
+  const platoonChips = l1Chips(['platoon_group']);
+  const fairKeyChips = (() => {
+    const seen = new Set<string>();
+    const picks: { sid: string; entry: RationaleEntry; pid: number }[] = [];
+    for (const { sid, entry } of l1Occ) {
+      if (!FAIR_CODES.has(entry.code) || seen.has(sid) || quotaSids.has(sid)) continue;
+      seen.add(sid);
+      picks.push({ sid, entry, pid: input.level1[sid] });
+    }
+    // chips follow the generator's FILL ORDER (owner request): the position
+    // filled first shows its soldiers first
+    picks.sort((a, b) => orderIndex(posName(a.pid)) - orderIndex(posName(b.pid)));
+    return picks.map(({ sid, entry, pid }) =>
+      `<span class="soldier" title="${escTitle(renderRationale(entry))}">${nameHtml(sid)}` +
+      ` <span class="why">${esc(posName(pid))}: ${esc(l1BadgeText(entry))}</span></span>`);
   })();
-  const fillIssues = issuesMatching(/חסרים \d+ (חיילים|מפקדים|נהגים)|הצוות מעורב/);
+  const cmdIssues = issuesMatching(/חסרים \d+ מפקדים/);
+  const drvIssues = issuesMatching(/חסרים \d+ נהגים/);
+  const platoonIssues = issuesMatching(/הצוות מעורב/);
+  const fillIssues = issuesMatching(/חסרים \d+ חיילים/);
+  // the Level-1 GROUP cascade (rank() in rank.ts): a lexicographic priority
+  // list — NOT a score; the first key that differs vs the runner-up decides
+  // (and is recorded as the pick's decisive_key). Night spread (P2) and
+  // sub-position rotation (P4b) moved into the Level-2 slot cascade.
+  // NB: item numbers MUST match rank.ts's groupKey/GROUP_DIMS order — the
+  // decisive_key labels cite them (e.g. "5 — עומס שבועי").
+  const CASCADE = [
+    'מנוחה מלאה לפני תחילת המשימה — מי שנח פחות מ-8 שעות נדחק לסוף (בעמדות עם מעט תחילות משמרת) (R1)',
+    'תורנות השבוע — רק בעמדת תורנים: מי שכבר עשה תורנות השבוע נדחק (T5)',
+    'שבירת רצף סטטי — יום סטטי שלישי ברצף נדחק; משימה דינמית לשובר הרצף מקודמת (T3)',
+    'רצף כוננות — יום שלישי ברצף של סטטי/כוננות בלבד נדחק (T6)',
+    'עומס שבועי משוקלל, בדליים של יממת עבודה — הבדל קטן משעות היממה אינו מכריע (P3)',
+    'רוטציה מאתמול — עדיפות למי שמחליף עמדה או סוג משימה (T1–T2 / P4)',
+    'איזון עמדות — מי ששירת בעמדה זו הכי מעט פעמים השבוע (P4)',
+    'העומס השבועי המדויק (P3)',
+    'מי שצבר הכי הרבה מנוחה — עד 48 שעות (P6)',
+  ];
+  const cascadeLine =
+    `<details class="inner"><summary>סדר העדיפויות המלא של בחירת הקבוצה (מיון מדורג — לא ניקוד)</summary>` +
+    `<ol>${CASCADE.map((c) => `<li>${esc(c)}</li>`).join('')}</ol>` +
+    `<div class="sub">ההוגנות נמדדת בתוך השבוע הנוכחי בלבד — המונים מתאפסים ביום ראשון. ` +
+    `שוויון מלא בכל השיקולים מוכרע בסדר אקראי (קבוע לאותו יום). ` +
+    `פיזור הלילות (P2), מרווח בין חלונות המשמרת ורוטציית תתי-העמדות מוכרעים בתוך הקבוצה בשלב 2.</div></details>`;
 
   // 10. chains
   const chainGroups = new Map<string, { a0: ReportAssignment; names: string[] }>();
@@ -951,21 +1090,30 @@ function buildProcessSection(input: DayReportInput, h: NameHelpers): string {
       'ההחלטה השבועית שנשמרה — המפקד משוריין למגן לפני כל עמדה אחרת (מלבד רשימה סגורה), והמחלקה שלו מעגנת את הצוות.',
       magenChips, magenLines),
     step(7, 'המשכיות צוות המגן',
-      'צוות המגן החוזר מאתמול נשמר לעמדה לפני שכל עמדה אחרת יכולה לקחת אותו.',
+      'צוות המגן החוזר מאתמול נשמר לעמדה לפני שכל עמדה אחרת יכולה לקחת אותו. הרציפות בתוך שבוע העבודה בלבד: ביום ראשון הצוות נבנה מחדש סביב מפקד המגן שנקבע לשבוע.',
       contChips),
     step(8, 'יציאות קצרות (חצי יום)',
       'יוצא ביום יציאה מקבל רק עמדת משמרות (בלי משימה יומית וכוננות), והמשמרות נארזות מחוץ לחלון היציאה.',
       exitChips, exitIssues),
-    step(9, 'מילוי לפי דרישה — מכסות ואז הוגנות',
-      'סבב א׳: המפקדים והנהגים הנדרשים לכל העמדות; סבב ב׳: השלמה לפי סדר העדיפויות (מנוחה → רצפים → לילות → עומס → איזון עמדות).',
-      [...quotaChips, ...fairKeyChips], fillIssues),
-    step(10, 'שרשורים (כרמל חטיבה / כונן גשש)',
+    step(9, 'מילוי לפי דרישה — סבב א׳: מכסת מפקדים',
+      'לפני כל שיבוץ רגיל, כל עמדה מקבלת את המפקדים הנדרשים לה (מפקד לכל תחילת משמרת עם מושב מפקד; בעמדות קבוצתיות — מפקד לכל קבוצה), כדי שעמדה מוקדמת לא תרוקן עמדה מאוחרת ממפקדים. הבחירה בין המפקדים הכשירים — לפי אותו סדר הוגנות של המילוי הכללי.',
+      cmdQuotaChips, cmdIssues),
+    step(10, 'מילוי לפי דרישה — סבב א׳: מכסת נהגים',
+      'המשך המכסות הקשיחות: כל עמדה עם דרישת נהג (סיור — נהג דוד, התקפי — נהג טיגריס) מקבלת נהג מוסמך אחד לכל תחילת משמרת, לפי סדר ההוגנות בין הנהגים הכשירים.',
+      drvQuotaChips, drvIssues),
+    step(11, 'מילוי לפי דרישה — סבב ב׳: צוותים מחלקתיים',
+      'פתיחת המילוי הרך: צוות המגן מוגבל למחלקה אחת (מחלקת החברים הקיימים, ואם אין — המחלקה עם הכי הרבה פנויים; בחוסר הצוות מעורב); בהתקפי כל מפקד מהמכסה מעגן קבוצה שמושלמת קודם מבני מחלקתו.',
+      platoonChips, platoonIssues),
+    step(12, 'מילוי לפי דרישה — סבב ב׳: מילוי הוגנות כללי',
+      'השלמת הדרישה שנותרה, עמדה אחר עמדה לפי סדר המילוי: אין ניקוד — המועמדים ממוינים ברשימת עדיפויות מדורגת (המפתח הראשון שמבדיל מכריע) ונלקחים מהראש עד סגירת הדרישה. כל נבחר מתויג במספר ובשם השיקול שהכריע לטובתו מול הבא בתור. ההוגנות נמדדת בשבוע הנוכחי בלבד (מתאפסת ביום ראשון — מי שנשאר מהשבת עדיין נושא את המנוחה, הרצפים והרוטציה שלו); שוויון מלא מוכרע אקראית.',
+      fairKeyChips, [cascadeLine, ...fillIssues]),
+    step(13, 'שרשורים (כרמל חטיבה / כונן גשש)',
       'הצוות היורד מהמשמרת המקבילה מאייש את הכוננות; חסר מושלם בחיילים אחרים (עדיפות למי שחזר לבסיס).',
       completionChips, [...chainLines, ...chainIssues]),
-    step(11, 'איוש המשמרות — מסלולים חריגים',
+    step(14, 'איוש המשמרות — מסלולים חריגים',
       'האיוש השגרתי מוצג בשלב 2; כאן רק החריגים: משיכה ממנוחה, זוגות מתחלפים, שיבוצי בדוחק ומושבים שנשארו ריקים.',
       exceptionalChips, seatEmptyIssues),
-    step(12, 'כולם עובדים — קליטת הנותרים',
+    step(15, 'כולם עובדים — קליטת הנותרים',
       'מי שעדיין בלי עמדה מצטרף למגן (עד 12) לפני שמישהו נח; חייל זמין שנשאר במנוחה — חריגה מדווחת.',
       [...absorbChips, ...byDesignRest], leftoverIssues),
   ];

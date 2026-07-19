@@ -1,15 +1,37 @@
 // Candidate ranking: the SPEC §6.1 lexicographic priority list (P1 filtering
 // happens in rest.ts fits(); P2-P6 keys live here) and the T1-T3 rotation
 // penalty (P4).
+//
+// TWO cascades live here (owner decision 2026-07-19):
+// - rank()      — the SLOT cascade (Level 2 + chains/pairs): which concrete
+//   shift inside a position group. Knows about nights (P2), sub-position
+//   rotation (P4b) and the מ"כ-spread key, because those facts only exist
+//   once a concrete slot/hour is on the table.
+// - rankGroup() — the GROUP cascade (Level 1): which position group a soldier
+//   joins today. Nights are irrelevant here (every group may or may not
+//   produce nights for him) and sub-positions don't exist yet, so those keys
+//   are dropped; everything else keeps the slot cascade's order.
 
-import { Minutes } from './time.js';
+import { Minutes, isSunday } from './time.js';
 import { Gen, SoldierState } from './state.js';
 import { restBefore } from './rest.js';
+import { RationaleEntry } from './rationale.js';
 
 /** P6 (most rest since last shift) is clamped at 48h: beyond two clear days
  *  everyone is equally "fully rested" — an unbounded value would let one long
  *  home stay dominate the final tie-break forever. NOT a DB tunable. */
 export const P6_REST_CLAMP = 48 * 60;
+
+/** Pure-tie order is RANDOM (owner 2026-07-19: with week-scoped fairness a
+ *  Sunday is mostly ties — they must not resolve alphabetically). Seeded by
+ *  (day, soldier id) via FNV-1a so regenerating the SAME day reproduces the
+ *  same draft, while every new day shuffles differently. */
+export function tieJitter(day: string, sid: number): number {
+  const s = `${day}|${sid}`;
+  let h = 2166136261 >>> 0;
+  for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); }
+  return h >>> 0;
+}
 
 // ── fairness keys ───────────────────────────────────────────────────────────
 // One formula each for the P2/P3 keys — used by rank()'s priority tuple AND by
@@ -35,7 +57,11 @@ export function rotationPenalty(g: Gen, st: SoldierState, positionId: number): {
   const yPos = g.ctx.yesterdayPosition.get(st.soldier.id);
   const yCls = yPos !== undefined ? g.ctx.positions.get(yPos)?.missionClass : undefined;
   const streak = g.ctx.staticStreak.get(st.soldier.id) ?? 0;
-  if (pos?.config?.continuity) return { penalty: yPos === positionId ? -2 : 0, tag: 'continuity' };
+  // Continuity resets at the weekly boundary (owner 2026-07-19): on a Sunday
+  // the crew is rebuilt around the weekly מגן commander — no stay-bonus.
+  if (pos?.config?.continuity) {
+    return { penalty: yPos === positionId && !isSunday(g.day) ? -2 : 0, tag: 'continuity' };
+  }
   // Dedicated-seat (seat_rules) and role crews (staff_all_roles) are locked to
   // the same people by design — repeating there is never a rotation fact:
   // no T1/T2 penalty and no "same as yesterday" caveat (like continuity, but
@@ -71,7 +97,8 @@ export function rank(g: Gen, candidates: SoldierState[], positionId: number,
   return [...candidates].sort((a, b) => {
     const ka = key(a), kb = key(b);
     for (let i = 0; i < ka.length; i++) if (ka[i] !== kb[i]) return ka[i] - kb[i];
-    return a.soldier.name.localeCompare(b.soldier.name, 'he');
+    return tieJitter(g.day, a.soldier.id) - tieJitter(g.day, b.soldier.id)
+      || a.soldier.name.localeCompare(b.soldier.name, 'he');
   });
   function key(st: SoldierState): number[] {
     const restAt = restBefore(g, st, atStart ?? g.dRange[0]);
@@ -113,4 +140,93 @@ export function rank(g: Gen, candidates: SoldierState[], positionId: number,
       -Math.min(restAt, P6_REST_CLAMP),                                      // P6
     ];
   }
+}
+
+// ── Level-1 group cascade ───────────────────────────────────────────────────
+
+/** The Level-1 group-selection key vector: the slot cascade WITHOUT P2 nights,
+ *  P4b sub-position rotation, the night-driver key and the מ"כ-spread key —
+ *  none of those facts exist before a concrete slot is chosen. Exported (not
+ *  inlined in rankGroup) so decisiveEntry compares the EXACT vectors the
+ *  ranking sorted by — the rationale can't drift from the decision. */
+export function groupKey(g: Gen, st: SoldierState, positionId: number, atStart?: Minutes): number[] {
+  const restIdeal = g.ctx.tunables.restIdealH * 60;
+  const dailyCap = g.ctx.tunables.dailyCapH;
+  const pos = g.ctx.positions.get(positionId)!;
+  const posName = pos.name;
+  const cls = pos.missionClass;
+  const staticStreak = g.ctx.staticStreak.get(st.soldier.id) ?? 0;
+  const onCallStreak = g.ctx.onCallStreak.get(st.soldier.id) ?? 0;
+  return [
+    atStart !== undefined && restBefore(g, st, atStart) < restIdeal ? 1 : 0, // R1 quasi-constraint
+    // T5 (soft): at most one תורנות per rolling 7 days
+    posName === 'תורנים' && (g.ctx.toranutCount7d.get(st.soldier.id) ?? 0) > 0 ? 1 : 0,
+    // T3 above P2 (owner decision): constant static is worse than nights
+    cls === 'static' && staticStreak >= 2 ? 1
+      : cls === 'dynamic' && staticStreak >= 2 ? -1 : 0,                     // T3
+    onCallStreak >= 2 && (cls === 'static' || cls === 'readiness') ? 1 : 0,  // T6
+    Math.floor(loadOf(st) / dailyCap),                                       // P3 bucket
+    rotationPenalty(g, st, positionId).penalty,                              // P4
+    st.fairness.positionCounts[posName] ?? 0,                                // P4 (L1 balance)
+    // NB: no P5 tiger-driver key here (owner 2026-07-19) — the hard driver
+    // quota (Pass A) already reserves the required drivers per position
+    loadOf(st),                                                              // P3 fine tie-break
+    -Math.min(restBefore(g, st, atStart ?? g.dRange[0]), P6_REST_CLAMP),     // P6
+  ];
+}
+
+/** Group-selection comparator (Level 1): sort by groupKey lexicographically,
+ *  Hebrew name as the final deterministic tie-break (same as rank()). */
+export function rankGroup(g: Gen, candidates: SoldierState[], positionId: number,
+                          atStart?: Minutes): SoldierState[] {
+  return [...candidates].sort((a, b) => {
+    const ka = groupKey(g, a, positionId, atStart), kb = groupKey(g, b, positionId, atStart);
+    for (let i = 0; i < ka.length; i++) if (ka[i] !== kb[i]) return ka[i] - kb[i];
+    return tieJitter(g.day, a.soldier.id) - tieJitter(g.day, b.soldier.id)
+      || a.soldier.name.localeCompare(b.soldier.name, 'he');
+  });
+}
+
+// Per-index Hebrew presentation of the groupKey vector, used by decisiveEntry
+// to name the DECISIVE key — the first index on which the pick actually beat
+// the runner-up (instead of a first-satisfied-median claim).
+const GROUP_DIMS: { dim: string; fmt: (v: number, st: SoldierState) => string }[] = [
+  { dim: 'מנוחה לפני תחילת המשימה', fmt: (v) => (v === 1 ? 'מנוחה קצרה' : 'מנוחה מלאה') },
+  { dim: 'תורנות השבוע', fmt: (v) => (v === 1 ? 'עשה תורנות' : 'ללא תורנות') },
+  { dim: 'רצף ימים סטטיים', fmt: (v) => (v === 1 ? 'ממשיך רצף סטטי' : v === -1 ? 'שובר רצף סטטי' : 'ללא רצף') },
+  { dim: 'רצף כוננות', fmt: (v) => (v === 1 ? 'יום כוננות שלישי' : 'ללא רצף כוננות') },
+  // buckets compare, but the REAL hours are shown — the bucket number means
+  // nothing to an officer
+  { dim: 'עומס שבועי', fmt: (_v, st) => `${loadOf(st).toFixed(1)} שעות` },
+  { dim: 'רוטציה מאתמול', fmt: (v) => (
+      v === -2 ? 'ממשיך בצוות'
+      : v === -1 ? 'שובר רצף סטטי'
+      : v === 0 ? 'החלפת עמדה'
+      : v === 1 ? 'אותו סוג משימה כאתמול'
+      : v === 2 ? 'אותה עמדה כאתמול'
+      : 'רצף סטטי') },
+  { dim: 'איזון עמדות', fmt: (v) => `${v} פעמים בעמדה` },
+  { dim: 'עומס שבועי מדויק', fmt: (_v, st) => `${loadOf(st).toFixed(1)} שעות` },
+  { dim: 'מנוחה מצטברת', fmt: (v) => `${(-v / 60).toFixed(1)} שעות מנוחה` },
+];
+
+/** Why did the Level-1 group pick take THIS soldier: the first groupKey index
+ *  on which he beat the runner-up (the next not-yet-assigned candidate in
+ *  ranked order). No runner-up, or a full tie, falls back to the generic
+ *  priority-cascade entry. */
+export function decisiveEntry(g: Gen, st: SoldierState, runner: SoldierState | undefined,
+                              positionId: number, atStart?: Minutes): RationaleEntry {
+  if (!runner) return { code: 'fairness_pick' };
+  const mine = groupKey(g, st, positionId, atStart);
+  const next = groupKey(g, runner, positionId, atStart);
+  const i = mine.findIndex((v, idx) => v !== next[idx]);
+  if (i < 0) return { code: 'fairness_pick' };
+  const { dim, fmt } = GROUP_DIMS[i];
+  return {
+    code: 'decisive_key',
+    // the dim carries its cascade item number (owner request) — it must match
+    // the numbered סדר העדיפויות list the report renders (report.ts CASCADE,
+    // kept in the exact groupKey order)
+    params: { dim: `${i + 1} — ${dim}`, mine: fmt(mine[i], st), next: fmt(next[i], runner) },
+  };
 }

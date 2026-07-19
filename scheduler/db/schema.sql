@@ -283,8 +283,13 @@ returns table (
   position_counts     jsonb
 )
 language sql stable as $$
+  -- Fairness is judged over the CURRENT schedule week only (owner decision
+  -- 2026-07-19): the window opens at the week's Sunday 14:00 and ends at the
+  -- generation day — so a Sunday starts from a clean slate (empty window).
+  -- The *_7d column names are kept for API compatibility.
   with w as (
-    select day_start(as_of) as t_end, day_start(as_of) - interval '7 days' as t_start
+    select day_start(as_of) as t_end,
+           day_start(as_of - (extract(dow from as_of))::int) as t_start
   ),
   base as (
     -- daily:true implies night_exempt (src/config.ts effectiveConfig);
@@ -334,8 +339,13 @@ language sql stable as $$
   from soldiers s
   cross join w
   left join (
+    -- position balance is week-scoped too (owner 2026-07-19: no global
+    -- fairness) — only this week's stints count toward P4
     select soldier_id, period, day, mission_class, position_name, night_exempt,
-           count(*) over (partition by soldier_id, position_name) as cnt
+           sum(case when period && tsrange(day_start(as_of - (extract(dow from as_of))::int),
+                                           day_start(as_of))
+                    then 1 else 0 end)
+             over (partition by soldier_id, position_name) as cnt
     from base
   ) b on b.soldier_id = s.id and lower(b.period) < w.t_end
   group by s.id, w.t_end
