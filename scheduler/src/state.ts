@@ -8,7 +8,7 @@ import { RationaleEntry } from './rationale.js';
 import { Minutes, dayStart, dayEnd, hours, overlaps, nightRange, nightRangeAt } from './time.js';
 import { normalizeName as nrm } from './text.js';
 import { isCountedNight } from './rest.js';
-import { isShiftPosition } from './config.js';
+import { isShiftPosition, isNightExitOk, isNightExitWindows } from './config.js';
 
 export const EMPTY_FAIRNESS: Fairness = {
   nightCount7d: 0, nightCountTotal: 0, missionHours7d: 0, weightedHours7d: 0,
@@ -82,6 +82,24 @@ export const stickyContinuity = (g: Gen, sid: number, pid: number): boolean =>
   !!g.ctx.positions.get(pid)?.config?.continuity
   && g.ctx.yesterdayPosition.get(sid) === pid;
 
+/** H9 night-exit relaxation (owner 2026-07-19): ALL of the soldier's exit
+ *  windows today fall entirely within 22:00–06:00 (windows 22–02, 02–06,
+ *  22–06). Such a soldier may ADDITIONALLY serve in a night_exit_ok daily
+ *  duty (תורנים) — the duty's officer covers the night absence internally. */
+export const isNightExit = (g: Gen, sid: number): boolean =>
+  isNightExitWindows(g.ctx.exits.get(sid) ?? [], g.dRange[0]);
+
+/** Do sid's exit windows NOT block filling position pid? True for מגן
+ *  stickiness (returning continuity member) and for the night-exit relaxation
+ *  on a night_exit_ok position — in both, the daily 14:00–14:00 row
+ *  inherently spans the exit window and the position's officer manages the
+ *  absence internally. Feeds the ignoreExitWindows flag of isBlocked/fits. */
+export const exitExempt = (g: Gen, sid: number, pid: number): boolean => {
+  if (stickyContinuity(g, sid, pid)) return true;
+  const pos = g.ctx.positions.get(pid);
+  return !!pos && isNightExitOk(pos) && isNightExit(g, sid);
+};
+
 export const fullyBlocked = (g: Gen, sid: number): boolean => isBlocked(g, sid, g.dRange) &&
   (g.ctx.blocked.get(sid) ?? []).some((b) => b[0] <= g.dRange[0] && b[1] >= g.dRange[1]);
 
@@ -104,12 +122,15 @@ export const allowedIn = (g: Gen, s: Soldier, posName: string): boolean => {
   // H9 half-day exit: on his exit day a soldier takes no daily 14:00–14:00
   // duty and no readiness/on-call row (someone else covers the chain) —
   // enforced here so every fill path (levels, pairs, chains) honors it.
-  // Carve-out (owner 2026-07-19): a continuity crew member returning to HIS
+  // Carve-outs (owner 2026-07-19): a continuity crew member returning to HIS
   // continuity position (מגן stickiness) keeps the daily row despite the
-  // exit — the מגן officer manages the absence internally.
+  // exit — the מגן officer manages the absence internally; and a NIGHT exit
+  // (all windows within 22:00–06:00) additionally allows a night_exit_ok
+  // duty (תורנים) — מפקד התורנים covers the night absence.
   if (g.ctx.exits.has(s.id)) {
     const pos = pid !== undefined ? g.ctx.positions.get(pid) : undefined;
     if (pos && !isShiftPosition(pos)
+      && !(isNightExitOk(pos) && isNightExit(g, s.id))
       && !(pid !== undefined && stickyContinuity(g, s.id, pid))) return false;
   }
   // H6 role gate: מ"מ/סמל never man עמדות הגנה — enforced here so the Level-2

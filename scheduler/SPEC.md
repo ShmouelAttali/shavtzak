@@ -36,7 +36,7 @@ History shows 39 distinct position names over 20 days; templates change mid-depl
 | מגן | **10–12** seats (flex), **14:00–14:00** | daily; **continuity crew, one מחלקה** — continuity holds **within the work week only**: on a **Sunday** schedule day NO member returns by right — the crew is rebuilt fresh around the persisted weekly `magen_commander`, whose מחלקה anchors the same-platoon fill (a mixed-platoon crew is acceptable on the rebuild when no single platoon has enough eligible soldiers — the same soft rule as always), and the rotation stay-bonus is likewise off on Sunday; from Monday continuity resumes (kept day-to-day unless seat count or a manual change intervenes; repeats back-to-back at gap 0 — R5); a returning member with a **half-day exit stays on the crew** (H9 stickiness — the מגן officer covers his absence internally); `flex_seats` 10–12 — absorbs surplus soldiers up to 12 (everyone-works); commander = the persisted weekly `magen_commander` decision, and his מחלקה anchors the crew's same-platoon preference (§7); **`no_rest_floor`** — internally-scheduled crew, may be entered with any rest (H8; התקפי gets this via readiness) |
 | התקפי | 8 seats | **14:00–14:00** standing readiness crew; **first seat = מפקד (H6 hard)**; crew must include a **נהג טיגריס (H6d)**; soft composition (`group_size` 4): two groups of (1 מפקד + 3 soldiers), each group preferably from one מחלקה (the groups may differ) — implemented as a commander quota of 2 + same-platoon group fill (P5). Ad-hoc attack missions are recorded as separate mission rows and **must not overlap the readiness row** (H3) |
 | חפק | 4 named seats (מפקד/קשר/חובש/נהג), **14:00–14:00** | daily; **dedicated candidates per seat — see H6b**; **`no_rest_floor`** — internally-scheduled crew, may be entered with any rest (H8) |
-| תורנים | 2 seats, **14:00–14:00** | full schedule day; class `other` — outside T2/T3 rotation; **soft T5**: at most one תורנות per soldier per schedule week (the count resets on Sunday — §6.1 fairness week) |
+| תורנים | 2 seats, **14:00–14:00** | full schedule day; class `other` — outside T2/T3 rotation; **soft T5**: at most one תורנות per soldier per schedule week (the count resets on Sunday — §6.1 fairness week); **`night_exit_ok`** — the one position a night-exit soldier may additionally hold on his exit day (H9 night-exit relaxation) |
 | כונן גשש | chained to סיור — see T4c | windows: 22–07, 07–14, 14–22; **only the night window counts as load** (R3) |
 | קצין מוצב | 1 seat, **14:00–14:00** | full schedule day; manned **only from a fixed candidate pool** — see H6-pool; **`no_rest_floor`** — internally-scheduled, may be entered with any rest (H8) |
 | חמל | **14:00–14:00**, variable crew | standing crew: every present role-חמל soldier daily (`staff_all_roles`); readiness class (rest-transparent); members restricted to חמל only via the derived H6c whitelist |
@@ -219,7 +219,8 @@ that did cross the boundary — §10).
   readiness/on-call row** (כרמל חטיבה, כונן גשש) — he may serve only in a
   **shift position**: one that is neither `daily` nor readiness-class (the
   shared `isShiftPosition` predicate; today that resolves to סיור /
-  עמדות הגנה — nothing hardcodes position names). Enforced through the single
+  עמדות הגנה — nothing hardcodes position names), plus — on a **night-exit**
+  day only — a `night_exit_ok` position (the relaxation below). Enforced through the single
   restriction gate (`allowedIn`, like H6b/H6c/H6-pool), so every fill path —
   Level 1, Level 2, pairs, chains — puts **someone else** on the chained
   standby (T4 completion). A seat-rule candidate (H6b) with an exit that day
@@ -241,6 +242,32 @@ that did cross the boundary — §10).
   one `exit_magen` **warning** replacing the `exit_window`/`exit_daily`
   errors (§8). A **fresh** (non-returning) soldier with an exit still cannot
   join מגן.
+  **Relaxation — night exit (owner 2026-07-19)**: a soldier's exit day counts
+  as a **night exit** when ALL of his exit windows for that schedule day fall
+  entirely within **22:00–06:00** — exit boundaries are shift boundaries, so
+  the qualifying windows are exactly 22:00–02:00, 02:00–06:00 and
+  22:00–06:00; any window touching outside that range → the
+  shift-position-only rule above applies unchanged. On a night-exit day the
+  restriction is relaxed **additively**: the soldier may serve in shift
+  positions as before AND additionally in any position whose config carries
+  `night_exit_ok: true` (set on תורנים in `seed.sql` + live delta
+  `db/night-exit-toranut-2026-07-19.sql`; resolved through
+  `effectiveConfig()` — nothing hardcodes the position name). All **other**
+  daily 14:00–14:00 duties (מגן, חפק, קצין מוצב, התקפי standing, מפלג) and
+  readiness/on-call rows (כרמל חטיבה, כונן גשש) remain forbidden, and the
+  מגן-stickiness exception above is unchanged. Because the flagged position
+  is a daily 14:00–14:00 row, the assignment inherently overlaps the exit
+  window — mirroring the מגן-stickiness mechanics, the exit window does
+  **not** block the fill (the same `ignoreExitWindows` flag on
+  `isBlocked`/`fits`) and the Level-2 exit packing pre-pass skips him (he
+  holds the daily row itself — nothing to pack); his absence during the
+  22:00–06:00 window is covered internally by the duty's rotation —
+  באחריות מפקד התורנים. Eligibility lives in the single restriction gate
+  `allowedIn` (state.ts), with predicate helpers
+  `isNightExitOk`/`isNightExitWindows` (config.ts) and
+  `isNightExit`/`exitExempt` (state.ts). Rationale `exit_night_toranut`
+  (§6 step 7); validated as one `exit_night_toranut` **warning** replacing
+  the `exit_window`/`exit_daily` errors (§8).
 
 ## 4. Rest rules (R)
 
@@ -518,7 +545,13 @@ where nights rank), weighted_hours second, per-position counts third.
      (`isShiftPosition` — non-daily, non-readiness) with at least one slot
      outside his exit window — preferring unmet demand, then packing
      feasibility (most available non-overlapping slots outside the window),
-     then P4 position balance; rationale `exit_shift_fill`. No fitting
+     then P4 position balance; rationale `exit_shift_fill`. For a
+     **night-exit** soldier (H9 relaxation) a `night_exit_ok` position
+     (תורנים) joins the candidate set as an ADDITIONAL option — same
+     preference scoring, never forced; when the picked position is the
+     `night_exit_ok` one, rationale `exit_night_toranut`
+     ("שובץ ל{position} ביום יציאה קצרה לילית...") replaces
+     `exit_shift_fill`. No fitting
      position → generation issue, and the soldier falls through to the
      normal flow;
   8. demand-driven fill in a fixed order (קצין מוצב → סיור → התקפי → מגן →
@@ -564,8 +597,10 @@ where nights rank), weighted_hours second, per-position counts third.
   only) slot there is nothing to preserve for — a single-slot crew (התקפי)
   seats its own quota members normally. An **exit
   packing pre-pass** (H9/R7) runs before the general ranked fill: each exit
-  soldier — except a sticky continuity member (H9 מגן stickiness: he holds
-  the daily row itself, nothing to pack) — gets 1–2 non-overlapping shifts
+  soldier — except a sticky continuity member (H9 מגן stickiness) or a
+  night-exit soldier on a `night_exit_ok` position (H9 night-exit
+  relaxation), each of whom holds
+  the daily row itself, nothing to pack — gets 1–2 non-overlapping shifts
   in his Level-1 position packed
   **outside his exit window**, up to the daily cap (normally 8h = two
   shifts), scored lexicographically — most hours, then fewest rest
@@ -616,8 +651,8 @@ or **warning** tagged with a rule key:
   readiness excluded): error.
 - `availability` — an assignment overlapping an unavailability period (H1):
   error.
-- `exit_window` / `exit_daily` / `exit_magen` / `exit_rest` — H9/R7, see
-  below.
+- `exit_window` / `exit_daily` / `exit_magen` / `exit_night_toranut` /
+  `exit_rest` — H9/R7, see below.
 - `unassigned` — an available soldier with no daily assignment: warning
   (impossible by construction for generated days — Level 1 buckets everyone;
   the check covers manual edits and imports).
@@ -663,7 +698,15 @@ the shared shift-position predicate. **Exception — מגן stickiness**: a
 continuity-position row of a returning crew member — he held a row of the
 same continuity position yesterday — downgrades both errors to ONE
 `exit_magen` **warning** (`X במגן עם יציאה קצרה — באחריות מפקד המגן`); a
-fresh soldier on מגן with an exit keeps the errors. `exit_rest` (warning) —
+fresh soldier on מגן with an exit keeps the errors. **Exception — night
+exit**: a night-exit soldier (all exit windows entirely within 22:00–06:00 —
+H9 relaxation) holding a `night_exit_ok` position likewise downgrades both
+errors to ONE `exit_night_toranut` **warning**
+(`X בתורנים עם יציאה קצרה לילית — באחריות מפקד התורנים`; implemented
+generically as `${name} ב${positionName} עם יציאה קצרה לילית — באחריות מפקד
+ה${positionName}`, the same pattern as the exit_magen warning). A non-night
+exit on תורנים keeps the errors, as does a night-exit soldier on any other
+daily/readiness row. `exit_rest` (warning) —
 a < 4h gap attributable to the exit day (either endpoint's schedule day
 carries an exit) replaces the `rest` error for the exit soldier; the 4–8h
 warning path is unchanged.

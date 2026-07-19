@@ -74,7 +74,8 @@ def canonical_position(position, typ):
         return 'התקפי'
     return 'התקפי' if 'פטרול' in text or 'צ׳קפוסט' in text else 'אחר'
 
-SINGLE_TIME_DURATION = {'סיור': 8, 'עמדות הגנה': 4, 'כרמל': 4, 'חמל': 8, 'כרמל חטיבה': 4}
+SINGLE_TIME_DURATION = {'סיור': 8, 'עמדות הגנה': 4, 'כרמל': 4, 'חמל': 8, 'כרמל חטיבה': 4,
+                        'כונן גשש': 8}
 
 def parse_time(text):
     m = re.match(r'^(\d{1,2})[:.](\d{2})', text)

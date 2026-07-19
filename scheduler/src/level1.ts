@@ -12,11 +12,11 @@ import { Minutes, overlaps, isSunday } from './time.js';
 import { Slot, SeatRule } from './model.js';
 import { RationaleEntry } from './rationale.js';
 import { normalizeName as nrm, hasQualification } from './text.js';
-import { Gen, SoldierState, allowedIn, countedHours, fullyBlocked, isBlocked } from './state.js';
+import { Gen, SoldierState, allowedIn, countedHours, fullyBlocked, isBlocked, isNightExit } from './state.js';
 import { rankGroup, decisiveEntry } from './rank.js';
 import { restBefore } from './rest.js';
 import { partialWindow } from './pairs.js';
-import { isShiftPosition } from './config.js';
+import { isShiftPosition, isNightExitOk } from './config.js';
 
 const OVERLAY = new Set(['כרמל חטיבה', 'כונן גשש']); // chained overlays, not Level-1
 
@@ -400,22 +400,30 @@ export function runLevel1(g: Gen): Level1Plan {
   // ── H9 exit pre-pass: a soldier with a half-day exit serves a SHIFT
   // position that day (not daily, not readiness — allowedIn rejects those for
   // him); reserved here so the general fill can't strand him, Level 2 packs
-  // his shifts around the exit window.
+  // his shifts around the exit window. Night-exit relaxation (owner
+  // 2026-07-19): when ALL his windows fall within 22:00–06:00, a
+  // night_exit_ok daily duty (תורנים) is an ADDITIONAL candidate — its 24h
+  // row spans the night window, so the exit-window block is ignored for it
+  // (מפקד התורנים covers the absence internally).
   for (const [sid] of ctx.exits) {
     const st = state.get(sid);
     if (!st || st.level1 !== null || fullyBlocked(g, sid)) continue;
+    const nightExit = isNightExit(g, sid);
+    const nightOk = (pid: number) => nightExit && isNightExitOk(ctx.positions.get(pid)!);
     const cands = [...slotsByPosition.entries()].filter(([pid, posSlots]) => {
       const pos = ctx.positions.get(pid)!;
       if (pos.config?.seat_rules || pos.config?.staff_all_roles) return false; // pre-pass staffed
-      return isShiftPosition(pos) && allowedIn(g, st.soldier, pos.name)
-        && posSlots.some((sl) => !isBlocked(g, sid, sl.period));
+      return (isShiftPosition(pos) || nightOk(pid)) && allowedIn(g, st.soldier, pos.name)
+        && posSlots.some((sl) => !isBlocked(g, sid, sl.period, nightOk(pid)));
     });
     // prefer a position with unmet demand, then the one with more open slots
-    // outside his window (packing feasibility), then P4 position balance
+    // outside his window (packing feasibility), then P4 position balance —
+    // a shift position with unmet demand still generally wins (more open
+    // slots); the night_exit_ok duty is an option, never forced
     const score = ([pid, posSlots]: [number, Slot[]]): [number, number, number] => [
       Math.max(0, demand(g, pid, posSlots)
         - [...level1.values()].filter((p) => p === pid).length) > 0 ? 0 : 1,
-      -posSlots.filter((sl) => !isBlocked(g, sid, sl.period)).length,
+      -posSlots.filter((sl) => !isBlocked(g, sid, sl.period, nightOk(pid))).length,
       st.fairness.positionCounts[ctx.positions.get(pid)!.name] ?? 0,
     ];
     const best = cands.sort((a, b) => {
@@ -426,9 +434,11 @@ export function runLevel1(g: Gen): Level1Plan {
       issues.push(`${st.soldier.name}: יציאה קצרה — לא נמצאה עמדת משמרות זמינה ליום זה`);
       continue;
     }
+    const bestPos = ctx.positions.get(best[0])!;
     st.level1 = best[0]; level1.set(sid, best[0]);
     st.level1Rationale.push({
-      code: 'exit_shift_fill', params: { position: ctx.positions.get(best[0])!.name },
+      code: isShiftPosition(bestPos) ? 'exit_shift_fill' : 'exit_night_toranut',
+      params: { position: bestPos.name },
     });
   }
 

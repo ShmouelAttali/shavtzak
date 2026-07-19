@@ -35,8 +35,10 @@ insert into positions (id, name, mission_class, is_scheduled, config) values
   -- תורנים: mission_class 'other' — outside T2/T3 rotation; soft rule T5:
   -- at most one תורנות per rolling 7 days (ranking preference + validator
   -- warning). Explicit full_rest_after:false — finishing at 14:00 grants no
-  -- R5 exemption; the normal R1 regime applies (>= 4h rest, earliest 18:00)
-  ( 7, 'תורנים',      'other',     true,  '{"daily":true,"full_rest_after":false}'),
+  -- R5 exemption; the normal R1 regime applies (>= 4h rest, earliest 18:00).
+  -- night_exit_ok (H9 relaxation, owner 2026-07-19): a soldier whose exit
+  -- windows are ALL within 22:00–06:00 may also serve here on his exit day
+  ( 7, 'תורנים',      'other',     true,  '{"daily":true,"full_rest_after":false,"night_exit_ok":true}'),
   ( 8, 'כונן גשש',    'readiness', true,  '{}'),
   -- קצין מוצב: manned ONLY from the fixed candidate list (H6-pool) —
   -- unordered (rotates by fairness); members serve anywhere when not picked

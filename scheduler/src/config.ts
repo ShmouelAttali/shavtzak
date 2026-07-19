@@ -57,3 +57,25 @@ export function effectiveConfig(config: Record<string, any> | null | undefined):
  */
 export const isShiftPosition = (pos: { missionClass: string; config: Record<string, any> }): boolean =>
   !pos.config.daily && pos.missionClass !== 'readiness';
+
+/**
+ * H9 night-exit relaxation (owner 2026-07-19): a position flagged
+ * `night_exit_ok: true` (תורנים) is ADDITIONALLY allowed on a soldier's
+ * exit day when all his exit windows that day are night windows — shift
+ * positions stay allowed, other daily duties and readiness stay forbidden.
+ * Expects a position whose config went through effectiveConfig().
+ */
+export const isNightExitOk = (pos: { config: Record<string, any> }): boolean =>
+  !!pos.config.night_exit_ok;
+
+/**
+ * H9 "night exit": ALL of the soldier's exit windows for the schedule day
+ * starting at `dayStartMin` (14:00) fall entirely within 22:00–06:00
+ * (= day start + 8h .. day start + 16h). Exit boundaries are shift
+ * boundaries, so the qualifying windows are 22–02, 02–06, 22–06. Any window
+ * touching outside the range → the shift-position-only rule stays.
+ */
+export const isNightExitWindows = (
+  windows: readonly [number, number][], dayStartMin: number): boolean =>
+  windows.length > 0 && windows.every((w) =>
+    w[0] >= dayStartMin + 8 * 60 && w[1] <= dayStartMin + 16 * 60);

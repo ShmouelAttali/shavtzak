@@ -10,7 +10,8 @@ import { Minutes, fmtHM, hours, overlaps } from './time.js';
 import { Slot } from './model.js';
 import { RationaleEntry } from './rationale.js';
 import { normalizeName as nrm, hasQualification } from './text.js';
-import { Gen, SoldierState, allowedIn, assign, countedHours, stickyContinuity } from './state.js';
+import { Gen, SoldierState, allowedIn, assign, countedHours, exitExempt, isNightExit } from './state.js';
+import { isNightExitOk } from './config.js';
 import { fits, restInfo, fitText, fitTexts, FitReason, FIT_RATIONALE } from './rest.js';
 import { rank, rotationPenalty, nightsOf, loadOf } from './rank.js';
 import { tryReplacementPair } from './pairs.js';
@@ -116,6 +117,10 @@ function exitPrePass(g: Gen, plan1: Level1Plan): void {
     // H9 מגן stickiness: a continuity crew member holds the daily 14:00–14:00
     // row itself (exit window and all) — nothing to pack around the window
     if (pos.config?.continuity) continue;
+    // H9 night-exit relaxation (owner 2026-07-19): a night-exit soldier on a
+    // night_exit_ok daily duty (תורנים) likewise holds the 24h row itself —
+    // the general fill seats him; nothing to pack
+    if (isNightExitOk(pos) && isNightExit(g, sid)) continue;
     const nightExempt = pos.config?.night_exempt ?? false;
     const outMin = windows.reduce((m, w) =>
       m + Math.max(0, Math.min(w[1], g.dRange[1]) - Math.max(w[0], g.dRange[0])), 0);
@@ -221,7 +226,7 @@ function fillStaticTwoPhase(g: Gen, pid: number, posName: string, sorted: Slot[]
   const slotReadiness = ctx.positions.get(pid)!.missionClass === 'readiness';
   const slotNightExempt = ctx.positions.get(pid)!.config?.night_exempt ?? false;
   const slotDaily = ctx.positions.get(pid)!.config?.daily ?? false;
-  const sticky = (st: SoldierState) => stickyContinuity(g, st.soldier.id, pid);
+  const sticky = (st: SoldierState) => exitExempt(g, st.soldier.id, pid);
 
   // group the slots by identical time window; `sorted` is chronological and
   // Map keeps insertion order, so the windows process chronologically
@@ -500,9 +505,11 @@ export function fillLevel2(g: Gen, plan1: Level1Plan): void {
         const driverSeat = !!driverQual && seat === (slot.commanderFirstSeat ? 2 : 1)
           && ![...takenThisSlot].some((id) => isDriver(state.get(id)!));
         const forNight = overlaps(slot.period, g.night);
-        // H9 מגן stickiness: a returning continuity member's exit window does
-        // not block his own crew's daily row (fits' ignoreExitWindows flag)
-        const sticky = (st: SoldierState) => stickyContinuity(g, st.soldier.id, pid);
+        // H9 exit-window exemption: a returning continuity member's exit
+        // window does not block his own crew's daily row (מגן stickiness),
+        // and a night-exit soldier's window does not block a night_exit_ok
+        // duty (תורנים) — fits' ignoreExitWindows flag
+        const sticky = (st: SoldierState) => exitExempt(g, st.soldier.id, pid);
         const evals = group
           .filter((st) => !takenThisSlot.has(st.soldier.id))
           .filter((st) => !driverSeat || isDriver(st))

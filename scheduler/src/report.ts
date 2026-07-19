@@ -216,6 +216,7 @@ const L1_BADGE: Partial<Record<RationaleCode, string>> = {
   commander_quota: 'מכסת מפקדים',
   driver_quota: 'מכסת נהגים',
   exit_shift_fill: 'יציאה קצרה',
+  exit_night_toranut: 'יציאה קצרה לילית',
   platoon_group: 'קבוצת מחלקה',
   no_rest_fill: 'כולם עובדים',
   // legacy median-claim keys — old persisted drafts still carry them
@@ -556,6 +557,10 @@ ${balanceRows.map((r) => `      <tr><td>${esc(r.name)}</td><td>${r.need}</td><td
   const exitSids = withCode('exit_shift_fill');
   if (exitSids.length) {
     narrative.push(`יציאות קצרות: ${esc(exitSids.map(name).join(', '))} — שובצו לעמדת משמרות בלבד, המשמרות נארזות סביב חלון היציאה.`);
+  }
+  const nightExitSids = withCode('exit_night_toranut');
+  if (nightExitSids.length) {
+    narrative.push(`יציאות קצרות ליליות: ${esc(nightExitSids.map(name).join(', '))} — כל חלונות היציאה בין 22:00–06:00, ולכן מותרת גם תורנות; ההיעדרות באחריות מפקד התורנים.`);
   }
   for (const i of keyShortages(input.issues)) narrative.push(`⚠ ${esc(i)}`);
 
@@ -957,7 +962,8 @@ function buildProcessSection(input: DayReportInput, h: NameHelpers): string {
 
   // 8. half-day exits
   const exitChips = Object.entries(input.exits).map(([sid, ws]) => {
-    const e = (input.level1Rationale[sid] ?? []).find((x) => x.code === 'exit_shift_fill');
+    const e = (input.level1Rationale[sid] ?? [])
+      .find((x) => x.code === 'exit_shift_fill' || x.code === 'exit_night_toranut');
     const detail = [
       `חלון יציאה ${ws.map(winText).join(', ')}`,
       ...(e ? [renderRationale(e)] : []),

@@ -5,7 +5,7 @@ import {
 } from './time.js';
 import { normalizeName as nrm, hasQualification } from './text.js';
 import { isFullRestExempt, isCountedNight } from './rest.js';
-import { loadTunables, effectiveConfig, isShiftPosition } from './config.js';
+import { loadTunables, effectiveConfig, isShiftPosition, isNightExitWindows } from './config.js';
 import { roleFlags } from './load.js';
 import type { SeatRule } from './model.js';
 
@@ -108,6 +108,13 @@ export async function validateDay(day: string): Promise<Finding[]> {
     e.soldierId === sid && e.period[1] > scheduleDayStart(t) && e.period[0] < scheduleDayStart(t) + DAY);
   const exitTodayIds = new Set(exits
     .filter((e) => overlaps(e.period, [dayStart(day), dayEnd(day)])).map((e) => e.soldierId));
+  // H9 night-exit relaxation (owner 2026-07-19): ALL of a soldier's exit
+  // windows today fall entirely within 22:00–06:00 → a night_exit_ok
+  // position (תורנים) is additionally allowed; one exit_night_toranut
+  // warning replaces the exit_window/exit_daily errors (mirrors exit_magen)
+  const nightExitIds = new Set([...exitTodayIds].filter((sid) => isNightExitWindows(
+    exits.filter((e) => e.soldierId === sid && overlaps(e.period, dRange)).map((e) => e.period),
+    dRange[0])));
 
   // ── 1+2: rest & overlap over consecutive blocking, non-readiness shifts ──
   // R3: a כונן גשש NIGHT window (22:00–07:00) counts as ~gashash_effective_hours
@@ -351,6 +358,16 @@ export async function validateDay(day: string): Promise<Finding[]> {
       findings.push({
         severity: 'warning', rule: 'exit_magen', soldierId: r.soldierId,
         message: `${r.soldierName} ב${r.positionName} עם יציאה קצרה — באחריות מפקד ה${r.positionName}`,
+      });
+      continue;
+    }
+    // H9 night-exit relaxation: a night-exit soldier on a night_exit_ok
+    // position (תורנים) — one warning instead of the two errors
+    if (nightExitIds.has(r.soldierId) && posConfig.get(r.positionId)?.night_exit_ok
+      && (hit || dailyViol)) {
+      findings.push({
+        severity: 'warning', rule: 'exit_night_toranut', soldierId: r.soldierId,
+        message: `${r.soldierName} ב${r.positionName} עם יציאה קצרה לילית — באחריות מפקד ה${r.positionName}`,
       });
       continue;
     }
