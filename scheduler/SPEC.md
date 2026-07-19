@@ -50,7 +50,10 @@ minimum is 10; when soldiers are missing, flex positions shrink — סיור dro
 from 4 to a minimum of 3 seats per shift (`flex_seats` on the position
 config). An explicit manual seat override may enlarge מגן **beyond** 12 (the
 manual decision wins); shrinking below the flex minimum loses to
-everyone-works — surplus soldiers still get seats. A soldier left in מנוחה is
+everyone-works — surplus soldiers still get seats. Seat overrides can be
+scoped to a single schedule day (or a day range) and to a single shift of a
+position, and setting **0 seats cancels the shift outright** — the generator
+redistributes its crew (§9, `seat_overrides`). A soldier left in מנוחה is
 reported (generation issue + validator warning `rest_bucket`).
 Exception: unchosen candidates of a **non-release seat rule** (H6b — e.g. the
 חפק מ"פ/סמ"פ commander seat) are reserved to their seat with no substitutes,
@@ -680,8 +683,21 @@ Principles:
 - **Small hand-managed source tables; derived data = views.** e.g. no stored presence
   matrix — sparse `unavailability` periods; no row ⇒ soldier available; the per-day
   presence matrix and all fairness counters are views.
-- **Seat counts change over time via `seat_overrides`** (position, valid_from,
-  seats-per-slot; latest wins) — resolved by the `day_slots` view, managed by hand.
+- **Seat counts change over time via `seat_overrides`** — hand-managed rows,
+  resolved by the `day_slots` view (seats are **per slot**). Scoping fields:
+  `position_id`; `valid_from` (**inclusive** first schedule day);
+  `valid_to` (nullable timestamp, **exclusive**, compared against the slot's
+  concrete period **start** — one schedule day D is `valid_from = D`,
+  `valid_to = day_start(D+1)`; null = open-ended, the legacy "onward"
+  behavior); `start_time` (nullable — null applies to every slot of the
+  position, set matches only the slot whose template starts at that time,
+  e.g. just the 18:00 סיור shift). **`seats = 0` cancels the matched
+  slot(s)**: `day_slots` omits them entirely, so the generator redistributes
+  the crew and the validator raises no coverage gap. When several rows match
+  a slot, the most specific wins: a `start_time` match beats a position-wide
+  row, then the latest `valid_from`, then the newest row. Primary use:
+  manually removing or resizing a specific shift on a specific day *before*
+  generating, instead of hand-editing assignment rows.
 - **Position behavior flags live in `positions.config` jsonb**: `daily`
   (sleeping 14:00–14:00 day duty — implies `night_exempt` + `full_rest_after`
   + `yomi_display`, each overridable by an explicit key; e.g. תורנים sets

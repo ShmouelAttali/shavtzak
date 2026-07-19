@@ -74,7 +74,7 @@ and live against the shared Supabase project:
   rebuilt from the roster matrix. Positions model:
   **מגן** (10, continuity crew, one מחלקה), **התקפי** (8, standing readiness
   14:00–14:00 + ad-hoc attacks as separate non-overlapping rows), כרמל/גשש are
-  chained overlays, seat counts per date via `seat_overrides`. Daily duties
+  chained overlays, seat counts per date/shift via `seat_overrides`. Daily duties
   (מגן/חפק/תורנים/קצין מוצב) carry `config.daily: true` (implies night_exempt
   + full_rest_after + yomi_display; explicit keys override — תורנים opts out
   of full_rest_after). Tunables genuinely read from `config`: `rest_rules`,
@@ -190,6 +190,11 @@ silently breaks id-coupled tests). Run the relevant suite before committing.
   never introduce a parallel flag or hardcode position names for a distinction
   the schema already expresses.
 
+- **Manually resizing/cancelling specific shifts before generation** =
+  `seat_overrides` rows, NOT hand-edited assignments: day/range-scoped
+  (`valid_from` inclusive day, `valid_to` exclusive ts) + optional `start_time`
+  for one shift; `seats=0` cancels the slot (day_slots omits it, generator
+  redistributes). Delta: `scheduler/db/seat-overrides-hourly-2026-07-19.sql`.
 - Schedule day = **14:00 → 14:00**; night = 00:00–06:00; all times naive local
   (`timestamp`/`tsrange`, no time zones). Helpers: `day_start()`, `night_range()`,
   `schedule_day_of()` in `scheduler/db/schema.sql`, mirrored in `scheduler/src/time.ts`.
