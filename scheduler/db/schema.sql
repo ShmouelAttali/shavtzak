@@ -138,15 +138,28 @@ alter table slot_templates add constraint slot_templates_no_overlap
     daterange(valid_from, valid_to, '[]') with &&
   );
 
--- Per-position seat-count changes over time (seats PER SLOT; latest
--- valid_from <= day wins). Managed by hand — resolved by the day_slots view.
+-- Per-position seat-count changes (seats PER SLOT). Managed by hand —
+-- resolved by the day_slots view. Scoping:
+--   valid_from  schedule day the override starts on (inclusive).
+--   valid_to    optional EXCLUSIVE end, compared against the slot's concrete
+--               period START — a single schedule day D is [D, day_start(D+1));
+--               null = open-ended (the original "onward" behavior).
+--   start_time  optional template start_time match — null applies to every
+--               slot of the position, set targets one shift (e.g. 18:00 סיור).
+--   seats = 0   cancels the matched slot(s): day_slots omits them entirely,
+--               so the generator redistributes the crew and the validator
+--               raises no coverage gap.
+-- Most specific wins: a start_time match beats a position-wide row, then the
+-- latest valid_from, then the newest row.
 create table seat_overrides (
   id          smallint generated always as identity primary key,
   position_id smallint not null references positions,
   valid_from  date not null,
-  seats       smallint not null,
+  valid_to    timestamp,
+  start_time  time,
+  seats       smallint not null check (seats >= 0),
   note        text,
-  unique (position_id, valid_from)
+  unique nulls not distinct (position_id, valid_from, start_time)
 );
 
 -- T4 chained duties as data.
@@ -251,24 +264,32 @@ language sql stable as $$
 $$;
 
 -- Concrete slots per schedule day (template × calendar × seat overrides).
+-- Zero-seat resolutions (cancelled slots) are omitted entirely.
 create or replace view day_slots as
-select sd.day,
-       st.id  as slot_template_id,
-       st.position_id,
-       st.sub_position_id,
-       tsrange(sd.day::timestamp + st.start_time::interval
-               + case when st.start_time < time '14:00' then interval '1 day' else interval '0' end,
-               sd.day::timestamp + st.start_time::interval
-               + case when st.start_time < time '14:00' then interval '1 day' else interval '0' end
-               + make_interval(mins => st.duration_minutes)) as period,
-       coalesce((select o.seats from seat_overrides o
-                 where o.position_id = st.position_id and o.valid_from <= sd.day
-                 order by o.valid_from desc limit 1),
-                st.seats) as seats,
-       st.commander_first_seat
-from schedule_days sd
-join slot_templates st
-  on sd.day >= st.valid_from and (st.valid_to is null or sd.day <= st.valid_to);
+select * from (
+  select sd.day,
+         st.id  as slot_template_id,
+         st.position_id,
+         st.sub_position_id,
+         tsrange(p.start_ts, p.start_ts + make_interval(mins => st.duration_minutes)) as period,
+         coalesce((select o.seats from seat_overrides o
+                   where o.position_id = st.position_id
+                     and o.valid_from <= sd.day
+                     and (o.valid_to is null or p.start_ts < o.valid_to)
+                     and (o.start_time is null or o.start_time = st.start_time)
+                   order by (o.start_time is not null) desc, o.valid_from desc, o.id desc
+                   limit 1),
+                  st.seats) as seats,
+         st.commander_first_seat
+  from schedule_days sd
+  join slot_templates st
+    on sd.day >= st.valid_from and (st.valid_to is null or sd.day <= st.valid_to)
+  cross join lateral (
+    select sd.day::timestamp + st.start_time::interval
+           + case when st.start_time < time '14:00' then interval '1 day' else interval '0' end
+           as start_ts) p
+) s
+where s.seats > 0;
 
 -- Fairness counters as of a given day (rolling windows end at day_start(as_of)).
 create or replace function soldier_fairness(as_of date)

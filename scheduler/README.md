@@ -54,6 +54,15 @@ npx tsx src/cli.ts generate 2026-07-16 --dry-run    # print, don't save
 Human overrides: set `locked=true` (or `source='manual'`) on `day_assignments` /
 `shift_assignments` rows — the generator schedules around them and never deletes them.
 
+To resize or cancel specific shifts **before** generating, insert a
+`seat_overrides` row instead of editing assignments: scope it to a date range
+(`valid_from` inclusive schedule day, `valid_to` exclusive timestamp — one day D
+is `valid_from = D`, `valid_to = 'D+1 14:00'`; null = onward) and optionally to
+one shift (`start_time` = the template start, e.g. `18:00` for the evening
+סיור). `seats = 0` cancels the matched slot(s) — the `day_slots` view omits
+them and the generator redistributes the crew. Most specific row wins:
+`start_time` match > position-wide, then latest `valid_from`, then newest row.
+
 ## Verified (2026-07-14, local postgres:16 in Docker)
 
 - schema + seed apply cleanly; 47 derived slots/day from templates.
