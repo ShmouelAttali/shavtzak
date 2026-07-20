@@ -20,8 +20,14 @@ export SCHEDULER_DATABASE_URL='postgres://USER:PASSWORD@HOST:5432/postgres'
   - Account: **shavtzakshilo@gmail.com** — for the password ask **Elyashiv Lavi**.
   - Project: `shavtzak-scheduler`, org `shavtzak`, region `eu-central-1` —
     dashboard: https://supabase.com/dashboard/project/yoaymfryftsqqjjyvwym
-  - Connection string (session pooler):
-    `postgres://postgres.yoaymfryftsqqjjyvwym:<DB_PASSWORD>@aws-0-eu-central-1.pooler.supabase.com:5432/postgres`
+  - Connection string — use the **pooler** host (IPv4; the direct
+    `db.<ref>.supabase.co` host is IPv6-only and unreachable from Vercel):
+    - **Session pooler** (port 5432) — one connection per client, good for
+      long-lived processes (CLI, local dev):
+      `postgres://postgres.yoaymfryftsqqjjyvwym:<DB_PASSWORD>@aws-0-eu-central-1.pooler.supabase.com:5432/postgres`
+    - **Transaction pooler** (port 6543) — connection-per-statement, better for
+      short-lived serverless functions (Vercel):
+      `postgres://postgres.yoaymfryftsqqjjyvwym:<DB_PASSWORD>@aws-0-eu-central-1.pooler.supabase.com:6543/postgres`
   - `<DB_PASSWORD>` is the *database* password (different from the account password):
     Dashboard → Project Settings → Database, or on Elyashiv's Mac from the keychain:
     `security find-generic-password -s supabase-shavtzak-db -w`
@@ -101,6 +107,12 @@ docker exec -i shavtzak-pg psql -U postgres \
 5. ~~Operational UI~~ (SPEC §12 — draft + fairness tabs in the viewer app;
    `api/draft.ts`, `api/fairness.ts`). Deployment note: set
    `SCHEDULER_DATABASE_URL` in the Vercel project env (Dashboard → Settings →
-   Environment Variables) — locally it lives in `.env.local`.
+   Environment Variables, for the Production + Preview environments, then
+   redeploy) — locally it lives in `.env.local`. Use a **pooler** URI, not the
+   direct `db.<ref>.supabase.co` host (IPv6, unreachable from Vercel):
+   - Transaction pooler (recommended for serverless):
+     `...@aws-0-eu-central-1.pooler.supabase.com:6543/postgres`
+   - Session pooler (also works):
+     `...@aws-0-eu-central-1.pooler.supabase.com:5432/postgres`
 6. Sheet sync-out (append approved days to `כל השבצק`) — NOT started; everything is
    draft-only by design.
