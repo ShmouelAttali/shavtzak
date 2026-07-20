@@ -329,8 +329,13 @@ export function runLevel1(g: Gen): Level1Plan {
       const base = magenSlots[0].seats;
       const effMin = Math.min(magenFlex.min, base);
       magenEffMax = Math.max(magenFlex.max, base);
-      const pool = [...state.values()].filter((st) =>
-        st.level1 === null && !fullyBlocked(g, st.soldier.id)).length;
+      // EFFECTIVE supply, not head-count: a leaver/arriver holds only part of
+      // the schedule day, so on an exchange day two of them man one daily seat
+      // — count each as ½ (owner 2026-07-20). Prevents a phantom surplus from
+      // enlarging מגן when we don't really have the manpower.
+      const pool = [...state.values()]
+        .filter((st) => st.level1 === null && !fullyBlocked(g, st.soldier.id))
+        .reduce((n, st) => n + (partialWindow(ctx.blocked.get(st.soldier.id) ?? [], g.dRange) ? 0.5 : 1), 0);
       const assignedTo = (pid: number) => [...level1.values()].filter((p) => p === pid).length;
       const nonMagenNeed = () => {
         let n = 0;
@@ -360,10 +365,11 @@ export function runLevel1(g: Gen): Level1Plan {
       // their last eligible candidates (bug 2026-07-20 — תורנים seat empty
       // while מגן held 12). True leftovers join מגן in the absorb step AFTER
       // every position is staffed.
-      const seats = Math.max(effMin, Math.min(base, free + assignedTo(magenId!)));
+      const capacity = Math.floor(free + assignedTo(magenId!));
+      const seats = Math.max(effMin, Math.min(base, capacity));
       for (const s of magenSlots) s.seats = seats;
-      if (free + assignedTo(magenId!) < effMin) {
-        issues.push(`מגן: חסרים ${effMin - free - assignedTo(magenId!)} חיילים לאיוש מלא`);
+      if (capacity < effMin) {
+        issues.push(`מגן: חסרים ${effMin - capacity} חיילים לאיוש מלא`);
       }
     }
   }
