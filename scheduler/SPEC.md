@@ -654,6 +654,22 @@ where nights rank), weighted_hours second, per-position counts third.
   other platoons only to complete the crew). Halves carry `handover_out` /
   `handover_in` (the commander half also `magen_commander`). Remaining seats
   fall through to the normal fill.
+- **Chain changeover split** (owner 2026-07-20): a chain window (כרמל/כונן
+  גשש) that ends AFTER the Sunday 08:00 bus can't be held whole by any single
+  present soldier, so remaining seats are completed by a split — the
+  **descending source crew** (leavers, present to 08:00) hold the first half
+  (`handover_out`; sourcing satisfied), a **newcomer arriver** takes the
+  second half (`handover_in` + `chain_completion`). A commander chain seat
+  prefers a real מפקד on each half. The validator exempts the `handover_in`
+  arriver half from the chain "didn't descend" check (coverage still verifies
+  it).
+- **Effective supply** (owner 2026-07-20): the everyone-works flex sizing
+  counts a leaver/arriver as **½** a soldier (two of them man one daily seat),
+  so an exchange day's head-count doesn't inflate a phantom surplus that would
+  enlarge מגן. A partial-day soldier left in מנוחה for lack of a fitting shift
+  is **expected** rest — not flagged as an everyone-works violation
+  (`rest_bucket` / the generation issue skip him; a full-day idle soldier is
+  still flagged).
 - **Chain ordering**: T4 rules whose source crew descended on a *previous* day
   (`source_day_offset < 0`) are fully determined by yesterday's persisted rows,
   so they are applied **before Level 1** — the standby row is reserved (H3/H3b)

@@ -178,13 +178,12 @@ export async function generate(day: string): Promise<GenerateResult> {
         const worksAlready = (ctx.existing.get(st.soldier.id) ?? [])
           .some((a) => !chainTargets.has(a.positionId) && overlaps(a.period, g.dRange));
         if (worksAlready) continue;
-        // a partial-day soldier (bus arrival / departure) rests for a
-        // different reason than a full-day one — annotate his real window so
-        // the warning doesn't read like a fully-available soldier was skipped
-        const w = partialWindow(g.ctx.blocked.get(st.soldier.id) ?? [], g.dRange);
-        const avail = w?.kind === 'arriving' ? ` (זמין רק מ-${fmtHM(w.at)})`
-          : w?.kind === 'departing' ? ` (זמין רק עד ${fmtHM(w.at)})` : '';
-        g.issues.push(`${st.soldier.name} נותר במנוחה${avail} — כל חייל זמין אמור לעבוד`);
+        // a partial-day soldier (bus arrival / departure — a leaver/arriver on
+        // an exchange day) is only available for part of the schedule day; if
+        // no shift fit his window it's EXPECTED rest, not an everyone-works
+        // violation (owner 2026-07-20). The report/validator don't flag it.
+        if (partialWindow(g.ctx.blocked.get(st.soldier.id) ?? [], g.dRange)) continue;
+        g.issues.push(`${st.soldier.name} נותר במנוחה — כל חייל זמין אמור לעבוד`);
       }
     }
   }

@@ -4,7 +4,7 @@
 // soldiers (arrivals preferred). Runs in two passes around Level 2 — see
 // generate.ts.
 
-import { Minutes, addDays, slotStart, overlaps, nightRange, nightRangeAt } from './time.js';
+import { Minutes, addDays, slotStart, overlaps, nightRange, nightRangeAt, isSunday, fmtHM } from './time.js';
 import { ChainRule } from './model.js';
 import { RationaleEntry } from './rationale.js';
 import { Gen, SoldierState, allowedIn, assign, isBlocked, isGashashNight, gashashEffEnd } from './state.js';
@@ -110,6 +110,20 @@ export function runChain(g: Gen, rule: ChainRule): void {
     }).slice(0, 1);
   }
 
+  // Sunday changeover: a chain window ending AFTER the 08:00 bus can't be held
+  // whole by any single present soldier. Complete each remaining regular seat
+  // with a split — the DESCENDING crew (leavers, present to 08:00) hold the
+  // first half (so sourcing is satisfied), a NEWCOMER arriver takes the second
+  // half (owner 2026-07-20).
+  const bus = g.dRange[0] + 18 * 60;                 // Sunday 08:00
+  const changeover = isSunday(addDays(day, 1));
+  const busySlot = (sid: number, half: [Minutes, Minutes]) =>
+    (ctx.existing.get(sid) ?? []).some((a) => overlaps(a.period, half))
+    || g.assignments.some((a) => a.soldierId === sid && overlaps(a.period, half));
+  const holdsHalf = (st: SoldierState, half: [Minutes, Minutes]) =>
+    !isBlocked(g, st.soldier.id, half) && !busySlot(st.soldier.id, half)
+    && allowedIn(g, st.soldier, targetName);
+
   let commanderAssigned = false;
   for (const slot of targetSlots) {
     const isCmdSlot = slot.subName === 'מפקד כרמל חטיבה';
@@ -145,8 +159,44 @@ export function runChain(g: Gen, rule: ChainRule): void {
       }
       if (isCmdSlot) commanderAssigned = true;
     });
-    if (take.length < slot.seats) {
-      g.issues.push(`שרשור ${targetName} ${rule.targetStart}: אוישו ${take.length}/${slot.seats}`);
+
+    // bus-split completion for a straddling window's remaining seats
+    let filled = take.length;
+    if (changeover && filled < slot.seats
+        && slot.period[0] < bus && slot.period[1] > bus) {
+      const firstHalf: [Minutes, Minutes] = [slot.period[0], bus];
+      const secondHalf: [Minutes, Minutes] = [bus, slot.period[1]];
+      const usedHere = new Set(g.assignments.filter((a) => a.positionId === rule.targetPosition
+        && a.period[0] === slot.period[0]).map((a) => a.soldierId));
+      // a commander seat prefers a real מפקד on each half, else the highest רובאי
+      const cmdOrder = (xs: SoldierState[]) => isCmdSlot
+        ? [...xs].sort((a, b) => Number(b.soldier.isCommander) - Number(a.soldier.isCommander)
+            || b.soldier.rifle - a.soldier.rifle)
+        : xs;
+      // first half: the DESCENDING crew (leavers) who can hold up to the bus
+      const firstCands = crew.map((id) => g.state.get(id)!).filter((st) =>
+        st && !usedHere.has(st.soldier.id) && holdsHalf(st, firstHalf) && !holdsHalf(st, secondHalf));
+      const outQ = cmdOrder(rank(g, firstCands, rule.targetPosition, false, firstHalf[0], undefined, true));
+      // second half: newcomers (arrivers) who can hold from the bus on
+      const inQ = cmdOrder(rank(g, [...g.state.values()].filter((st) =>
+        !usedHere.has(st.soldier.id) && holdsHalf(st, secondHalf) && !holdsHalf(st, firstHalf)),
+        rule.targetPosition, false, secondHalf[0], undefined, true));
+      for (let i = 0; filled < slot.seats && i < outQ.length && i < inQ.length; i++, filled++) {
+        const d = outQ[i], a = inQ[i];
+        const note = `חילופין: החלפה ב-${fmtHM(bus)}`;
+        const cmdRat: RationaleEntry[] = isCmdSlot ? [{ code: 'chain_commander' }] : [];
+        assign(g, d, { ...slot, period: firstHalf }, filled + 1, isCmdSlot, [note], 'chain',
+          [{ code: 'chain', params: { target: targetName, source: sourceName, sourceStart: rule.sourceStart } },
+           ...cmdRat, { code: 'handover_out', params: { handover: fmtHM(bus), partner: a.soldier.name } }]);
+        assign(g, a, { ...slot, period: secondHalf }, filled + 1, isCmdSlot, [note], 'chain',
+          [{ code: 'chain', params: { target: targetName, source: sourceName, sourceStart: rule.sourceStart } },
+           ...cmdRat, { code: 'chain_completion', params: { source: sourceName } },
+           { code: 'handover_in', params: { handover: fmtHM(bus), partner: d.soldier.name } }]);
+        if (isCmdSlot) commanderAssigned = true;
+      }
+    }
+    if (filled < slot.seats) {
+      g.issues.push(`שרשור ${targetName} ${rule.targetStart}: אוישו ${filled}/${slot.seats}`);
     }
   }
   if (targetName === 'כרמל חטיבה' && !commanderAssigned) {

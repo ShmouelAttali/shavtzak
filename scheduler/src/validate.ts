@@ -7,6 +7,7 @@ import { normalizeName as nrm, hasQualification } from './text.js';
 import { isFullRestExempt, isCountedNight } from './rest.js';
 import { loadTunables, effectiveConfig, isShiftPosition, isNightExitWindows } from './config.js';
 import { roleFlags } from './load.js';
+import { partialWindow } from './pairs.js';
 import type { SeatRule } from './model.js';
 
 export interface Finding {
@@ -27,6 +28,7 @@ interface Row {
   blocksOverlap: boolean;
   isCommanderSeat: boolean;
   source: string;
+  rationale: { code: string }[];
 }
 
 /**
@@ -40,7 +42,7 @@ export async function validateDay(day: string): Promise<Finding[]> {
   const [rows, prevRows, unavailRows, dayAssignRows, soldierRows, allowedRows, candRows, subPosRows, chainRows, seatRulePosRows, daySlotRows, posRows, historyRows, configRows, qualRows, exitRows] = await multiQuery([
     ...[day, yesterday].map((d) => `
       select sa.soldier_id, s.full_name, sa.position_id, p.name pos_name, p.mission_class,
-             sp.name sub_name, sa.period::text, sa.blocks_overlap, sa.is_commander_seat, sa.source
+             sp.name sub_name, sa.period::text, sa.blocks_overlap, sa.is_commander_seat, sa.source, sa.rationale
       from shift_assignments sa
       join positions p on p.id = sa.position_id
       left join sub_positions sp on sp.id = sa.sub_position_id
@@ -98,6 +100,7 @@ export async function validateDay(day: string): Promise<Finding[]> {
     positionId: r.position_id, positionName: r.pos_name, missionClass: r.mission_class,
     subName: r.sub_name, period: parseRange(r.period), blocksOverlap: r.blocks_overlap,
     isCommanderSeat: r.is_commander_seat, source: r.source,
+    rationale: (r.rationale ?? []) as { code: string }[],
   });
   const today = (rows as any[]).map(toRow);
   const prev = (prevRows as any[]).map(toRow);
@@ -263,7 +266,12 @@ export async function validateDay(day: string): Promise<Finding[]> {
   // ── 3: chain sourcing ────────────────────────────────────────────────────
   for (const cr of chainRows as any[]) {
     const tStart = slotStart(day, String(cr.target_start).slice(0, 5));
-    const targets = today.filter((r) => r.positionId === cr.target_position && r.period[0] === tStart);
+    // carve-out (owner 2026-07-20): a bus-split ARRIVER half (`handover_in`) is
+    // the post-08:00 completion of a Sunday-changeover chain window — its
+    // descending-crew first half already satisfies sourcing, so the arriver is
+    // exempt from the "didn't descend" check (coverage §10 still verifies it).
+    const targets = today.filter((r) => r.positionId === cr.target_position && r.period[0] === tStart
+      && !r.rationale.some((e) => e.code === 'handover_in'));
     if (!targets.length) continue;
     const srcDay = addDays(day, cr.source_day_offset);
     const sStart = slotStart(srcDay, String(cr.source_start).slice(0, 5));
@@ -421,6 +429,15 @@ export async function validateDay(day: string): Promise<Finding[]> {
   const fullyOut = new Set(unavail
     .filter((u) => u.period[0] <= dRange[0] && u.period[1] >= dRange[1])
     .map((u) => u.soldierId));
+  // partial-day soldiers (leaver/arriver on an exchange day) are only available
+  // for part of the schedule day — resting for lack of a fitting shift is
+  // EXPECTED, not an everyone-works violation (owner 2026-07-20)
+  const blocksBySoldier = new Map<number, [Minutes, Minutes][]>();
+  for (const u of unavail) {
+    const arr = blocksBySoldier.get(u.soldierId) ?? [];
+    arr.push(u.period); blocksBySoldier.set(u.soldierId, arr);
+  }
+  const isPartialDay = (sid: number) => !!partialWindow(blocksBySoldier.get(sid) ?? [], dRange);
   if (assignedDay.size > 0) {
     for (const [sid, { name, ok }] of schedulable) {
       if (ok && !fullyOut.has(sid) && !assignedDay.has(sid)) {
@@ -448,7 +465,8 @@ export async function validateDay(day: string): Promise<Finding[]> {
       }
     }
     for (const r of dayAssignRows as any[]) {
-      if (r.pos_name !== 'מנוחה' || fullyOut.has(r.soldier_id) || seatReserved.has(r.soldier_id)) continue;
+      if (r.pos_name !== 'מנוחה' || fullyOut.has(r.soldier_id) || seatReserved.has(r.soldier_id)
+          || isPartialDay(r.soldier_id)) continue;
       const s = schedulable.get(r.soldier_id);
       if (!s?.ok) continue;
       findings.push({
