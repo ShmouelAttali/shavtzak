@@ -117,9 +117,16 @@ generator can't solve:
   `soldier_qualifications` (qualification = 'נהג דוד' / 'נהג טיגריס'). 2
   drivers can't cover all daily סיור shifts under rest rules — a real
   shortage, not a generator bug.
-- **A day that collapses (many לא אויש)** → count soldiers with an
-  `unavailability` row overlapping that schedule day; mass-exit days
-  (weekends) genuinely can't be covered.
+- **A day that collapses (many לא אויש)** → count soldiers whose
+  `unavailability` **covers the whole schedule day** (`u.period @>
+  tsrange(D 14:00, D+1 14:00)`) — those are the truly absent. Do NOT count
+  by mere overlap (`&&`): on exit/arrival days most overlaps are
+  partial-day and those soldiers ARE schedulable around their windows
+  (e.g. mass-exit 25/07 had 80 partial-day overlaps but 97 soldiers
+  present for part of the day — an `&&` count says 17 available, wildly
+  wrong). Report three numbers: absent-whole-day (`@>`), partial-day
+  (`&&` and not `@>`), present-clean (no overlap). Mass-exit days
+  (weekends) can still genuinely be uncoverable at specific hours.
 
 ## Step 6 — fairness check
 
