@@ -351,10 +351,12 @@ that did cross the boundary — §10).
   fewest-nights (P2) in the Level-2 slot cascade, and above the load keys in
   the Level-1 group cascade, which has no nights key at all (§6.1).
 - **T6 On-call streak (soft)**: avoid a 3rd consecutive day in which a soldier
-  has ONLY static posts + כוננות (התקפי/כרמל) — constant on-call. Ranking
-  demotion placed above the load/night keys in both cascades like T3 (a
-  candidate with a 2-day on-call-only streak is demoted for another
-  static/readiness assignment) + validator warning (`oncall_streak`).
+  has ONLY **on-call** work — the `config.on_call` positions: התקפי and the
+  static guard posts (עמדות הגנה). חמל, כרמל and כונן גשש are `readiness` but
+  NOT on-call, so they don't count. Ranking demotion placed above the
+  load/night keys like T3 (a candidate on a 2-day on-call-only streak is
+  demoted for another on-call assignment) + validator warning
+  (`oncall_streak`).
 - **T4 Chained duties** — deterministic staffing; the crew that just descended covers the standby:
   - **T4a כרמל חטיבה**: carmel shift starting at hour H = the 4 soldiers who finished עמדות הגנה at H, on the same 6×4h grid (defense 06–10 → carmel 10–14, …, 18–22 → carmel 22–02, 22–02 → carmel 02–06; previous day 10–14 → carmel 14–18). Commander seat: prefer a **real מפקד** (מ"מ/סמל/מ"כ/מ"ח) from the descending crew; only when none exists take the **highest רובאי** among them. Min staffing 3 regular + 1 commander (validated).
   - **T4b** — there is no התקפי chain: התקפי is a standing Level-1 crew
@@ -428,7 +430,7 @@ the report's decisive-key rationale labels cite these item numbers (e.g.
 | 1 | R1 quasi-constraint: full 8h rest before the mission start — only for a daily duty that requires entry rest (no `no_rest_floor`; in practice **תורנים**). Every other position gets its per-shift rest check in the Level-2 cascade | — |
 | 2 | T5 demotion (תורנים only): anyone with a תורנות this week sorts after everyone without one | current week |
 | 3 | **T3**: on a 2+ static-only-day streak, demoted for another static day (3rd static day sinks) / promoted for a dynamic (streak-breaking) one | streak |
-| 4 | **T6**: on a 2+ on-call-only-day streak (static+readiness only), demoted for another static/readiness day | streak |
+| 4 | **T6**: on a 2+ on-call-only-day streak (`config.on_call` positions — התקפי + עמדות הגנה), demoted for another on-call day | streak |
 | 5 | **P4** — rotation vs yesterday: T3 streak-breakers first, then T2 class alternation, then T1 not-same-position (continuity/seat-rule/staff crews exempt) | vs yesterday/streak |
 | 6 | **P4 balance** — fewest times in this position this week (the only position-specific counter in the cascade) | current week |
 
@@ -725,7 +727,7 @@ or **warning** tagged with a rule key:
 - `static_streak` — T3: a 3rd consecutive static-only day: warning.
 - `sub_rotation` — P4b: the same static sub-position twice within one
   schedule day: warning (import rows excluded).
-- `oncall_streak` — T6: a 3rd consecutive static+readiness-only day: warning.
+- `oncall_streak` — T6: a 3rd consecutive on-call-only day (`config.on_call` — התקפי + עמדות הגנה): warning.
 - `second_toranut_week` — T5: a 2nd תורנות day within a week: warning.
 
 **H9/R7 exit findings**: `exit_window` (error) — any row, mission or

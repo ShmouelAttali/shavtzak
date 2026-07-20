@@ -59,6 +59,15 @@ export const isShiftPosition = (pos: { missionClass: string; config: Record<stri
   !pos.config.daily && pos.missionClass !== 'readiness';
 
 /**
+ * "On-call" for the T6 constant-availability rule (owner 2026-07-20): a
+ * `config.on_call` position — in practice התקפי (readiness standby) and the
+ * static guard posts (עמדות הגנה). NOT חמל / כרמל / כונן גשש, though they are
+ * also `readiness`, and not the daily duties.
+ */
+export const isOnCall = (pos: { config: Record<string, any> | null | undefined }): boolean =>
+  !!pos.config?.on_call;
+
+/**
  * H9 night-exit relaxation (owner 2026-07-19): a position flagged
  * `night_exit_ok: true` (תורנים) is ADDITIONALLY allowed on a soldier's
  * exit day when all his exit windows that day are night windows — shift

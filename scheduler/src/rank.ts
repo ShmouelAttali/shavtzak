@@ -15,6 +15,7 @@
 import { Minutes, isSunday } from './time.js';
 import { Gen, SoldierState } from './state.js';
 import { restBefore } from './rest.js';
+import { isOnCall } from './config.js';
 import { RationaleEntry } from './rationale.js';
 
 /** P6 (most rest since last shift) is clamped at 48h: beyond two clear days
@@ -120,7 +121,7 @@ export function rank(g: Gen, candidates: SoldierState[], positionId: number,
       cls === 'static' && staticStreak >= 2 ? 1
         : cls === 'dynamic' && staticStreak >= 2 ? -1 : 0,
       // T6: avoid a 3rd consecutive day of only static + on-call work
-      onCallStreak >= 2 && (cls === 'static' || cls === 'readiness') ? 1 : 0,
+      onCallStreak >= 2 && isOnCall(pos) ? 1 : 0,
       rotationPenalty(g, st, positionId).penalty,                            // P4
       st.fairness.positionCounts[posName] ?? 0,                              // P4 balance
     ];
@@ -176,7 +177,7 @@ export function groupKey(g: Gen, st: SoldierState, positionId: number, atStart?:
     // T3 above P2 (owner decision): constant static is worse than nights
     cls === 'static' && staticStreak >= 2 ? 1
       : cls === 'dynamic' && staticStreak >= 2 ? -1 : 0,                     // T3
-    onCallStreak >= 2 && (cls === 'static' || cls === 'readiness') ? 1 : 0,  // T6
+    onCallStreak >= 2 && isOnCall(pos) ? 1 : 0,                                // T6
     rotationPenalty(g, st, positionId).penalty,                              // P4
     st.fairness.positionCounts[posName] ?? 0,                                // P4 (L1 balance)
   ];

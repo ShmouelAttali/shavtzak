@@ -45,6 +45,16 @@ test('T6: three consecutive days of static-only work → oncall_streak warning',
   assert.ok(hits[0].message.includes('3'), hits[0].message);
 });
 
+test('T6: חמל days do NOT count as on-call (config.on_call, not readiness class)', async () => {
+  // חמל is readiness but NOT on_call (owner 2026-07-20) — three חמל days must
+  // not raise the constant-availability streak
+  for (const d of [E1, E2, E3]) {
+    await manualRow('חייל 49', 'חמל', d, `${d} 14:00`, `${d} 18:00`);
+  }
+  const f = await validateDay(E3);
+  assert.deepEqual(f.filter((x) => x.rule === 'oncall_streak' && x.message.includes('חייל 49')), []);
+});
+
 test('T6 negative: a dynamic (סיור) day in the middle breaks the on-call streak', async () => {
   await manualRow('חייל 46', 'עמדות הגנה', E1, `${E1} 14:00`, `${E1} 18:00`);
   await manualRow('חייל 46', 'סיור', E2, `${E2} 14:00`, `${E2} 22:00`);

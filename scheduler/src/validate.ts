@@ -784,12 +784,13 @@ export async function validateDay(day: string): Promise<Finding[]> {
 
   // ── 13b: on-call streak (T6, soft): 3+ consecutive days of ONLY static +
   // readiness (התקפי/כרמל) work — the soldier is in constant on-call ────────
+  const onCallPosNames = new Set((posRows as any[]).filter((p) => p.config?.on_call).map((p) => p.name));
   const onCallOnly = (sid: number, d: string): boolean => {
     const dr: [Minutes, Minutes] = [dayStart(d), dayEnd(d)];
     let hasOnCall = false, hasOther = false;
     for (const h of history) {
       if (h.soldierId !== sid || !overlaps(h.period, dr)) continue;
-      if (h.missionClass === 'static' || h.missionClass === 'readiness') hasOnCall = true;
+      if (onCallPosNames.has(h.positionName)) hasOnCall = true;
       else hasOther = true;
     }
     return hasOnCall && !hasOther;

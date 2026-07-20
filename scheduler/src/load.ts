@@ -3,7 +3,7 @@ import { Context, Soldier, Position, Slot, Fairness, ChainRule } from './model.j
 import { parseRange, dayStart, dayEnd, addDays, overlaps, nightRange, weekStart, Minutes } from './time.js';
 import { normalizeName } from './text.js';
 import { isCountedNight } from './rest.js';
-import { loadTunables, effectiveConfig } from './config.js';
+import { loadTunables, effectiveConfig, isOnCall } from './config.js';
 
 /** H6 role parsing: מ"מ/סמל = senior commander; מ"כ/מ"ח = static commander. */
 export function roleFlags(role: string) {
@@ -172,9 +172,10 @@ export async function loadContext(day: string): Promise<Context> {
   }
 
   // On-call streak (T6, soft): consecutive days ending yesterday where the
-  // soldier had ONLY static missions and/or readiness (התקפי/כרמל) — no
-  // dynamic task and no daily duty. Such a soldier is in constant on-call;
-  // a 3rd day like that is avoided (ranking demotion + validator warning).
+  // soldier had ONLY on-call work (config.on_call — התקפי + עמדות הגנה) and no
+  // other assignment. Such a soldier is in constant availability; a 3rd day
+  // like that is avoided (ranking demotion + validator warning).
+  const onCallPositions = new Set([...positions.values()].filter(isOnCall).map((p) => p.id));
   const onCallStreak = new Map<number, number>();
   for (const [sid, list] of existing) {
     let streak = 0;
@@ -183,7 +184,7 @@ export async function loadContext(day: string): Promise<Context> {
       let hasOnCall = false, hasOther = false;
       for (const a of list) {
         if (!overlaps(a.period, dr)) continue;
-        if (a.missionClass === 'static' || a.missionClass === 'readiness') hasOnCall = true;
+        if (onCallPositions.has(a.positionId)) hasOnCall = true;
         else hasOther = true;
       }
       if (hasOnCall && !hasOther) streak++;

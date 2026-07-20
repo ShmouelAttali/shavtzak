@@ -241,23 +241,34 @@ function exitPrePass(g: Gen, plan1: Level1Plan): void {
   }
 }
 
-/** Static two-phase fill (owner decision, 2026-07-19): a pure static grid
- *  (several sub-position posts sharing each time window — עמדות הגנה — no
- *  commander or driver seats) fills per WINDOW, not per post.
- *  Phase 1 sets the TIMES: who mans the window, by the same rank() cascade
- *  as the general fill but with NO sub-position bias (forSub = null).
- *  Phase 2 hands the picked soldiers to the concrete posts where the ONLY
- *  consideration is even spread — a soldier rotates through ALL the posts
- *  over time and never repeats one within the same 24h round (rationale
- *  sub_spread). Each window is completed before the next so later windows'
- *  fits()/rank() see the bookings. */
+/** Static grid fill (עמדות הגנה — several posts sharing each time window, no
+ *  commander/driver seats). Two ideas layered:
+ *
+ *  Pair matching (owner 2026-07-20): a soldier works TWO 4h windows a full 8h
+ *  apart, so the whole crew is spaced by construction — e.g. the 6-window grid
+ *  tiles into the pairs 14+02 / 18+06 / 22+10, four soldiers each. A pre-plan
+ *  reserves soldiers to these exact-8h window pairs BEFORE the per-window fill;
+ *  a reserved soldier is seated in each of his two windows and skipped by the
+ *  windows in between, so a greedy grab can't strand him a 3rd shift or a 4h
+ *  gap. Surplus/shortage/blocked seats fall through to the residual fill.
+ *
+ *  Per window it stays two-phase: pick WHO mans the window (post-blind), then
+ *  distribute to the concrete posts by even spread (never the same post twice
+ *  in a 24h round — sub_spread). Windows process chronologically so later
+ *  windows' fits()/rank() see the earlier bookings. */
 function fillStaticTwoPhase(g: Gen, pid: number, posName: string, sorted: Slot[],
                             group: SoldierState[], restId: number): void {
   const { ctx, state, issues, level1 } = g;
   const slotReadiness = ctx.positions.get(pid)!.missionClass === 'readiness';
   const slotNightExempt = ctx.positions.get(pid)!.config?.night_exempt ?? false;
   const slotDaily = ctx.positions.get(pid)!.config?.daily ?? false;
+  const flexMin: number | undefined = ctx.positions.get(pid)!.config?.flex_seats?.min;
+  const restIdeal = ctx.tunables.restIdealH * 60;
   const sticky = (st: SoldierState) => exitExempt(g, st.soldier.id, pid);
+  const primaryFit = (st: SoldierState, p: [Minutes, Minutes]) => {
+    const f = fits(g, st, p, false, slotReadiness, slotNightExempt, slotDaily, sticky(st));
+    return f.ok && !f.fallback;
+  };
 
   // group the slots by identical time window; `sorted` is chronological and
   // Map keeps insertion order, so the windows process chronologically
@@ -268,9 +279,43 @@ function fillStaticTwoPhase(g: Gen, pid: number, posName: string, sorted: Slot[]
     if (arr) arr.push(sl); else byWindow.set(key, [sl]);
   }
 
+  // ── pair pre-plan: reserve crew to exact-8h window pairs ──────────────────
+  const winList = [...byWindow.entries()].map(([key, slots]) => ({ key, period: slots[0].period }));
+  const byStart = new Map(winList.map((w) => [w.period[0], w]));
+  const freeSeatsOf = (key: string) => {
+    const slots = byWindow.get(key)!;
+    return slots.reduce((s, m) => s + m.seats - g.assignments.filter((a) =>
+      a.positionId === m.positionId && a.subPositionId === m.subPositionId
+      && a.period[0] === m.period[0]).length, 0);
+  };
+  const planLeft = new Map(winList.map((w) => [w.key, freeSeatsOf(w.key)]));
+  const reservedFor = new Map<number, Set<string>>();   // soldier → his two window keys
+  for (const a of winList) {
+    const b = byStart.get(a.period[1] + restIdeal);      // partner exactly 8h later
+    if (!b) continue;
+    let room = Math.min(planLeft.get(a.key)!, planLeft.get(b.key)!);
+    if (room <= 0) continue;
+    const forNight = overlaps(a.period, g.night);
+    const cand = group.filter((st) => !reservedFor.has(st.soldier.id)
+      && st.missionHoursToday === 0                       // room for two fresh 4h shifts
+      && primaryFit(st, a.period) && primaryFit(st, b.period));
+    for (const st of rank(g, cand, pid, forNight, a.period[0], null)) {
+      if (room <= 0) break;
+      reservedFor.set(st.soldier.id, new Set([a.key, b.key]));
+      planLeft.set(a.key, planLeft.get(a.key)! - 1);
+      planLeft.set(b.key, planLeft.get(b.key)! - 1);
+      room--;
+    }
+  }
+  const reservedElsewhere = (st: SoldierState, wkey: string) => {
+    const r = reservedFor.get(st.soldier.id);
+    return r !== undefined && !r.has(wkey);
+  };
+
   for (const winSlots of byWindow.values()) {
     const members = [...winSlots].sort((a, b) => (a.subPositionId ?? 0) - (b.subPositionId ?? 0));
     const period = members[0].period;
+    const wkey = `${period[0]}|${period[1]}`;
     const forNight = overlaps(period, g.night);
     // rows the exit pre-pass already put in a member occupy its top seats;
     // its soldiers count against the whole window (H7: once per window)
@@ -292,17 +337,27 @@ function fillStaticTwoPhase(g: Gen, pid: number, posName: string, sorted: Slot[]
       viol: string[]; groupNights: number[]; groupLoads: number[];
     };
     const picks: Pick[] = [];
-    for (let k = 1; k <= totalSeats; k++) {
+    const snapshot = () => {
+      const primary = group.filter((st) => !taken.has(st.soldier.id) && primaryFit(st, period));
+      return { groupNights: primary.map((st) => nightsOf(st, forNight)), groupLoads: primary.map(loadOf) };
+    };
+    // seat the pair-reserved soldiers for this window FIRST (both his windows
+    // get him; the earlier one books, the later one re-seats him spaced)
+    for (const st of rank(g, group.filter((s) =>
+        reservedFor.get(s.soldier.id)?.has(wkey) && !taken.has(s.soldier.id)), pid, forNight, period[0], null)) {
+      if (picks.length >= totalSeats || !primaryFit(st, period)) continue;
+      const snap = snapshot();
+      taken.add(st.soldier.id);
+      picks.push({ st, pickedFrom: 'primary', viol: [], groupNights: snap.groupNights, groupLoads: snap.groupLoads });
+    }
+    // residual seats: soldiers reserved for OTHER windows are held back
+    while (picks.length < totalSeats) {
       const evals = group
-        .filter((st) => !taken.has(st.soldier.id))
+        .filter((st) => !taken.has(st.soldier.id) && !reservedElsewhere(st, wkey))
         .map((st) => ({ st, fit: fits(g, st, period, false, slotReadiness, slotNightExempt, slotDaily, sticky(st)) }));
       const primary = evals.filter((e) => e.fit.ok && !e.fit.fallback).map((e) => e.st);
       const fallback = evals.filter((e) => e.fit.ok && e.fit.fallback);
-      // pre-pick snapshot of the primary group's fairness keys (the exact
-      // formulas rank() uses) — comparative rationale must not drift with
-      // later state
-      const groupNights = primary.map((st) => nightsOf(st, forNight));
-      const groupLoads = primary.map(loadOf);
+      const { groupNights, groupLoads } = snapshot();
       // P5 מ"כ spread, window-local: picks aren't assign()ed until phase 2,
       // so rank()'s staticCommanderAt key can't see a commander already
       // picked for THIS window — prefer non-commanders once the window has
@@ -365,8 +420,12 @@ function fillStaticTwoPhase(g: Gen, pid: number, posName: string, sorted: Slot[]
         viol = fe.fit.reasons.map((r) => `בדוחק: ${fitText(r)}`);
       }
       if (!picked) {
-        issues.push(`${posName} ${fmtHM(period[0])}-${fmtHM(period[1])} מושב ${k}: לא אויש`);
-        continue;
+        // a flex position's seats above the minimum are a bonus, not an error
+        // (a pure static grid has no flex_seats, so a hole is always reported)
+        if (flexMin === undefined || picks.length < flexMin) {
+          issues.push(`${posName} ${fmtHM(period[0])}-${fmtHM(period[1])} מושב ${picks.length + 1}: לא אויש`);
+        }
+        break;   // no candidate for this seat — the rest stay empty too
       }
       taken.add(picked.soldier.id);
       picks.push({ st: picked, pickedFrom, viol, groupNights, groupLoads });

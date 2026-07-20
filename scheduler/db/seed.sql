@@ -12,7 +12,7 @@ insert into positions (id, name, mission_class, is_scheduled, config) values
   -- סיור: flex 3-4 seats per shift (shrinks to 3 only on soldier shortage);
   -- every crew must include a נהג דוד (H6d hard driver rule)
   ( 1, 'סיור',        'dynamic',   true,  '{"flex_seats":{"min":3,"max":4},"driver_qual":"נהג דוד"}'),
-  ( 2, 'עמדות הגנה',  'static',    true,  '{}'),
+  ( 2, 'עמדות הגנה',  'static',    true,  '{"on_call":true}'),
   -- מגן: flex 10-12 — absorbs surplus soldiers (everyone works, no מנוחה).
   -- no_rest_floor: the crew is scheduled internally by the מגן officer, so a
   -- soldier may join with no rest at all (owner 2026-07-19).
@@ -22,7 +22,7 @@ insert into positions (id, name, mission_class, is_scheduled, config) values
   -- Explicit full_rest_after (NOT daily): readiness class, not a yomi duty.
   -- Crew must include a נהג טיגריס (H6d); group_size 4 = two groups of
   -- (1 commander + 3), each preferably from one מחלקה (P5 soft).
-  ( 4, 'התקפי',       'readiness', true,  '{"full_rest_after":true,"driver_qual":"נהג טיגריס","group_size":4}'),
+  ( 4, 'התקפי',       'readiness', true,  '{"full_rest_after":true,"driver_qual":"נהג טיגריס","group_size":4,"on_call":true}'),
   -- תגבצ: history tombstone (owner decision 2026-07-17) — imported rows
   -- (24/6–16/7) reference it; never scheduled again, no slot templates
   ( 5, 'תגבצ',        'other',     false, '{}'),
