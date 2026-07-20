@@ -419,46 +419,43 @@ Sunday reset.
 
 **Level-1 group cascade** (daily partition — which position for the day).
 Hard constraints H1–H9 filter first (eliminates — P1); the ranked cascade is
-then **exactly these 9 keys, in this order**. The numbering is load-bearing:
+then **exactly these 6 keys, in this order**. The numbering is load-bearing:
 the report's decisive-key rationale labels cite these item numbers (e.g.
-`5 — עומס שבועי`):
+`5 — רוטציה מאתמול`):
 
 | # | Key | Window |
 |---|---|---|
-| 1 | R1 quasi-constraint: full 8h rest before the position's **mission start** — applied only for positions anchored to few distinct starts | — |
+| 1 | R1 quasi-constraint: full 8h rest before the mission start — only for a daily duty that requires entry rest (no `no_rest_floor`; in practice **תורנים**). Every other position gets its per-shift rest check in the Level-2 cascade | — |
 | 2 | T5 demotion (תורנים only): anyone with a תורנות this week sorts after everyone without one | current week |
 | 3 | **T3**: on a 2+ static-only-day streak, demoted for another static day (3rd static day sinks) / promoted for a dynamic (streak-breaking) one | streak |
 | 4 | **T6**: on a 2+ on-call-only-day streak (static+readiness only), demoted for another static/readiness day | streak |
-| 5 | **P3** — fewest **weighted mission hours** (readiness hours × low weight, default 0.25), compared in **8-hour buckets** (one duty-day) | current week |
-| 6 | **P4** — rotation vs yesterday: T3 streak-breakers first, then T2 class alternation, then T1 not-same-position (continuity/seat-rule/staff crews exempt) | vs yesterday/streak |
-| 7 | **P4 balance** — fewest times in this position this week | current week |
-| 8 | P3 fine tie-break — exact weighted hours | current week |
-| 9 | **P6** — most rest since last shift (clamped at 48h) | — |
+| 5 | **P4** — rotation vs yesterday: T3 streak-breakers first, then T2 class alternation, then T1 not-same-position (continuity/seat-rule/staff crews exempt) | vs yesterday/streak |
+| 6 | **P4 balance** — fewest times in this position this week (the only position-specific counter in the cascade) | current week |
 
-**Explicitly absent at Level 1**: no P2 nights key, no P4b sub-position key,
-and — since 2026-07-19 — **no P5 role-fit key**: the נהג-טיגריס-for-התקפי
-preference was redundant with the hard H6d driver quota, which pass A (§7
-step 8) already reserves before any ranked fill. The Level-2 slot cascade
-keeps its P5 keys unchanged.
+Nights (P2), sub-post rotation (P4b), role fit (P5), load (P3) and
+accumulated rest (P6) are **Level-2 keys only** — positions are not lighter
+or heavier than each other, so burden considerations play no part in
+choosing WHICH position a soldier gets.
 
 **Level-2 slot cascade** (which concrete shift window/seat inside the group)
-— the full list, including the night and sub-post keys:
+— slot-level keys only; the day-level keys were already decided when the
+soldier joined the group:
 
 | # | Key | Window |
 |---|---|---|
 | 1 | Hard constraints H1–H9 (filter, eliminates — P1) | — |
 | 2 | R1 quasi-constraint: candidates with a full 8h rest before the slot start sort before all others | — |
-| 3 | T5 demotion (תורנים only): anyone with a תורנות this week sorts after everyone without one | current week |
-| 4 | **T3 (above P2)**: on a 2+ static-only-day streak, demoted for another static slot / promoted for a dynamic (streak-breaking) one | streak |
-| 5 | **T6 (above P2)**: on a 2+ on-call-only-day streak (static+readiness only), demoted for another static/readiness slot | streak |
-| 6 | **P4b sub-post rotation (above P2)** — within the same 24h round, a soldier mans a DIFFERENT static post each shift (not שג twice in one day): fewest same-sub assignments today first (non-static positions only; static grids use the two-phase post spread instead, §7 Level 2) | current day |
-| 7 | **P2** — fewest **night assignments** (00–06, incl. today's fresh nights when ranking a night slot). Readiness assignments do **not** count as nights (sleeping assumption, R2) | current week |
-| 8 | **P3** — fewest **weighted mission hours** (readiness hours × low weight, default 0.25), compared in **8-hour buckets** (one duty-day) so small differences don't override rotation | current week |
-| 9 | **P4** — rotation penalty cascade: T3 streak-breakers first, then T2 class alternation, then T1 not-same-position (continuity/seat-rule/staff crews exempt) | vs yesterday/streak |
-| 10 | **P4 balance** — fewest times in this position this week | current week |
-| 11 | **P5 role fit** (ties only, beyond the H6d required driver): נהג טיגריס preferred for the התקפי crew; נהג דוד preferred for a סיור slot overlapping the night window; מ"כ spread (a commander is demoted for a static slot when a commander already mans a static post starting at the same hour) | current crew |
-| 12 | P3 fine tie-break — exact weighted hours | current week |
-| 13 | **P6** — most rest since last shift (clamped at 48h) | — |
+| 3 | **P4b sub-post rotation** — within the same 24h round, a soldier mans a DIFFERENT static post each shift (not שג twice in one day); a CONTIGUOUS same-post pair is one continuous stint, not a repeat (non-static positions only; static grids use the two-phase post spread instead, §7 Level 2) | current day |
+| 4 | **P2** — fewest **night assignments** (00–06, incl. today's fresh nights when ranking a night slot). Readiness assignments do **not** count as nights (sleeping assumption, R2) | current week |
+| 5 | **P3** — fewest **weighted mission hours** (readiness hours × low weight, default 0.25), compared in **8-hour buckets** (one duty-day). The soldier's TOTAL for the week across ALL positions | current week |
+| 6 | **P5 role fit** (ties only, beyond the H6d required driver): נהג טיגריס preferred for the התקפי crew; נהג דוד preferred for a סיור slot overlapping the night window; מ"כ spread (a commander is demoted for a static slot when a commander already mans a static post starting at the same hour) | current crew |
+| 7 | P3 fine tie-break — exact weighted hours | current week |
+| 8 | **P6** — most rest since last shift (clamped at 48h) | — |
+
+**Recruiting a soldier whose day is not yet settled** — pull-from-מנוחה,
+chain completions, replacement-pair halves — additionally applies the
+day-level keys of the group cascade (T5, T3, T6, P4 rotation, P4 balance)
+right after key 2.
 
 **Random pure-tie** (both cascades): when two candidates tie on EVERY cascade
 key, the order between them is **random** — seeded per (day, soldier), so
@@ -471,7 +468,7 @@ rest-before-mission (R1/P6), streak-breaking (T3/T6) and rotation-vs-yesterday
 
 **Decisive-key rationale (Level 1)**: every ranked Level-1 pick records as its
 "why" the FIRST cascade key on which the picked soldier actually beat the
-runner-up — e.g. `הוכרע מול הבא בתור לפי 5 — עומס שבועי: 12.0 שעות לעומת 18.5`,
+runner-up — e.g. `הוכרע מול הבא בתור לפי 5 — רוטציה מאתמול: החלפת עמדה לעומת אותה עמדה כאתמול`,
 where the number is the key's **item number in the Level-1 list above** —
 or an explicit full-tie note when no key differs (the pick then fell to the
 seeded random order). This replaces the old at-or-below-median claim,
@@ -572,13 +569,29 @@ where nights rank), weighted_hours second, per-position counts third.
      pass B then runs the soft fill per position — the התקפי
      **platoon-group fill** (each quota commander anchors a group of 3,
      preferably his own מחלקה), then the ranked fill by the **Level-1 group
-     cascade** (§6.1 — 9 keys; no nights, no sub-post, no role-fit key);
+     cascade** (§6.1 — 6 keys);
      every ranked pick records its **decisive key** vs the runner-up as its
      rationale, labeled with the key's item number in the Level-1 list (§6.1);
   9. **everyone-works absorb**: leftover available soldiers join מגן up to its
      flex max (12) before anyone is allowed to rest;
   10. residual bucketing: מנוחה (reported as a generation issue — every
-      available soldier should work) or בבית (blocked all day).
+      available soldier should work; a partial-day soldier's issue is
+      annotated with his real window, e.g. `זמין רק מ-08:00` for a bus
+      arrival, and a soldier whose day is already covered by pre-existing
+      non-readiness rows — import/manual/locked, e.g. when regenerating over
+      a published day — is not reported at all) or בבית (blocked all day —
+      judged over
+      the soldier's **merged** unavailability intervals: home leave often
+      reaches the DB as several rows meeting mid-day, and requiring a single
+      covering row misclassified such soldiers as available-but-resting and
+      produced bogus נותר-במנוחה warnings; fixed 2026-07-19).
+- **Shortage-warning retraction**: a Level-1 bucket shortage
+  (`X: חסרים N חיילים`) is **retracted after Level 2** when every seat of the
+  position ended covered — replacement pairs (H1) and pull-from-מנוחה can
+  repair a shortfall the head-count pass couldn't see (e.g. תורנים on a
+  mass-exchange day, each seat manned by a departing+arriving pair). Quota
+  shortages (`חסרים N מפקדים/נהגים`) are never retracted — a covered seat may
+  still be manned by a fallback non-commander/non-driver.
 - **Level 2**: fill concrete slots inside each position by the **Level-2 slot
   cascade** (§6.1 — the full list incl. P2 nights and P4b): hours, seats, night
   rotation within group by night_count, commander first-seat, then the H6d
@@ -610,13 +623,25 @@ where nights rank), weighted_hours second, per-position counts third.
   in his Level-1 position packed
   **outside his exit window**, up to the daily cap (normally 8h = two
   shifts), scored lexicographically — most hours, then fewest rest
-  violations (a fully rest-legal pair beats a בדוחק one), then fewest short
-  rests, then distinct sub-positions (P4b), then avoiding a night on a
+  violations (a fully rest-legal pair beats a בדוחק one; gaps fold the R5
+  duty-rest exemption), then fewest short rests, then sub-positions —
+  **distinct posts for separated shifts (P4b), the SAME post for a
+  back-to-back pair** (one continuous stint) — then avoiding a night on a
   2-night streak, then earliest start. The winning pair may be fully
-  back-to-back (R7 `exit_rest` בדוחק) — other soldiers' rest is never
-  relaxed for it. Rationale `exit_packed` (+ `caveat_exit_rest` when
-  relaxed); partial packing raises a generation issue. The general fill sees
-  the pre-assigned seats as taken.
+  back-to-back (R7 `exit_rest` בדוחק) only when the exit window leaves no
+  spaced combination — other soldiers' rest is never relaxed for it.
+  Rationale `exit_packed` (+ `caveat_exit_rest` when relaxed); partial
+  packing raises a generation issue. The general fill sees the pre-assigned
+  seats as taken.
+- **Short-rest repair** (post-fill, before the same-day chains): a gap under
+  the 8h ideal between two of a soldier's same-day shifts is acceptable only
+  when unavoidable. The repair trades a short-rested shift for another
+  soldier's seat in the same position when the trade leaves both soldiers
+  fully legal (floor, overlaps, sub repeats) and strictly reduces the day's
+  short-gap count. Only plain auto seats move — commander seats, seat-rule /
+  staff / driver-qual / daily positions and exit-day soldiers are untouched.
+  Swapped rows carry rationale `rest_repair`; remaining short gaps are
+  genuinely unavoidable.
 - **Chain ordering**: T4 rules whose source crew descended on a *previous* day
   (`source_day_offset < 0`) are fully determined by yesterday's persisted rows,
   so they are applied **before Level 1** — the standby row is reserved (H3/H3b)

@@ -11,7 +11,7 @@ import { RationaleEntry } from '../src/rationale.js';
 
 const D1 = '2026-08-01', D2 = '2026-08-02', D3 = '2026-08-03';
 const D4 = '2026-08-04', D5 = '2026-08-05', D6 = '2026-08-06';
-const D7 = '2026-08-07', D8 = '2026-08-08';
+const D7 = '2026-08-07', D8 = '2026-08-08', D9 = '2026-08-10';
 const F1 = '2026-08-20';   // validator-only day, never generated
 
 const SHIFT_POSITIONS = ['סיור', 'עמדות הגנה'];
@@ -27,11 +27,12 @@ async function addExit(name: string, day: string, fromH: number, toH: number): P
 }
 
 const dayRows = (sid: number, day: string) => query<{
-  name: string; lo: string; hi: string; mission_class: string;
+  name: string; sub: string | null; lo: string; hi: string; mission_class: string;
   violations: string[]; rationale: RationaleEntry[];
-}>(`select p.name, lower(sa.period)::text lo, upper(sa.period)::text hi, p.mission_class,
-           sa.violations, sa.rationale
+}>(`select p.name, sp.name sub, lower(sa.period)::text lo, upper(sa.period)::text hi,
+           p.mission_class, sa.violations, sa.rationale
     from shift_assignments sa join positions p on p.id = sa.position_id
+    left join sub_positions sp on sp.id = sa.sub_position_id
     where sa.soldier_id = $1 and sa.day = $2 order by lower(sa.period)`, [sid, day]);
 
 before(async () => {
@@ -109,14 +110,35 @@ test('16h exit: back-to-back shifts allowed for the exit soldier (R7, בדוחק
   const rows = await dayRows(sid, D5);
   assert.equal(rows.length, 2, JSON.stringify(rows));
   assert.ok(rows[0].hi === rows[1].lo, `not back-to-back: ${rows[0].hi} → ${rows[1].lo}`);
+  // an unavoidable back-to-back pair is ONE continuous stint — same post
+  assert.equal(rows[0].sub, rows[1].sub,
+    `back-to-back pair must keep one post: ${rows[0].sub} → ${rows[1].sub}`);
   assert.ok(rows[1].violations.some((v) => v.includes('בדוחק')), JSON.stringify(rows[1].violations));
   assert.ok(rows[1].rationale.some((e) => e.code === 'caveat_exit_rest'), 'caveat_exit_rest');
+  // the continuous stint is not a sub-rotation violation
+  const subRot = (await validateDay(D5)).filter((f) => f.rule === 'sub_rotation'
+    && Number(f.soldierId) === Number(sid));
+  assert.deepEqual(subRot, [], 'contiguous same-post stint flagged as sub repeat');
 
   const findings = await validateDay(D5);
   assert.deepEqual(findings.filter((f) => f.rule === 'rest' && f.soldierId === sid
     && f.severity === 'error'), [], 'no hard rest error for the exit soldier');
   assert.ok(findings.some((f) => f.rule === 'exit_rest' && f.soldierId === sid),
     'exit_rest warning present');
+});
+
+test('8h exit: shifts are packed SPACED (≥8h apart) when the window allows', async () => {
+  // exit 22:00→06:00 leaves 14-18/18-22 + 06-10/10-14: a spaced pair exists,
+  // so back-to-back is not allowed to win (owner 2026-07-20)
+  const sid = await soldierId('חייל 34');
+  await setAllowedPositions('חייל 34', ['עמדות הגנה']);
+  await addExit('חייל 34', D9, 8, 16);
+  await persist(await generate(D9));
+
+  const rows = await dayRows(sid, D9);
+  assert.equal(rows.length, 2, JSON.stringify(rows));
+  const gapH = (new Date(rows[1].lo).getTime() - new Date(rows[0].hi).getTime()) / 3600000;
+  assert.ok(gapH >= 8, `packed pair only ${gapH}h apart: ${JSON.stringify(rows.map((r) => [r.lo, r.hi]))}`);
 });
 
 test('14:00 start right after a 14:00 end across the rotation boundary', async () => {

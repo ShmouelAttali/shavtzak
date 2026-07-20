@@ -32,6 +32,7 @@ export type RationaleCode =
   | 'chain_min_tracker'     // chain pick rule: minimum tracker hours
   | 'chain_commander'       // chain commander slot: commander in crew / highest rifle
   | 'chain_completion'      // chain crew short (source went home) — completed fresh
+  | 'rest_repair'           // post-fill swap that removed a short intra-day rest
   | 'magen_commander'       // the weekly מגן commander decision (magen_commander_history)
   | 'candidate_pool'        // H6-pool: reserved first from the position's fixed candidate list
   | 'driver_quota'          // picked in the position's Level-1 driver quota
@@ -72,7 +73,7 @@ export const TEMPLATES: Record<RationaleCode, string> = {
   fewest_nights: 'מהמעוטים בלילות בקבוצה: {nights} לילות השבוע (חציון הקבוצה: {median})',
   low_load: 'עומס שבועי נמוך בקבוצה: {hours} שעות משוקללות (חציון הקבוצה: {median})',
   position_balance: 'שירת בעמדה זו הכי מעט פעמים בקבוצה: {count} פעמים (חציון הקבוצה: {median})',
-  fairness_pick: 'נבחר לפי סדר העדיפויות: מנוחה מלאה → שבירת רצפים → עומס שבועי → רוטציה מאתמול → איזון עמדות (שוויון מלא מול הבא בתור — הסדר ביניהם אקראי)',
+  fairness_pick: 'שוויון מלא בכל שיקולי העדיפות מול הבא בתור (או שלא נותר מועמד להשוואה) — הסדר הוכרע אקראית, קבוע לאותו יום',
   decisive_key: 'הוכרע מול הבא בתור לפי {dim}: {mine} לעומת {next}',
   sub_spread: 'שובץ ל{sub} — פיזור אחיד בין העמדות ביממה (לא חוזר על אותה עמדה)',
   commander_seat: 'מושב מפקד — נדרש מפקד למשמרת זו',
@@ -83,6 +84,7 @@ export const TEMPLATES: Record<RationaleCode, string> = {
   chain_min_tracker: 'נבחר מהצוות היורד עם מינימום שעות גשש',
   chain_commander: 'מפקד הכונן — מפקד מהצוות, או הרובאי הבכיר באין מפקד',
   chain_completion: 'השלמה לכוננות: הצוות שירד מ{source} יצא/חסר — נבחר חייל זמין (עדיפות למי שחזר לבסיס)',
+  rest_repair: 'הוחלף בתיקון המנוחות עם {partner} — במקום משמרת {was} (מנוחה קצרה)',
   magen_commander: 'מפקד המגן שנקבע לשבוע — מוביל את צוות המגן',
   candidate_pool: 'שובץ מהרשימה הקבועה של {position} — התפקיד מתחלף בין חברי הרשימה לפי ההוגנות',
   driver_quota: 'שובץ במכסת הנהגים של {position} (נדרש {qual})',

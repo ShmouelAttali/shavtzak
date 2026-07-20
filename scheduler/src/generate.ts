@@ -12,9 +12,11 @@
 import { loadContext } from './load.js';
 import { GenerateResult, ReportMeta } from './model.js';
 import { buildGen, fullyBlocked, Gen } from './state.js';
-import { runLevel1, demand, Level1Plan } from './level1.js';
-import { fillLevel2 } from './level2.js';
+import { runLevel1, reserveSeatCandidates, demand, Level1Plan } from './level1.js';
+import { fillLevel2, repairShortRests } from './level2.js';
 import { runChain } from './chains.js';
+import { partialWindow } from './pairs.js';
+import { fmtHM, overlaps } from './time.js';
 
 // Re-exported so cli.ts / api/draft.ts keep importing { generate, persist };
 // trackerPickOrder is re-exported for its unit tests.
@@ -116,6 +118,23 @@ function buildReportMeta(g: Gen, plan: Level1Plan, seatsBefore: Map<number, numb
   };
 }
 
+/** Retract Level-1 bucket shortages ("X: חסרים N חיילים") that Level 2 fully
+ *  repaired — replacement pairs / pull-from-מנוחה can cover every seat of a
+ *  position whose Level-1 head-count came up short (e.g. תורנים on a
+ *  mass-exchange day: each seat is manned by a departing+arriving pair). A
+ *  bucket warning that contradicts a fully-covered grid is noise (owner
+ *  2026-07-19). Quota shortages (מפקדים/נהגים) are NOT retracted — a covered
+ *  seat may still be manned by a non-commander/non-driver fallback. */
+export function retractCoveredShortages(issues: string[]): string[] {
+  const short = /^(.+?): חסרים \d+ חיילים$/;
+  return issues.filter((i) => {
+    const m = i.match(short);
+    if (!m) return true;
+    // keep the shortage only while some seat of the position is really empty
+    return issues.some((o) => o.startsWith(`${m[1]} `) && /(לא אויש|חסום)/.test(o));
+  });
+}
+
 export async function generate(day: string): Promise<GenerateResult> {
   const ctx = await loadContext(day);
   const g = buildGen(ctx);
@@ -130,12 +149,15 @@ export async function generate(day: string): Promise<GenerateResult> {
   // position whose windows he can't hold — e.g. the התקפי driver quota must
   // not spend a tiger driver on someone standing by for כרמל). Same-day rules
   // need Level 2's fresh patrol/defense rows and run after it.
+  reserveSeatCandidates(g);   // H6b holds in the pre-Level-1 chains too
   for (const rule of ctx.chainRules.filter((r) => r.sourceDayOffset < 0)) runChain(g, rule);
 
   // Level 1: partition available soldiers into positions + מנוחה
   const plan = runLevel1(g);
   fillLevel2(g, plan);
+  repairShortRests(g);   // before the chains — they source the FINAL crews
   for (const rule of ctx.chainRules.filter((r) => r.sourceDayOffset >= 0)) runChain(g, rule);
+  g.issues = retractCoveredShortages(g.issues);
 
   // Everyone works (owner rule): report every soldier who STILL rests after
   // Level 2 (its pull-from-מנוחה path may have rescued Level-1 leftovers).
@@ -144,9 +166,25 @@ export async function generate(day: string): Promise<GenerateResult> {
   // reserved to their seat) — not a planning failure, so not reported.
   const restId = ctx.positionByName.get('מנוחה');
   if (restId !== undefined) {
+    // chained overlays (כרמל/כונן גשש) are derived standbys, not a day's
+    // position — a soldier whose ONLY row is such a standby still counts as
+    // unassigned; any other pre-existing row is a real position assignment
+    const chainTargets = new Set(ctx.chainRules.map((r) => r.targetPosition));
     for (const st of g.state.values()) {
       if (st.level1 === restId && !g.seatRestrict.has(st.soldier.id)) {
-        g.issues.push(`${st.soldier.name} נותר במנוחה — כל חייל זמין אמור לעבוד`);
+        // pre-existing rows (import/manual/locked — e.g. regenerating over a
+        // published day) already give the soldier real work today: he is not
+        // resting, the fresh partition just couldn't claim him (busyElsewhere)
+        const worksAlready = (ctx.existing.get(st.soldier.id) ?? [])
+          .some((a) => !chainTargets.has(a.positionId) && overlaps(a.period, g.dRange));
+        if (worksAlready) continue;
+        // a partial-day soldier (bus arrival / departure) rests for a
+        // different reason than a full-day one — annotate his real window so
+        // the warning doesn't read like a fully-available soldier was skipped
+        const w = partialWindow(g.ctx.blocked.get(st.soldier.id) ?? [], g.dRange);
+        const avail = w?.kind === 'arriving' ? ` (זמין רק מ-${fmtHM(w.at)})`
+          : w?.kind === 'departing' ? ` (זמין רק עד ${fmtHM(w.at)})` : '';
+        g.issues.push(`${st.soldier.name} נותר במנוחה${avail} — כל חייל זמין אמור לעבוד`);
       }
     }
   }

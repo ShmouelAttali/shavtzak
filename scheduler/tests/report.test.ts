@@ -63,7 +63,7 @@ test('day report: specific fairness badges + tooltips with pick-time numbers', (
   // 3 IDENTICAL fresh candidates for 2 seats: no key separates the pick from
   // the runner-up ⇒ the group picks record fairness_pick (a full tie), and the
   // chip tooltip renders the priority-cascade template
-  assert.ok(dayHtml.includes('נבחר לפי סדר העדיפויות'), 'fairness_pick tooltip missing');
+  assert.ok(dayHtml.includes('שוויון מלא בכל שיקולי העדיפות'), 'fairness_pick tooltip missing');
   // chip tooltip carries the soldier's numbers at pick time
   assert.ok(dayHtml.includes('לילות השבוע:'), 'tooltip numbers missing');
   assert.ok(dayHtml.includes('פעמים בעמדה זו:'), 'tooltip position count missing');
@@ -102,11 +102,42 @@ test('day report: demand fill is split into granular rounds with the cascade', (
   // the general-fill step documents the exact Level-1 GROUP cascade (sort,
   // not score) — nights (P2) and sub rotation moved to the Level-2 cascade
   assert.ok(dayHtml.includes('סדר העדיפויות המלא'), 'cascade details missing');
-  assert.ok(dayHtml.includes('עומס שבועי משוקלל, בדליים של יממת עבודה'), 'P3 cascade item missing');
-  assert.ok(dayHtml.includes('מי שצבר הכי הרבה מנוחה — עד 48 שעות (P6)'), 'P6 cascade item missing');
+  // P3 load removed from the GROUP cascade (owner decision 2026-07-19:
+  // positions are not lighter/heavier) — it survives only in the slot cascade
+  const groupCascade = dayHtml.split('סדר העדיפויות המלא של בחירת הקבוצה')[1]
+    ?.split('</details>')[0] ?? '';
+  assert.ok(groupCascade.length > 0, 'group cascade section missing');
+  const groupList = groupCascade.split('<ol>')[1]?.split('</ol>')[0] ?? '';
+  assert.ok(!groupList.includes('עומס'), 'P3 load key still in the group cascade list');
+  // P6 accumulated rest also removed from the group cascade (owner 2026-07-20,
+  // same burden rationale) — the group list ends at position balance
+  assert.ok(!groupList.includes('מי שצבר הכי הרבה מנוחה'),
+    'P6 accumulated-rest key still in the group cascade list');
+  // R1 at Level 1 applies only to daily duties requiring entry rest (תורנים)
+  assert.ok(groupList.includes('בפועל: תורנים'),
+    'R1 item does not name תורנים as its only Level-1 scope');
+  const slotCascade = dayHtml.split('סדר העדיפויות המלא של בחירת המשמרת ותת-העמדה')[1]
+    ?.split('</details>')[0] ?? '';
+  assert.ok(slotCascade.includes('שעות עומס משוקללות'), 'P3 load key missing from the slot cascade');
+  assert.ok(slotCascade.includes('מי שצבר הכי הרבה מנוחה — עד 48 שעות (P6)'),
+    'P6 cascade item missing from the slot cascade');
   assert.ok(!dayHtml.includes('מיעוט לילות בשבוע האחרון (P2)'), 'old P2 cascade item still present');
-  assert.ok(dayHtml.includes('מוכרעים בתוך הקבוצה בשלב 2'),
-    'note about P2/night-spread deciding inside the group at stage 2 missing');
+  assert.ok(dayHtml.includes('נשקלים בשלב 2'),
+    'note about stage-2-only considerations missing');
+  // two super-titles frame the two phases (position-group assignment vs
+  // shift fill inside each group)
+  assert.ok(dayHtml.includes('phase-head'), 'phase super-title styling missing');
+  assert.ok(dayHtml.includes('שלב א׳ — לאיזו עמדה משתייך כל חייל'),
+    'phase-1 super-title (position-group assignment) missing');
+  assert.ok(dayHtml.includes('שלב ב׳ — איוש המשמרות בתוך כל עמדה'),
+    'phase-2 super-title (shift fill inside the group) missing');
+  // phase 2 documents the Level-2 SLOT cascade (which shift + sub-position),
+  // where P2 nights / P4b sub-rotation first enter — not only the Level-1 group
+  // cascade
+  assert.ok(dayHtml.includes('סדר העדיפויות המלא של בחירת המשמרת ותת-העמדה'),
+    'Level-2 slot cascade missing from phase 2');
+  assert.ok(dayHtml.includes('רוטציית תת-עמדה'), 'P4b sub-rotation cascade item missing');
+  assert.ok(dayHtml.includes('פיזור לילות'), 'P2 night-spread cascade item missing');
 });
 
 test('day report: quota chips carry the pick + why, and leave the general step', () => {
@@ -146,6 +177,68 @@ test('day report: quota chips carry the pick + why, and leave the general step',
   const genStep = html.split('סבב ב׳: מילוי הוגנות כללי')[1]?.split('</details>')[0] ?? '';
   assert.ok(genStep.includes('חייל הוגנות'), 'fairness pick missing from the general step');
   assert.ok(!genStep.includes('מפקד מכסה'), 'quota soldier leaked into the general step');
+});
+
+test('day report: step-12 chips follow the exact pick order (stamped seq)', () => {
+  const input: DayReportInput = {
+    day: D, generatedAt: 'עכשיו', dryRun: true,
+    soldiers: [1, 2, 3].map((id) => ({
+      id, name: `חייל ${id}`, platoon: '1', role: 'לוחם',
+      nights7d: 0, weightedHours7d: 0, positionCounts: {}, allowedPositions: null,
+    })),
+    positions: [{
+      id: 5, name: 'סיור', missionClass: 'dynamic',
+      daily: false, chainOverlay: false, staffAllRoles: false,
+    }],
+    blocked: {}, exits: {}, locks: [], pools: [], seatReserved: [],
+    level1: { 1: 5, 2: 5, 3: 5 },
+    // pick order was 3 → 1 → 2, opposite of soldier-id order
+    level1Rationale: {
+      1: [{ code: 'fairness_pick', params: { seq: 2 } }],
+      2: [{ code: 'fairness_pick', params: { seq: 3 } }],
+      3: [{ code: 'fairness_pick', params: { seq: 1 } }],
+    },
+    demand: { 5: 3 }, demandBefore: { 5: 3 },
+    flex: [], assignments: [], issues: [], findings: [],
+  };
+  const html = buildDayReportHtml(input);
+  const step = html.split('סבב ב׳: מילוי הוגנות כללי')[1]?.split('</details>')[0] ?? '';
+  const order = ['חייל 3', 'חייל 1', 'חייל 2'].map((n) => step.indexOf(n));
+  assert.ok(order.every((i) => i >= 0), 'not all picks rendered in the general step');
+  assert.ok(order[0] < order[1] && order[1] < order[2],
+    `chips not in pick order (indices ${order.join(',')})`);
+});
+
+test('day report: platoon-crew step names the position the soldier joins', () => {
+  const input: DayReportInput = {
+    day: D, generatedAt: 'עכשיו', dryRun: true,
+    soldiers: [
+      { id: 1, name: 'חבר התקפי', platoon: '1', role: 'לוחם',
+        nights7d: 0, weightedHours7d: 0, positionCounts: {}, allowedPositions: null },
+      { id: 2, name: 'חבר מגן', platoon: '2', role: 'לוחם',
+        nights7d: 0, weightedHours7d: 0, positionCounts: {}, allowedPositions: null },
+    ],
+    positions: [
+      { id: 4, name: 'התקפי', missionClass: 'readiness',
+        daily: false, chainOverlay: false, staffAllRoles: false },
+      { id: 3, name: 'מגן', missionClass: 'other',
+        daily: true, chainOverlay: false, staffAllRoles: false },
+    ],
+    blocked: {}, exits: {}, locks: [], pools: [], seatReserved: [],
+    level1: { 1: 4, 2: 3 },
+    level1Rationale: {
+      1: [{ code: 'platoon_group', params: {} }],
+      2: [{ code: 'platoon_group', params: {} }],
+    },
+    demand: { 4: 1, 3: 1 }, demandBefore: { 4: 1, 3: 1 },
+    flex: [], assignments: [], issues: [], findings: [],
+  };
+  const html = buildDayReportHtml(input);
+  const step = html.split('סבב ב׳: צוותים מחלקתיים')[1]?.split('</details>')[0] ?? '';
+  assert.ok(step.includes('חבר התקפי') && /התקפי:/.test(step),
+    'platoon chip does not name the התקפי position');
+  assert.ok(step.includes('חבר מגן') && /מגן:/.test(step),
+    'platoon chip does not name the מגן position');
 });
 
 test('day report: flex-step totals match the balance table (staff crews at actual size)', () => {
@@ -218,7 +311,7 @@ test('day report: generic chip tooltip explains the priority cascade', () => {
     flex: [], assignments: [], issues: [], findings: [],
   };
   const html = buildDayReportHtml(input);
-  assert.ok(html.includes('נבחר לפי סדר העדיפויות'), 'cascade tooltip missing');
+  assert.ok(html.includes('שוויון מלא בכל שיקולי העדיפות'), 'cascade tooltip missing');
 });
 
 test('day report: decisive_key chip is badged with its dimension in stage 1', () => {
@@ -250,7 +343,7 @@ test('day report: decisive_key chip is badged with its dimension in stage 1', ()
     'decisive_key rendered template missing');
 });
 
-test('week report: cards, sortable fairness table with the three hour columns', () => {
+test('week report: cards, sortable fairness table with the hour + active-days columns', () => {
   const html = buildWeekReportHtml({
     from: D, to: '2026-08-11',
     generatedAt: 'עכשיו',
@@ -259,18 +352,20 @@ test('week report: cards, sortable fairness table with the three hour columns', 
       { day: '2026-08-11', file: '2026-08-11.html', errors: 0, warnings: 0, shortages: [] },
     ],
     fairness: [
-      { name: 'זמין <ראשון> "מצוטט"', platoon: '1', role: 'לוחם', nightHours: 6, hatkafiHours: 0, totalHours: 16 },
-      { name: 'זמין שני', platoon: '2', role: 'מ"כ', nightHours: 0, hatkafiHours: 24, totalHours: 8 },
+      { name: 'זמין <ראשון> "מצוטט"', platoon: '1', role: 'לוחם', nightHours: 6, hatkafiHours: 0, positionHours: 16, totalHours: 16, activeDays: 3 },
+      { name: 'זמין שני', platoon: '2', role: 'מ"כ', nightHours: 0, hatkafiHours: 24, positionHours: 0, totalHours: 8, activeDays: 1 },
     ],
   });
   assert.ok(html.includes('dir="rtl"'));
   assert.ok(html.includes(`href="${D}.html"`), 'day link missing');
   assert.ok(html.includes('שגיאות: 1'), 'error chip missing');
   assert.ok(html.includes('תורנים: חסרים 1 חיילים'), 'shortage bullet missing');
-  // exactly the owner's three metric columns (no shifts / nights-count / days)
+  // the owner's metric columns (three hour columns + active-days count)
   assert.ok(html.includes('שעות לילה'), 'night-hours column missing');
   assert.ok(html.includes('שעות התקפי'), 'hatkafi-hours column missing');
+  assert.ok(html.includes('שעות עמדה'), 'position-hours column missing');
   assert.ok(html.includes('סה"כ שעות'), 'total-hours column missing');
+  assert.ok(html.includes('ימי פעילות'), 'active-days column missing');
   assert.ok(!html.includes('<th>משמרות</th>'), 'old shifts column still present');
   // sortable headers + pinned stats footer
   assert.ok(html.includes('table class="sortable"'), 'sortable table class missing');

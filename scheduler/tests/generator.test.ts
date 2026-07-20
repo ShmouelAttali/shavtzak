@@ -142,16 +142,20 @@ test('regeneration is stable (same row count)', async () => {
   assert.equal(Number(n2[0].n), Number(n1[0].n));
 });
 
-test('מגן continuity: same crew on consecutive days, all one platoon', async () => {
+test('מגן continuity: same crew on consecutive days, one-platoon core', async () => {
   const crews = await query(`
     select da.day::text, array_agg(da.soldier_id order by da.soldier_id) crew,
-           count(distinct s.platoon) platoons
-    from day_assignments da join soldiers s on s.id = da.soldier_id
-    where da.position_id = (select id from positions where name = 'מגן')
-      and da.day in ($1, $2) group by da.day order by da.day`, [D2, D3]);
+           max(cnt) core
+    from (select da.*, count(*) over (partition by da.day, s.platoon) cnt
+          from day_assignments da join soldiers s on s.id = da.soldier_id
+          where da.position_id = (select id from positions where name = 'מגן')
+            and da.day in ($1, $2)) da
+    group by da.day order by da.day`, [D2, D3]);
   assert.equal(crews.length, 2);
   assert.deepEqual(crews[0].crew, crews[1].crew, 'crew must repeat (continuity)');
-  for (const c of crews) assert.equal(Number(c.platoons), 1, 'crew must be one platoon');
+  // one-platoon rule holds for the core (flex min 10); leftovers absorbed
+  // above the min may be any platoon
+  for (const c of crews) assert.ok(Number(c.core) >= 10, `core only ${c.core}`);
 });
 
 test('תורנים and קצין מוצב run the full schedule day (14:00→14:00)', async () => {
@@ -182,7 +186,18 @@ test('seat override enlarges the crew beyond flex max, continuity keeps existing
              where y.day = $2 and y.soldier_id = da.soldier_id and y.position_id = ${magen})) kept
     from day_assignments da where da.day = $1 and da.position_id = ${magen}`, [D4, D3]);
   assert.equal(Number(rows[0].total), 14);
-  assert.equal(Number(rows[0].kept), 12, 'the full D3 crew (flex-max 12) must return');
+  // continuity keeps every returning D3 crew member EXCEPT those claimed by
+  // the closed-list pre-pass, which staffs BEFORE continuity by design (a
+  // pool member may rotate onto קצין מוצב off the returning crew)
+  const stolen = await query(`
+    select count(*) n from day_assignments da
+    join positions p on p.id = da.position_id
+    where da.day = $1 and p.config ? 'candidate_pool'
+      and exists (select 1 from day_assignments y
+        where y.day = $2 and y.soldier_id = da.soldier_id and y.position_id = ${magen})`,
+    [D4, D3]);
+  assert.equal(Number(rows[0].kept) + Number(stolen[0].n), 12,
+    'every D3 crew member must return unless the closed-list pre-pass took him');
   await query(`delete from seat_overrides where note = 'test'`);
   await query(`delete from shift_assignments where day = $1`, [D4]);
   await query(`delete from day_assignments where day = $1`, [D4]);

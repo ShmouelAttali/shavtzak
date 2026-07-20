@@ -61,7 +61,10 @@ test('magen_commander_history: the decided soldier anchors the מגן crew and i
   const cmd = crew.find((r) => r.full_name === 'חייל 35');
   assert.ok(cmd, 'the configured commander must be in the מגן crew');
   assert.ok(cmd!.rationale.some((e) => e.code === 'magen_commander'), JSON.stringify(cmd!.rationale));
-  // same_platoon anchors on the commander's platoon ('3': 35 % 3 = 2 → '3')
+  // same_platoon anchors on the commander's platoon ('3': 35 % 3 = 2 → '3');
+  // the one-platoon rule holds for the CORE (flex min 10) — leftovers absorbed
+  // above the min may be any platoon (mixed above min is routine)
   assert.equal(cmd!.platoon, '3');
-  for (const r of crew) assert.equal(r.platoon, '3', `${r.full_name} not from the commander's platoon`);
+  const anchored = crew.filter((r) => r.platoon === '3').length;
+  assert.ok(anchored >= 10, `only ${anchored}/12 from the commander's platoon`);
 });

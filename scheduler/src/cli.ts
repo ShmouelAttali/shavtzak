@@ -35,13 +35,17 @@ function printFindings(findings: Finding[]) {
  *  שעות לילה = overlap of counted rows (non-readiness, non-night_exempt —
  *  soldier_fairness's night classification) with each day's 00:00–06:00;
  *  שעות התקפי = raw hours on התקפי rows (a standing day = 24h);
- *  סה"כ שעות = counted mission hours, per-row cap at daily_cap_hours.
+ *  שעות עמדה = raw hours on עמדה rows (סיור dynamic + עמדות הגנה static);
+ *  סה"כ שעות = counted mission hours, per-row cap at daily_cap_hours;
+ *  ימי פעילות = distinct schedule-days in the range with any non-rest
+ *  assignment for the soldier.
  *  Soldiers home the ENTIRE range (unavailability covering every evening,
  *  like api/fairness's days-on-base logic) are dropped from the table. */
 async function weekFairness(from: string, to: string): Promise<WeekFairnessRow[]> {
   const rows = await query<{
     name: string; platoon: string; role: string;
-    night_hours: number; hatkafi_hours: number; total_hours: number;
+    night_hours: number; hatkafi_hours: number; position_hours: number;
+    total_hours: number; active_days: number;
   }>(`
     with days as (select generate_series($1::date, $2::date, '1 day')::date dd),
     cap as (select coalesce((select (value #>> '{}')::numeric from config
@@ -65,8 +69,11 @@ async function weekFairness(from: string, to: string): Promise<WeekFairnessRow[]
         filter (where r.period && night_range(r.day)
           and r.mission_class <> 'readiness' and not r.night_exempt), 0)::float night_hours,
       coalesce(sum(hours(r.period)) filter (where r.pos_name = 'התקפי'), 0)::float hatkafi_hours,
+      coalesce(sum(hours(r.period))
+        filter (where r.mission_class in ('dynamic', 'static')), 0)::float position_hours,
       coalesce(sum(least(hours(r.period), cap.h))
-        filter (where r.mission_class <> 'readiness'), 0)::float total_hours
+        filter (where r.mission_class <> 'readiness'), 0)::float total_hours,
+      count(distinct r.day)::int active_days
     from b cross join cap
     left join r on r.soldier_id = b.id
     where b.days_present > 0
@@ -74,7 +81,9 @@ async function weekFairness(from: string, to: string): Promise<WeekFairnessRow[]
     order by total_hours desc, name`, [from, to]);
   return rows.map((r) => ({
     name: r.name, platoon: r.platoon, role: r.role,
-    nightHours: r.night_hours, hatkafiHours: r.hatkafi_hours, totalHours: r.total_hours,
+    nightHours: r.night_hours, hatkafiHours: r.hatkafi_hours,
+    positionHours: r.position_hours, totalHours: r.total_hours,
+    activeDays: r.active_days,
   }));
 }
 

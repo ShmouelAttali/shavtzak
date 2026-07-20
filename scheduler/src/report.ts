@@ -110,9 +110,15 @@ export interface WeekFairnessRow {
   /** raw hours on התקפי rows in the range (a standing day = 24h — measures
    *  on-call burden) */
   hatkafiHours: number;
+  /** raw hours on עמדה rows in the range — סיור (dynamic) + עמדות הגנה
+   *  static posts (measures the guard/patrol burden) */
+  positionHours: number;
   /** counted mission hours over the range (per-row cap at daily_cap_hours,
    *  readiness excluded — like soldier_fairness mission_hours) */
   totalHours: number;
+  /** distinct schedule-days in the range with at least one non-rest
+   *  assignment for this soldier */
+  activeDays: number;
 }
 
 export interface WeekReportInput {
@@ -223,13 +229,13 @@ const L1_BADGE: Partial<Record<RationaleCode, string>> = {
   fewest_nights: 'מעט לילות',
   low_load: 'עומס נמוך',
   position_balance: 'איזון עמדות',
-  fairness_pick: 'הוגנות',
+  fairness_pick: 'שוויון מלא',
 };
 
 /** Badge text for a Level-1 entry — a decisive_key pick is badged with the
  *  dimension that beat the runner-up (params.dim, Hebrew). */
 const l1BadgeText = (e: RationaleEntry): string =>
-  e.code === 'decisive_key' ? String(e.params?.dim ?? 'הוגנות') : (L1_BADGE[e.code] ?? 'הוגנות');
+  e.code === 'decisive_key' ? String(e.params?.dim ?? 'שוויון מלא') : (L1_BADGE[e.code] ?? 'שוויון מלא');
 
 /** Level-2 fill order (SPEC §7) — report sections follow it. */
 const FILL_ORDER = ['קצין מוצב', 'סיור', 'התקפי', 'מגן', 'עמדות הגנה', 'חפק', 'תורנים'];
@@ -317,6 +323,11 @@ const CSS = `
   .pl-m { color: #7e22ce; }   /* מפל"ג — text-purple-700 */
   .pl-h { color: #3b82f6; }   /* חמ"ל — text-blue-500 */
   .cmd-name { font-weight: 700; }
+  .phase-head { margin: 20px 0 4px; padding: 8px 12px; border-radius: 8px;
+                background: #eef2f7; border-inline-start: 4px solid #2f5586; }
+  .phase-head:first-child { margin-top: 6px; }
+  .phase-head h3 { margin: 0; font-size: 1.02rem; color: #2f5586; }
+  .phase-head .sub { margin: 4px 0 0; }
   details.step { margin: 10px 0; border: 1px solid #e5e9ee; border-radius: 8px;
                  padding: 8px 14px; background: #fbfcfd; }
   details.step[open] { background: #fff; }
@@ -517,7 +528,7 @@ ${balanceRows.map((r) => `      <tr><td>${esc(r.name)}</td><td>${r.need}</td><td
       .map(({ sid }) => {
         if (isSpecial) return `<span class="soldier">${nameHtml(sid)}</span>`;
         const e = l1BadgeEntry(sid);
-        const badge = e ? l1BadgeText(e) : 'הוגנות';
+        const badge = e ? l1BadgeText(e) : 'שוויון מלא';
         return `<span class="soldier" title="${escTitle(chipTitle(sid, pid))}">` +
           `${nameHtml(sid)} <span class="badge">${esc(badge)}</span></span>`;
       })
@@ -977,26 +988,45 @@ function buildProcessSection(input: DayReportInput, h: NameHelpers): string {
   // pass B general ranked fill.
   const FAIR_CODES = new Set<RationaleCode>(
     ['fewest_nights', 'low_load', 'position_balance', 'fairness_pick', 'decisive_key']);
+  // pick-order sort key (level1's stamped seq): chips are listed in the EXACT
+  // order the code took the picks; entries without a seq (older drafts) keep
+  // a stable fallback order
+  const seqOf = (e: RationaleEntry | undefined): number =>
+    typeof e?.params?.seq === 'number' ? (e.params.seq as number) : Infinity;
   // quota chip: the quota entry + the comparative fairness fact recorded at
   // pick time (why THIS commander/driver over the other eligible ones)
   const quotaChips = (code: RationaleCode): string[] => {
-    const out: string[] = [];
+    const out: { seq: number; html: string }[] = [];
     for (const [sid, rat] of Object.entries(input.level1Rationale)) {
       const i = rat.findIndex((e) => e.code === code);
       if (i < 0) continue;
       const why = [rat[i], ...(rat[i + 1] && FAIR_CODES.has(rat[i + 1].code) ? [rat[i + 1]] : [])];
       const text = why.map(renderRationale).join(' · ');
-      out.push(`<span class="soldier" title="${escTitle(text)}">${nameHtml(sid)}` +
-        ` <span class="why">${esc(text)}</span></span>`);
+      out.push({ seq: seqOf(rat[i]), html:
+        `<span class="soldier" title="${escTitle(text)}">${nameHtml(sid)}` +
+        ` <span class="why">${esc(text)}</span></span>` });
     }
-    return out;
+    return out.sort((a, b) => a.seq - b.seq).map((c) => c.html);
   };
   const cmdQuotaChips = quotaChips('commander_quota');
   const drvQuotaChips = quotaChips('driver_quota');
   const quotaSids = new Set(Object.entries(input.level1Rationale)
     .filter(([, rat]) => rat.some((e) => e.code === 'commander_quota' || e.code === 'driver_quota'))
     .map(([sid]) => sid));
-  const platoonChips = l1Chips(['platoon_group']);
+  // step 11 chips NAME the position the soldier is joining (התקפי/מגן), so the
+  // platoon-crew round reads like the general fill round below it
+  const platoonChips = (() => {
+    const seen = new Set<string>();
+    const out: { seq: number; html: string }[] = [];
+    for (const { sid, entry } of l1Occ) {
+      if (entry.code !== 'platoon_group' || seen.has(sid)) continue;
+      seen.add(sid);
+      out.push({ seq: seqOf(entry), html:
+        `<span class="soldier" title="${escTitle(renderRationale(entry))}">${nameHtml(sid)}` +
+        ` <span class="why">${esc(posName(input.level1[sid]))}: ${esc(renderRationale(entry))}</span></span>` });
+    }
+    return out.sort((a, b) => a.seq - b.seq).map((c) => c.html);
+  })();
   const fairKeyChips = (() => {
     const seen = new Set<string>();
     const picks: { sid: string; entry: RationaleEntry; pid: number }[] = [];
@@ -1005,9 +1035,11 @@ function buildProcessSection(input: DayReportInput, h: NameHelpers): string {
       seen.add(sid);
       picks.push({ sid, entry, pid: input.level1[sid] });
     }
-    // chips follow the generator's FILL ORDER (owner request): the position
-    // filled first shows its soldiers first
-    picks.sort((a, b) => orderIndex(posName(a.pid)) - orderIndex(posName(b.pid)));
+    // chips follow the EXACT pick order of the code (owner request 2026-07-19,
+    // level1's stamped seq); drafts predating the stamp fall back to the
+    // position fill order
+    picks.sort((a, b) => seqOf(a.entry) - seqOf(b.entry)
+      || orderIndex(posName(a.pid)) - orderIndex(posName(b.pid)));
     return picks.map(({ sid, entry, pid }) =>
       `<span class="soldier" title="${escTitle(renderRationale(entry))}">${nameHtml(sid)}` +
       ` <span class="why">${esc(posName(pid))}: ${esc(l1BadgeText(entry))}</span></span>`);
@@ -1023,22 +1055,40 @@ function buildProcessSection(input: DayReportInput, h: NameHelpers): string {
   // NB: item numbers MUST match rank.ts's groupKey/GROUP_DIMS order — the
   // decisive_key labels cite them (e.g. "5 — עומס שבועי").
   const CASCADE = [
-    'מנוחה מלאה לפני תחילת המשימה — מי שנח פחות מ-8 שעות נדחק לסוף (בעמדות עם מעט תחילות משמרת) (R1)',
+    'מנוחה מלאה לפני תחילת המשימה — רק בעמדה יומית שדורשת מנוחה לפני הכניסה (בפועל: תורנים); מי שלא ינוח 8 שעות עד 14:00 נדחק לסוף (R1)',
     'תורנות השבוע — רק בעמדת תורנים: מי שכבר עשה תורנות השבוע נדחק (T5)',
     'שבירת רצף סטטי — יום סטטי שלישי ברצף נדחק; משימה דינמית לשובר הרצף מקודמת (T3)',
     'רצף כוננות — יום שלישי ברצף של סטטי/כוננות בלבד נדחק (T6)',
-    'עומס שבועי משוקלל, בדליים של יממת עבודה — הבדל קטן משעות היממה אינו מכריע (P3)',
     'רוטציה מאתמול — עדיפות למי שמחליף עמדה או סוג משימה (T1–T2 / P4)',
     'איזון עמדות — מי ששירת בעמדה זו הכי מעט פעמים השבוע (P4)',
-    'העומס השבועי המדויק (P3)',
-    'מי שצבר הכי הרבה מנוחה — עד 48 שעות (P6)',
   ];
   const cascadeLine =
     `<details class="inner"><summary>סדר העדיפויות המלא של בחירת הקבוצה (מיון מדורג — לא ניקוד)</summary>` +
     `<ol>${CASCADE.map((c) => `<li>${esc(c)}</li>`).join('')}</ol>` +
     `<div class="sub">ההוגנות נמדדת בתוך השבוע הנוכחי בלבד — המונים מתאפסים ביום ראשון. ` +
     `שוויון מלא בכל השיקולים מוכרע בסדר אקראי (קבוע לאותו יום). ` +
-    `פיזור הלילות (P2), מרווח בין חלונות המשמרת ורוטציית תתי-העמדות מוכרעים בתוך הקבוצה בשלב 2.</div></details>`;
+    `מנוחה לפני משמרת, פיזור לילות, עומס שעות, מנוחה מצטברת ורוטציית תתי-עמדות — נשקלים בשלב 2.</div></details>`;
+
+  // the Level-2 SLOT cascade (rank() in rank.ts): once a soldier is in a
+  // position group, this decides WHICH shift + sub-position he mans. Same
+  // lexicographic-sort idea as the group cascade, but with the keys that only
+  // exist once a concrete slot is known — R1 per-shift rest, P2 nights, P4b
+  // sub-rotation, P5 role fit + מ"כ spread. Order MUST match rank.ts's key().
+  const SLOT_CASCADE = [
+    'מנוחה מלאה לפני תחילת המשמרת — מי שלא נח 8 שעות עד תחילת המשמרת הקונקרטית נדחק לסופה (R1)',
+    'רוטציית תת-עמדה — באותה יממה לא מאיישים את אותו פוסט פעמיים (למשל לא שג פעמיים ביום) (P4b)',
+    'פיזור לילות — מי שעשה הכי מעט לילות השבוע מקבל את משמרת הלילה (P2)',
+    'מי שצבר השבוע הכי מעט שעות עומס משוקללות — סך כל המשימות בכל העמדות יחד, בדליים של יממת עבודה (P3)',
+    'התאמת תפקיד — נהג טיגריס למשמרת התקפי; נהג דוד למשמרת סיור החופפת ללילה (P5)',
+    'פיזור מפקדים — מפקד נדחק ממשמרת סטטית אם כבר מוצב מפקד בפוסט סטטי אחר באותה שעה (P5)',
+    'העומס השבועי המדויק (P3)',
+    'מי שצבר הכי הרבה מנוחה — עד 48 שעות (P6)',
+  ];
+  const slotCascadeLine =
+    `<details class="inner"><summary>סדר העדיפויות המלא של בחירת המשמרת ותת-העמדה בתוך העמדה (מיון מדורג — לא ניקוד)</summary>` +
+    `<ol>${SLOT_CASCADE.map((c) => `<li>${esc(c)}</li>`).join('')}</ol>` +
+    `<div class="sub">לכל חייל ששויך כבר לעמדה בשלב א׳ נבחר כאן באיזו משמרת ובאיזו תת-עמדה יעבוד — רק שיקולי משמרת; שיקולי היום (רצפים, רוטציה מאתמול, איזון עמדות, תורנות) הוכרעו בשלב א׳. ` +
+    `כשמגייסים חייל שהיום שלו טרם נקבע — משיכה ממנוחה, השלמת שרשור או זוג מתחלף — נבדקים גם שיקולי היום של שלב א׳. האיוש השגרתי עצמו מוצג בטבלת המאזן שלמעלה.</div></details>`;
 
   // 10. chains
   const chainGroups = new Map<string, { a0: ReportAssignment; names: string[] }>();
@@ -1116,19 +1166,30 @@ function buildProcessSection(input: DayReportInput, h: NameHelpers): string {
     step(13, 'שרשורים (כרמל חטיבה / כונן גשש)',
       'הצוות היורד מהמשמרת המקבילה מאייש את הכוננות; חסר מושלם בחיילים אחרים (עדיפות למי שחזר לבסיס).',
       completionChips, [...chainLines, ...chainIssues]),
-    step(14, 'איוש המשמרות — מסלולים חריגים',
-      'האיוש השגרתי מוצג בשלב 2; כאן רק החריגים: משיכה ממנוחה, זוגות מתחלפים, שיבוצי בדוחק ומושבים שנשארו ריקים.',
-      exceptionalChips, seatEmptyIssues),
-    step(15, 'כולם עובדים — קליטת הנותרים',
+    step(14, 'איוש המשמרות ותתי-העמדות בתוך העמדה',
+      'לכל חייל ששויך לעמדה בשלב א׳ נבחרת כאן המשמרת ותת-העמדה, לפי סדר העדיפויות המדורג שלהלן (כאן נכנסים פיזור הלילות ורוטציית תתי-העמדות שלא הוכרעו בשלב א׳). האיוש השגרתי מוצג גם בטבלת המאזן שלמעלה; החריגים המפורטים כאן: משיכה ממנוחה, זוגות מתחלפים, שיבוצי בדוחק ומושבים שנשארו ריקים.',
+      exceptionalChips, [slotCascadeLine, ...seatEmptyIssues]),
+    step(15, 'תיקון מנוחות קצרות — החלפות',
+      'פחות מ-8 שעות מנוחה בין שתי משמרות באותו יום מותר רק כשאין ברירה: אחרי האיוש, משמרת עם מנוחה קצרה מוחלפת עם חייל אחר באותה עמדה כשההחלפה חוקית לשניהם ומקטינה את מספר המנוחות הקצרות. מה שנשאר — בלתי נמנע.',
+      l2Chips(['rest_repair'])),
+    step(16, 'כולם עובדים — קליטת הנותרים',
       'מי שעדיין בלי עמדה מצטרף למגן (עד 12) לפני שמישהו נח; חייל זמין שנשאר במנוחה — חריגה מדווחת.',
       [...absorbChips, ...byDesignRest], leftoverIssues),
   ];
+
+  const phaseHead = (title: string, sub: string): string =>
+    `<div class="phase-head"><h3>${esc(title)}</h3><div class="sub">${esc(sub)}</div></div>`;
 
   return `
 <div class="card">
   <h2>ניתוח התהליך — צעד אחר צעד (לפי כללי הלוגיקה)</h2>
   <div class="sub">סדר הצעדים הוא סדר הריצה של המחולל (שלב א׳ — חלוקה לעמדות; שרשורים; שלב ב׳ — איוש המשמרות; כולם עובדים). צעד עמום = לא השפיע היום.</div>
-${steps.join('\n')}
+${phaseHead('שלב א׳ — לאיזו עמדה משתייך כל חייל',
+  'חלוקת החיילים לקבוצות העמדה (מגן / סיור / התקפי / עמדות הגנה / תורנים …) — נקבע כאן מי שייך לאיזו עמדה, עוד לפני חלוקה למשמרות.')}
+${steps.slice(0, 13).join('\n')}
+${phaseHead('שלב ב׳ — איוש המשמרות בתוך כל עמדה',
+  'חלוקת החיילים שכבר שויכו לעמדה למשמרות ולתתי-העמדות שבתוכה (מי בכל משמרת, פיזור לילות, רוטציית תתי-עמדות), וקליטת הנותרים.')}
+${steps.slice(13).join('\n')}
 </div>`;
 }
 
@@ -1152,7 +1213,9 @@ ${shortages.length ? `    <ul>\n${shortages.map((s) => `      <li>${esc(s)}</li>
     b.totalHours - a.totalHours || a.name.localeCompare(b.name, 'he'));
   const fairRows = rows.map((r) =>
     `<tr><td>${soldierNameHtml(r, r.name)}</td><td>${r.nightHours.toFixed(1)}</td>` +
-    `<td>${r.hatkafiHours.toFixed(1)}</td><td>${r.totalHours.toFixed(1)}</td></tr>`).join('\n');
+    `<td>${r.hatkafiHours.toFixed(1)}</td><td>${r.positionHours.toFixed(1)}</td>` +
+    `<td>${r.totalHours.toFixed(1)}</td>` +
+    `<td>${r.activeDays}</td></tr>`).join('\n');
 
   const stats = (xs: number[]) => {
     if (!xs.length) return { min: 0, max: 0, avg: 0, sd: 0 };
@@ -1164,7 +1227,9 @@ ${shortages.length ? `    <ul>\n${shortages.map((s) => `      <li>${esc(s)}</li>
   const cols = [
     stats(rows.map((r) => r.nightHours)),
     stats(rows.map((r) => r.hatkafiHours)),
+    stats(rows.map((r) => r.positionHours)),
     stats(rows.map((r) => r.totalHours)),
+    stats(rows.map((r) => r.activeDays)),
   ];
   const footRow = (label: string, pick: (s: ReturnType<typeof stats>) => number) =>
     `<tr><td>${label}</td>${cols.map((c) => `<td>${pick(c).toFixed(1)}</td>`).join('')}</tr>`;
@@ -1183,7 +1248,7 @@ ${cards}
 <div class="card">
   <h2>הוגנות שבועית</h2>
   <div class="tbl-wrap"><table class="sortable">
-    <thead><tr><th>חייל</th><th>שעות לילה</th><th>שעות התקפי</th><th>סה"כ שעות</th></tr></thead>
+    <thead><tr><th>חייל</th><th>שעות לילה</th><th>שעות התקפי</th><th>שעות עמדה</th><th>סה"כ שעות</th><th>ימי פעילות</th></tr></thead>
     <tbody>
 ${fairRows}
     </tbody>
@@ -1194,7 +1259,7 @@ ${footRow('ממוצע', (s) => s.avg)}
 ${footRow('סטיית תקן', (s) => s.sd)}
     </tfoot>
   </table></div>
-  <div class="sub">שעות לילה = חפיפת המשימות עם חלון 00:00–06:00 (בלי משימות יומיות שבהן ישנים ובלי כוננויות) · שעות התקפי = שעות בעמדת התקפי, כולל הכוננות (יממת כוננות = 24) · סה"כ שעות = שעות משימה בטווח, עד התקרה היומית לכל שורה (בלי כוננויות). חיילים שהיו בבית כל הטווח אינם מוצגים.</div>
+  <div class="sub">שעות לילה = חפיפת המשימות עם חלון 00:00–06:00 (בלי משימות יומיות שבהן ישנים ובלי כוננויות) · שעות התקפי = שעות בעמדת התקפי, כולל הכוננות (יממת כוננות = 24) · שעות עמדה = שעות בסיור ובעמדות ההגנה הסטטיות · סה"כ שעות = שעות משימה בטווח, עד התקרה היומית לכל שורה (בלי כוננויות) · ימי פעילות = מספר ימי השבצ"ק בטווח שבהם היה לחייל שיבוץ כלשהו (לא מנוחה). חיילים שהיו בבית כל הטווח אינם מוצגים.</div>
 </div>
 <footer>הדוח הופק אוטומטית על ידי מחולל השבצ"ק.</footer>`;
 

@@ -76,6 +76,29 @@ const canHold = (g: Gen, st: SoldierState, pid: number, p: [Minutes, Minutes]): 
   && ((g.ctx.positions.get(pid)?.config?.no_rest_floor ?? false)
       || restBefore(g, st, p[0]) >= g.ctx.tunables.restMinH * 60);
 
+/** H6b reservation, run BEFORE the previous-day chains (generate.ts): a
+ *  seat-rule candidate serves only his position, but the morning chain
+ *  completions run before Level 1 — without this early pass, allowedIn can't
+ *  see the reservation yet (bug 2026-07-20: the unchosen סמ"פ was pulled
+ *  into a morning כרמל completion). The seat pre-pass in runLevel1
+ *  re-derives the same candidates and applies the usual releases
+ *  (release_unpicked / empty seat). */
+export function reserveSeatCandidates(g: Gen): void {
+  for (const pos of g.ctx.positions.values()) {
+    const rules: SeatRule[] = pos.config?.seat_rules ?? [];
+    if (!rules.length || !pos.isScheduled) continue;
+    if (!g.ctx.slots.some((s) => s.positionId === pos.id)) continue;
+    const named = (pos.candidates ?? [])
+      .filter((c) => c.subPositionId !== null)
+      .map((c) => g.state.get(c.soldierId));
+    const roleMatches = rules.flatMap((rule) => [...g.state.values()]
+      .filter((st) => (rule.roles ?? []).some((r) => nrm(r) === nrm(st.soldier.role))));
+    for (const c of [...named, ...roleMatches]) {
+      if (c && allowedIn(g, c.soldier, pos.name)) g.seatRestrict.set(c.soldier.id, pos.name);
+    }
+  }
+}
+
 export function runLevel1(g: Gen): Level1Plan {
   const { ctx, issues, level1, state } = g;
 
@@ -332,8 +355,12 @@ export function runLevel1(g: Gen): Level1Plan {
           free = pool - nonMagenNeed();
         }
       }
-      const seats = Math.max(effMin,
-        Math.min(magenEffMax, free + assignedTo(magenId!)));
+      // Surplus is NOT pre-absorbed into מגן's fill demand: מגן fills before
+      // late positions (תורנים), and enlarging it up front starves them of
+      // their last eligible candidates (bug 2026-07-20 — תורנים seat empty
+      // while מגן held 12). True leftovers join מגן in the absorb step AFTER
+      // every position is staffed.
+      const seats = Math.max(effMin, Math.min(base, free + assignedTo(magenId!)));
       for (const s of magenSlots) s.seats = seats;
       if (free + assignedTo(magenId!) < effMin) {
         issues.push(`מגן: חסרים ${effMin - free - assignedTo(magenId!)} חיילים לאיוש מלא`);
@@ -379,8 +406,12 @@ export function runLevel1(g: Gen): Level1Plan {
   for (const pos of ctx.positions.values()) {
     if (isSunday(g.day)) break;
     if (!pos.config?.continuity || !slotsByPosition.has(pos.id)) continue;
-    let room = demand(g, pos.id, slotsByPosition.get(pos.id)!)
-      - [...level1.values()].filter((p) => p === pos.id).length;
+    // the whole crew returns by right — up to the flex/override max, not the
+    // fill-time seat count (surplus is no longer pre-absorbed into seats)
+    const cap = pos.id === magenId && magenEffMax !== undefined
+      ? Math.max(magenEffMax, demand(g, pos.id, slotsByPosition.get(pos.id)!))
+      : demand(g, pos.id, slotsByPosition.get(pos.id)!);
+    let room = cap - [...level1.values()].filter((p) => p === pos.id).length;
     const posSlots = slotsByPosition.get(pos.id)!;
     const returning = [...state.values()].filter((st) =>
       st.level1 === null && !fullyBlocked(g, st.soldier.id)
@@ -454,6 +485,13 @@ export function runLevel1(g: Gen): Level1Plan {
   // fill order: role-gated / commander-heavy first
   const order = ['קצין מוצב', 'סיור', 'התקפי', 'מגן', 'עמדות הגנה', 'חפק', 'תורנים'];
 
+  // pick-order stamp (owner request 2026-07-19): every demand-fill rationale
+  // carries the sequence number of its pick, so the report lists soldiers in
+  // the EXACT order the code took them (not soldier-id order)
+  let pickSeq = 0;
+  const stamped = (e: RationaleEntry): RationaleEntry =>
+    ({ ...e, params: { ...(e.params ?? {}), seq: ++pickSeq } });
+
   // ── Pass A: HARD role quotas across ALL positions — commanders (H6/item
   // 12), then qualified drivers (H6d) — BEFORE any soft/fairness fill, so an
   // earlier position's general fill can never starve a later position of its
@@ -480,7 +518,7 @@ export function runLevel1(g: Gen): Level1Plan {
         // beat the next still-free commander in ranked order
         const runner = rankedCmd.find((x) => x !== st && x.level1 === null);
         take(st); need--; cmdNeed--;
-        st.level1Rationale.push({ code: 'commander_quota', params: { position: posName } });
+        st.level1Rationale.push(stamped({ code: 'commander_quota', params: { position: posName } }));
         st.level1Rationale.push(decisiveEntry(g, st, runner, pid, atStart));
       }
       if (cmdNeed > 0) issues.push(`${posName}: חסרים ${cmdNeed} מפקדים בשיבוץ היומי`);
@@ -498,7 +536,7 @@ export function runLevel1(g: Gen): Level1Plan {
         if (drvNeed <= 0 || need <= 0) break;
         const runner = rankedDrv.find((x) => x !== st && x.level1 === null);
         take(st); need--; drvNeed--;
-        st.level1Rationale.push({ code: 'driver_quota', params: { position: posName, qual: driverQual } });
+        st.level1Rationale.push(stamped({ code: 'driver_quota', params: { position: posName, qual: driverQual } }));
         st.level1Rationale.push(decisiveEntry(g, st, runner, pid, atStart));
       }
       if (drvNeed > 0) issues.push(`${posName}: חסרים ${drvNeed} נהגים (${driverQual})`);
@@ -546,7 +584,7 @@ export function runLevel1(g: Gen): Level1Plan {
             if (need <= 0) break;
             const runner = rankedSame.find((x) => x !== st && x.level1 === null);
             pick(st);
-            st.level1Rationale.push(decisiveEntry(g, st, runner, pid));
+            st.level1Rationale.push(stamped(decisiveEntry(g, st, runner, pid)));
           }
           if (same.length < (pos.config?.flex_seats?.min ?? need)) {
             issues.push(`${posName}: אין מספיק חיילים ממחלקה ${platoon} — הצוות מעורב`);
@@ -565,10 +603,10 @@ export function runLevel1(g: Gen): Level1Plan {
             && x.soldier.platoon === cm.soldier.platoon), pid, atStart)) {
           if (room <= 0 || need <= 0) break;
           pick(st); room--;
-          st.level1Rationale.push({
+          st.level1Rationale.push(stamped({
             code: 'platoon_group',
             params: { commander: cm.soldier.name, platoon: cm.soldier.platoon },
-          });
+          }));
         }
       }
     }
@@ -579,7 +617,7 @@ export function runLevel1(g: Gen): Level1Plan {
       if (need <= 0) break;
       const runner = ranked.find((x) => x !== st && x.level1 === null);
       pick(st);
-      st.level1Rationale.push(decisiveEntry(g, st, runner, pid, atStart));
+      st.level1Rationale.push(stamped(decisiveEntry(g, st, runner, pid, atStart)));
     }
     if (need > 0) issues.push(`${posName}: חסרים ${need} חיילים`);
   }

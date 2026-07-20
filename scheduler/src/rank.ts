@@ -81,14 +81,22 @@ function staticCommanderAt(g: Gen, start: Minutes): boolean {
     && g.state.get(a.soldierId)?.soldier.isCommander);
 }
 
-/** Priority-list comparator (SPEC §6.1) for position/slot selection.
+/** Priority-list comparator (SPEC §6.1) for slot selection.
  *  When ranking for a concrete slot, pass its start so candidates with a
  *  full 8h rest before it win over short-rest ones (keeps 4h shifts spaced
  *  8h apart: 06&18, 10&22, 14&02). Pass the slot's sub-position id as
  *  `forSub` so a soldier rotates between different posts within the same
- *  24h round (P4b). */
+ *  24h round (P4b).
+ *
+ *  Two key sets: within-group slot choice (default) uses only slot-level
+ *  keys — the day-level facts (streaks, rotation, balance, T5) were already
+ *  decided when the soldier joined the group. `recruiting: true` — for the
+ *  paths that pick a soldier whose DAY is not yet settled (pull-from-מנוחה,
+ *  chain completions, replacement-pair halves) — adds the day-level keys of
+ *  the group cascade back in. */
 export function rank(g: Gen, candidates: SoldierState[], positionId: number,
-                     forNight: boolean, atStart?: Minutes, forSub?: number | null): SoldierState[] {
+                     forNight: boolean, atStart?: Minutes, forSub?: number | null,
+                     recruiting = false): SoldierState[] {
   const restIdeal = g.ctx.tunables.restIdealH * 60;
   const dailyCap = g.ctx.tunables.dailyCapH;
   const pos = g.ctx.positions.get(positionId)!;
@@ -104,36 +112,34 @@ export function rank(g: Gen, candidates: SoldierState[], positionId: number,
     const restAt = restBefore(g, st, atStart ?? g.dRange[0]);
     const staticStreak = g.ctx.staticStreak.get(st.soldier.id) ?? 0;
     const onCallStreak = g.ctx.onCallStreak.get(st.soldier.id) ?? 0;
-    return [
-      atStart !== undefined && restAt < restIdeal ? 1 : 0,                   // R1 quasi-constraint
-      // T5 (soft): at most one תורנות per rolling 7 days — anyone with a
-      // recent תורנות sorts after everyone without one (never a hard block)
+    const dayKeys = !recruiting ? [] : [
+      // T5: at most one תורנות per rolling 7 days
       posName === 'תורנים' && (g.ctx.toranutCount7d.get(st.soldier.id) ?? 0) > 0 ? 1 : 0,
       // T3 above P2 (owner decision): a constant static position is WORSE
       // than repeated nights — streak-breaking outranks night fairness.
       cls === 'static' && staticStreak >= 2 ? 1
-        : cls === 'dynamic' && staticStreak >= 2 ? -1 : 0,                   // T3 (over P2)
-      // T6 (soft, over P2 like T3): avoid a 3rd consecutive day of only
-      // static + התקפי work — the soldier would be in constant on-call
-      onCallStreak >= 2 && (cls === 'static' || cls === 'readiness') ? 1 : 0, // T6
-      // P4b sub-position rotation (over P2 — owner: "make sure to split"):
-      // within the same 24h round a soldier mans a DIFFERENT post each shift
-      // (e.g. not שג twice today)
+        : cls === 'dynamic' && staticStreak >= 2 ? -1 : 0,
+      // T6: avoid a 3rd consecutive day of only static + on-call work
+      onCallStreak >= 2 && (cls === 'static' || cls === 'readiness') ? 1 : 0,
+      rotationPenalty(g, st, positionId).penalty,                            // P4
+      st.fairness.positionCounts[posName] ?? 0,                              // P4 balance
+    ];
+    return [
+      atStart !== undefined && restAt < restIdeal ? 1 : 0,                   // R1 quasi-constraint
+      ...dayKeys,
+      // P4b sub-position rotation: within the same 24h round a soldier mans
+      // a DIFFERENT post each shift (e.g. not שג twice today)
       forSub != null ? g.assignments.filter((a) => a.soldierId === st.soldier.id
         && a.subPositionId === forSub).length : 0,                           // P4b
       nightsOf(st, forNight),                                                // P2
-      // P3 bucketed to one duty-day (dailyCapH hours): soldiers within the
-      // same load bucket are equal, letting rotation (P4) actually decide.
+      // P3 bucketed to one duty-day (dailyCapH hours)
       Math.floor(loadOf(st) / dailyCap),                                     // P3
-      rotationPenalty(g, st, positionId).penalty,                            // P4
-      st.fairness.positionCounts[posName] ?? 0,                              // P4 (L1 balance)
-      // P5 role fit (after P4 — ties only): נהג טיגריס for the התקפי crew;
-      // נהג דוד for a patrol slot overlapping the night window
+      // P5 role fit: נהג טיגריס for the התקפי crew; נהג דוד for a patrol
+      // slot overlapping the night window
       posName === 'התקפי' && !st.soldier.isTigerDriver ? 1 : 0,              // P5
       posName === 'סיור' && forNight && !st.soldier.isDudDriver ? 1 : 0,     // P5
-      // P5 מ"כ spread: when ranking for a concrete static slot, a commander
-      // is demoted if a commander already mans a static post at that hour
-      // (the defense/carmel grids share start hours, so start == same hour)
+      // P5 מ"כ spread: a commander is demoted for a static slot when a
+      // commander already mans a static post starting at the same hour
       atStart !== undefined && pos.missionClass === 'static'
         && st.soldier.isCommander && staticCommanderAt(g, atStart) ? 1 : 0,  // P5
       loadOf(st),                                                            // P3 fine tie-break
@@ -144,34 +150,35 @@ export function rank(g: Gen, candidates: SoldierState[], positionId: number,
 
 // ── Level-1 group cascade ───────────────────────────────────────────────────
 
-/** The Level-1 group-selection key vector: the slot cascade WITHOUT P2 nights,
- *  P4b sub-position rotation, the night-driver key and the מ"כ-spread key —
- *  none of those facts exist before a concrete slot is chosen. Exported (not
- *  inlined in rankGroup) so decisiveEntry compares the EXACT vectors the
- *  ranking sorted by — the rationale can't drift from the decision. */
+/** The Level-1 group-selection key vector. Deliberately small: nights (P2),
+ *  sub-post rotation (P4b), role fit / מ"כ spread (P5), load (P3) and
+ *  accumulated rest (P6) are Level-2 slot considerations only — positions
+ *  are not lighter or heavier than each other (owner). Exported (not inlined
+ *  in rankGroup) so decisiveEntry compares the EXACT vectors the ranking
+ *  sorted by — the rationale can't drift from the decision. */
 export function groupKey(g: Gen, st: SoldierState, positionId: number, atStart?: Minutes): number[] {
   const restIdeal = g.ctx.tunables.restIdealH * 60;
-  const dailyCap = g.ctx.tunables.dailyCapH;
   const pos = g.ctx.positions.get(positionId)!;
   const posName = pos.name;
   const cls = pos.missionClass;
   const staticStreak = g.ctx.staticStreak.get(st.soldier.id) ?? 0;
   const onCallStreak = g.ctx.onCallStreak.get(st.soldier.id) ?? 0;
   return [
-    atStart !== undefined && restBefore(g, st, atStart) < restIdeal ? 1 : 0, // R1 quasi-constraint
+    // R1 quasi-constraint — only where the position itself requires rest
+    // before its single known start: a daily duty WITHOUT no_rest_floor (in
+    // practice תורנים). no_rest_floor crews are scheduled internally by
+    // their officer; multi-start positions (atStart undefined — see posCtx)
+    // get their per-shift rest check in the Level-2 slot cascade.
+    atStart !== undefined && !pos.config?.no_rest_floor
+      && restBefore(g, st, atStart) < restIdeal ? 1 : 0,
     // T5 (soft): at most one תורנות per rolling 7 days
     posName === 'תורנים' && (g.ctx.toranutCount7d.get(st.soldier.id) ?? 0) > 0 ? 1 : 0,
     // T3 above P2 (owner decision): constant static is worse than nights
     cls === 'static' && staticStreak >= 2 ? 1
       : cls === 'dynamic' && staticStreak >= 2 ? -1 : 0,                     // T3
     onCallStreak >= 2 && (cls === 'static' || cls === 'readiness') ? 1 : 0,  // T6
-    Math.floor(loadOf(st) / dailyCap),                                       // P3 bucket
     rotationPenalty(g, st, positionId).penalty,                              // P4
     st.fairness.positionCounts[posName] ?? 0,                                // P4 (L1 balance)
-    // NB: no P5 tiger-driver key here (owner 2026-07-19) — the hard driver
-    // quota (Pass A) already reserves the required drivers per position
-    loadOf(st),                                                              // P3 fine tie-break
-    -Math.min(restBefore(g, st, atStart ?? g.dRange[0]), P6_REST_CLAMP),     // P6
   ];
 }
 
@@ -195,9 +202,6 @@ const GROUP_DIMS: { dim: string; fmt: (v: number, st: SoldierState) => string }[
   { dim: 'תורנות השבוע', fmt: (v) => (v === 1 ? 'עשה תורנות' : 'ללא תורנות') },
   { dim: 'רצף ימים סטטיים', fmt: (v) => (v === 1 ? 'ממשיך רצף סטטי' : v === -1 ? 'שובר רצף סטטי' : 'ללא רצף') },
   { dim: 'רצף כוננות', fmt: (v) => (v === 1 ? 'יום כוננות שלישי' : 'ללא רצף כוננות') },
-  // buckets compare, but the REAL hours are shown — the bucket number means
-  // nothing to an officer
-  { dim: 'עומס שבועי', fmt: (_v, st) => `${loadOf(st).toFixed(1)} שעות` },
   { dim: 'רוטציה מאתמול', fmt: (v) => (
       v === -2 ? 'ממשיך בצוות'
       : v === -1 ? 'שובר רצף סטטי'
@@ -206,8 +210,6 @@ const GROUP_DIMS: { dim: string; fmt: (v: number, st: SoldierState) => string }[
       : v === 2 ? 'אותה עמדה כאתמול'
       : 'רצף סטטי') },
   { dim: 'איזון עמדות', fmt: (v) => `${v} פעמים בעמדה` },
-  { dim: 'עומס שבועי מדויק', fmt: (_v, st) => `${loadOf(st).toFixed(1)} שעות` },
-  { dim: 'מנוחה מצטברת', fmt: (v) => `${(-v / 60).toFixed(1)} שעות מנוחה` },
 ];
 
 /** Why did the Level-1 group pick take THIS soldier: the first groupKey index

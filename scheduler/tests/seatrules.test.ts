@@ -5,8 +5,15 @@ import { freshSchema, seedSoldiers, addCandidates, setAllowedPositions, soldierI
 import { generate, persist } from '../src/generate.js';
 import { validateDay } from '../src/validate.js';
 import { RationaleEntry } from '../src/rationale.js';
+import { loadContext } from '../src/load.js';
+import { buildGen } from '../src/state.js';
+import { reserveSeatCandidates } from '../src/level1.js';
 
-const D1 = '2026-08-01', D2 = '2026-08-02', D3 = '2026-08-03', D4 = '2026-08-04';
+// Mon..Thu — deliberately NOT straddling a Sunday: the weekly fairness reset
+// empties position_counts, so pair rotation across Saturday→Sunday is a
+// seeded coin flip by design (P6 rest, which used to carry it, was removed
+// from the group cascade 2026-07-20)
+const D1 = '2026-08-03', D2 = '2026-08-04', D3 = '2026-08-05', D4 = '2026-08-06';
 
 // synthetic candidates (seed.sql's real-name rules are replaced for the test DB)
 const KASHAR = ['חייל 20', 'חייל 21', 'חייל 22'];
@@ -99,6 +106,19 @@ test('מפקד falls back to סמ"פ when מ"פ unavailable; empty + flag when n
   assert.ok(findings.some((f) => f.rule === 'seat_rules' && f.severity === 'warning'
     && f.message.includes('מפקד')), JSON.stringify(findings.filter((f) => f.rule === 'seat_rules')));
   await query(`delete from unavailability`);
+});
+
+test('seat candidates (named + role) are reserved BEFORE the pre-Level-1 chains', async () => {
+  // the morning chain completions run before Level 1 — the reservation must
+  // already be visible to allowedIn there (the סמ"פ-on-כרמל bug, 2026-07-20)
+  const ctx = await loadContext(D2);
+  const g = buildGen(ctx);
+  reserveSeatCandidates(g);
+  for (const name of ['חייל 55', 'חייל 56', ...XOVESH, ...KASHAR, ...NAHAG]) {
+    // NB: soldier ids are bigint-as-STRING at runtime — no Number() conversion
+    const sid = await soldierId(name);
+    assert.equal(g.seatRestrict.get(sid), 'חפק', `${name} not reserved to חפק`);
+  }
 });
 
 test('validator errors when a reserved candidate is assigned elsewhere', async () => {

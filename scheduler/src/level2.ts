@@ -7,12 +7,12 @@
 // in a day). Also owns buildRationale(), the structured "why picked" snapshot.
 
 import { Minutes, fmtHM, hours, overlaps } from './time.js';
-import { Slot } from './model.js';
+import { Slot, Assignment } from './model.js';
 import { RationaleEntry } from './rationale.js';
 import { normalizeName as nrm, hasQualification } from './text.js';
-import { Gen, SoldierState, allowedIn, assign, countedHours, exitExempt, isNightExit } from './state.js';
+import { Gen, SoldierState, allowedIn, assign, countedHours, exitExempt, isBlocked, isNightExit } from './state.js';
 import { isNightExitOk } from './config.js';
-import { fits, restInfo, fitText, fitTexts, FitReason, FIT_RATIONALE } from './rest.js';
+import { fits, restInfo, restBefore, isCountedNight, fitText, fitTexts, FitReason, FIT_RATIONALE } from './rest.js';
 import { rank, rotationPenalty, nightsOf, loadOf } from './rank.js';
 import { tryReplacementPair } from './pairs.js';
 import { Level1Plan, isSeatPair } from './level1.js';
@@ -163,24 +163,31 @@ function exitPrePass(g: Gen, plan1: Level1Plan): void {
     // so the rest gaps INSIDE a combo are simulated here.
     const evalCombo = (picks: Slot[]) => {
       const inOrder = [...picks].sort((a, b) => a.period[0] - b.period[0]);
-      let fallbacks = 0, shortRests = 0, packedH = 0;
+      let fallbacks = 0, shortRests = 0, packedH = 0, contiguous = false;
       const comboEnds: Minutes[] = [];
       for (const sl of inOrder) {
         let prevEnd = -Infinity;
-        for (const iv of st.intervals) if (iv[1] <= sl.period[0] && iv[1] > prevEnd) prevEnd = iv[1];
         for (const e of [...st.gashashNightEnds, ...comboEnds]) {
           if (e <= sl.period[0] && e > prevEnd) prevEnd = e;
         }
-        const gap = sl.period[0] - prevEnd;
+        // gap vs the soldier's real rows via restBefore — folds the R5
+        // duty-rest exemption (a raw interval scan billed a bogus 0h
+        // fallback right after a full-rest daily duty)
+        const gap = Math.min(sl.period[0] - prevEnd, restBefore(g, st, sl.period[0]));
+        if (gap === 0 && comboEnds.length) contiguous = true;
         if (gap < restMin) fallbacks++;
         else if (gap < restIdeal && hours(sl.period) > ctx.tunables.longTaskH) fallbacks++;
         else if (gap < restIdeal) shortRests++;
         comboEnds.push(sl.period[1]);
         packedH += countedHours(g, sl.period);
       }
+      const subs = new Set(inOrder.map((sl) => sl.subPositionId)).size;
       return {
         picks: inOrder, packedH, fallbacks, shortRests,
-        subs: new Set(inOrder.map((sl) => sl.subPositionId)).size,
+        // separated shifts rotate posts (P4b: distinct subs win); an
+        // unavoidable back-to-back pair is ONE continuous stint — it stays
+        // at the SAME post (owner 2026-07-20)
+        subKey: contiguous ? subs : -subs,
         night: (ctx.nightStreak.get(sid) ?? 0) >= 2
           && inOrder.some((sl) => overlaps(sl.period, g.night)) ? 1 : 0,
         startSum: inOrder.reduce((s, sl) => s + sl.period[0], 0),
@@ -197,7 +204,7 @@ function exitPrePass(g: Gen, plan1: Level1Plan): void {
     }
     const best = combos.sort((a, b) =>
       b.packedH - a.packedH || a.fallbacks - b.fallbacks || a.shortRests - b.shortRests
-      || b.subs - a.subs || a.night - b.night || a.startSum - b.startSum)[0];
+      || a.subKey - b.subKey || a.night - b.night || a.startSum - b.startSum)[0];
     if (!best) {
       issues.push(`${st.soldier.name}: יציאה קצרה — לא נמצאה משמרת פנויה מחוץ לחלון היציאה`);
       continue;
@@ -315,7 +322,7 @@ function fillStaticTwoPhase(g: Gen, pid: number, posName: string, sorted: Slot[]
           const f = fits(g, st, period, false, slotReadiness, slotNightExempt, slotDaily, sticky(st));
           return f.ok && !f.fallback;
         });
-        const pulled = rank(g, fitting, pid, forNight, period[0], null)[0];
+        const pulled = rank(g, fitting, pid, forNight, period[0], null, true)[0];
         if (pulled) {
           pulled.level1 = pid;
           level1.set(pulled.soldier.id, pid);
@@ -596,7 +603,7 @@ export function fillLevel2(g: Gen, plan1: Level1Plan): void {
             const f = fits(g, st, slot.period, commanderSeat, slotReadiness, slotNightExempt, slotDaily, sticky(st), slotNoFloor);
             return f.ok && !f.fallback;
           });
-          const pulled = rank(g, fitting, pid, forNight, slot.period[0], slot.subPositionId)[0];
+          const pulled = rank(g, fitting, pid, forNight, slot.period[0], slot.subPositionId, true)[0];
           if (pulled) {
             pulled.level1 = pid;
             level1.set(pulled.soldier.id, pid);
@@ -650,5 +657,107 @@ export function fillLevel2(g: Gen, plan1: Level1Plan): void {
           [...viol, ...(viol.length ? [] : fitTexts(fit.reasons))], 'auto', rationale);
       }
     }
+  }
+}
+
+// ─── post-fill short-rest repair ─────────────────────────────────────────────
+
+/** A gap under the 8h ideal between two of a soldier's same-day shifts is
+ *  acceptable only when unavoidable (owner 2026-07-20). After the slot fill,
+ *  trade a short-rested shift for another soldier's seat in the SAME position
+ *  when the trade leaves both soldiers fully legal and strictly reduces the
+ *  day's short-gap count. Only plain auto seats move — commander seats,
+ *  seat-rule / staff / driver-qual / daily positions and exit-day soldiers
+ *  (window-bound packing) are untouched. Swapped rows are tagged rest_repair
+ *  (the report renders them as a dedicated step); the short gaps that remain
+ *  are genuinely unavoidable. */
+export function repairShortRests(g: Gen): void {
+  const restIdeal = g.ctx.tunables.restIdealH * 60;
+  const restMin = g.ctx.tunables.restMinH * 60;
+  const posOk = (pid: number) => {
+    const p = g.ctx.positions.get(pid);
+    return !!p && p.missionClass !== 'readiness' && !p.config?.seat_rules
+      && !p.config?.staff_all_roles && !p.config?.driver_qual
+      && !(p.config?.daily ?? false);
+  };
+  const rowOk = (a: Assignment) => a.source === 'auto' && !a.isCommanderSeat
+    && posOk(a.positionId) && !g.ctx.exits.has(a.soldierId);
+  const isNightRow = (period: [Minutes, Minutes], pid: number) => {
+    const p = g.ctx.positions.get(pid);
+    return overlaps(period, g.night)
+      && isCountedNight(p?.missionClass ?? '', p?.config?.night_exempt);
+  };
+  /** blocking periods of a soldier after a hypothetical swap */
+  const simPeriods = (sid: number, out?: Assignment, into?: Assignment): [Minutes, Minutes][] => {
+    const ps = g.assignments
+      .filter((a) => a.soldierId === sid && a.blocksOverlap && a !== out)
+      .map((a) => a.period);
+    if (into) ps.push(into.period);
+    return ps.sort((a, b) => a[0] - b[0]);
+  };
+  const shortGaps = (ps: [Minutes, Minutes][]): number => {
+    let n = 0;
+    for (let i = 1; i < ps.length; i++) {
+      if (ps[i][0] - ps[i - 1][1] < restIdeal) n++;
+    }
+    return n;
+  };
+  /** hard legality of the simulated day: no overlap, no gap under the floor */
+  const legal = (ps: [Minutes, Minutes][]): boolean => {
+    for (let i = 1; i < ps.length; i++) {
+      const gap = ps[i][0] - ps[i - 1][1];
+      if (gap < 0 || gap < restMin) return false;
+    }
+    return true;
+  };
+  const sameSubClash = (sid: number, into: Assignment, out: Assignment): boolean =>
+    into.subPositionId !== null && g.assignments.some((a) => a !== out && a !== into
+      && a.soldierId === sid && a.positionId === into.positionId
+      && a.subPositionId === into.subPositionId);
+
+  let guard = 24;
+  outer: while (guard-- > 0) {
+    for (const mine of g.assignments) {
+      if (!rowOk(mine)) continue;
+      const myPeriods = simPeriods(mine.soldierId);
+      if (!shortGaps(myPeriods)) continue;                       // soldier is fine
+      for (const theirs of g.assignments) {
+        if (theirs === mine || !rowOk(theirs)) continue;
+        if (theirs.positionId !== mine.positionId) continue;     // same-position trades only
+        if (theirs.soldierId === mine.soldierId) continue;
+        if (theirs.period[0] === mine.period[0]) continue;       // same window — no gap change
+        if (hours(theirs.period) !== hours(mine.period)) continue; // keep daily caps intact
+        if (isBlocked(g, mine.soldierId, theirs.period)
+          || isBlocked(g, theirs.soldierId, mine.period)) continue;
+        if (sameSubClash(mine.soldierId, theirs, mine)
+          || sameSubClash(theirs.soldierId, mine, theirs)) continue;
+        const myAfter = simPeriods(mine.soldierId, mine, theirs);
+        const theirAfter = simPeriods(theirs.soldierId, theirs, mine);
+        if (!legal(myAfter) || !legal(theirAfter)) continue;
+        const before = shortGaps(myPeriods) + shortGaps(simPeriods(theirs.soldierId));
+        const after = shortGaps(myAfter) + shortGaps(theirAfter);
+        if (after >= before) continue;
+        // apply: exchange the soldiers between the two rows + fix live state
+        const s1 = g.state.get(mine.soldierId)!, s2 = g.state.get(theirs.soldierId)!;
+        const swapInterval = (st: SoldierState, out: [Minutes, Minutes], into: [Minutes, Minutes]) => {
+          const i = st.intervals.findIndex((iv) => iv[0] === out[0] && iv[1] === out[1]);
+          if (i >= 0) st.intervals.splice(i, 1);
+          st.intervals.push(into);
+        };
+        swapInterval(s1, mine.period, theirs.period);
+        swapInterval(s2, theirs.period, mine.period);
+        const n1 = isNightRow(mine.period, mine.positionId) ? 1 : 0;
+        const n2 = isNightRow(theirs.period, theirs.positionId) ? 1 : 0;
+        s1.nightsToday += n2 - n1;
+        s2.nightsToday += n1 - n2;
+        [mine.soldierId, theirs.soldierId] = [theirs.soldierId, mine.soldierId];
+        mine.rationale.push({ code: 'rest_repair',
+          params: { partner: s1.soldier.name, was: fmtHM(theirs.period[0]) } });
+        theirs.rationale.push({ code: 'rest_repair',
+          params: { partner: s2.soldier.name, was: fmtHM(mine.period[0]) } });
+        continue outer;
+      }
+    }
+    break;
   }
 }

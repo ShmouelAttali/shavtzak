@@ -100,8 +100,21 @@ export const exitExempt = (g: Gen, sid: number, pid: number): boolean => {
   return !!pos && isNightExitOk(pos) && isNightExit(g, sid);
 };
 
-export const fullyBlocked = (g: Gen, sid: number): boolean => isBlocked(g, sid, g.dRange) &&
-  (g.ctx.blocked.get(sid) ?? []).some((b) => b[0] <= g.dRange[0] && b[1] >= g.dRange[1]);
+/** The whole schedule day is blocked. Home leave often reaches the DB as
+ *  SEVERAL unavailability rows (per-day import rows meeting at midnight/06:00),
+ *  so coverage is judged over the MERGED intervals — requiring a single
+ *  covering row misclassified such soldiers as available-but-resting (bogus
+ *  "נותר במנוחה" warnings; bug found 2026-07-19). */
+export const fullyBlocked = (g: Gen, sid: number): boolean => {
+  const blocks = [...(g.ctx.blocked.get(sid) ?? [])].sort((a, b) => a[0] - b[0]);
+  let reach = g.dRange[0];
+  for (const [b0, b1] of blocks) {
+    if (b0 > reach) return false;          // uncovered gap before the next block
+    reach = Math.max(reach, b1);
+    if (reach >= g.dRange[1]) return true;
+  }
+  return false;
+};
 
 /** One position-whitelist mechanism for all the restriction sources:
  *  H6c allowedPositions (soldier_allowed_positions FK rows, per-soldier cases

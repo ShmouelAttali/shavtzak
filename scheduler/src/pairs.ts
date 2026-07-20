@@ -77,13 +77,13 @@ export function tryReplacementPair(g: Gen, opts: {
     if (w?.kind === 'departing') dep.set(st, w.at);
     else if (w?.kind === 'arriving') arr.set(st, w.at);
   }
-  for (const d of rank(g, [...dep.keys()], pid, forNight, slot.period[0])) {
+  for (const d of rank(g, [...dep.keys()], pid, forNight, slot.period[0], undefined, true)) {
     const handover = dep.get(d)!;
     const firstHalf: [Minutes, Minutes] = [slot.period[0], handover];
     const fd = fits(g, d, firstHalf, commanderSeat, slotReadiness, slotNightExempt, slotDaily, false, slotNoFloor);
     if (!fd.ok || fd.fallback) continue;
     const back = [...arr.keys()].filter((st) => arr.get(st)! <= handover);
-    for (const a of rank(g, back, pid, forNight, handover)) {
+    for (const a of rank(g, back, pid, forNight, handover, undefined, true)) {
       const secondHalf: [Minutes, Minutes] = [handover, slot.period[1]];
       const fa = fits(g, a, secondHalf, commanderSeat, slotReadiness, slotNightExempt, slotDaily, false, slotNoFloor);
       if (!fa.ok || fa.fallback) continue;

@@ -83,7 +83,7 @@ export function runChain(g: Gen, rule: ChainRule): void {
         .some((b) => b[1] <= window[0] && b[1] > window[0] - 24 * 60);
       const fresh = [...g.state.values()].filter((st) =>
         !fromSource.has(st.soldier.id) && chainFit(st));
-      const ranked = rank(g, fresh, rule.targetPosition, false);
+      const ranked = rank(g, fresh, rule.targetPosition, false, undefined, undefined, true);
       const completions = [
         ...ranked.filter(arrived),
         ...ranked.filter((st) => !arrived(st)),
@@ -101,7 +101,7 @@ export function runChain(g: Gen, rule: ChainRule): void {
     const sleptPrevNight = (st: SoldierState) => !(ctx.existing.get(st.soldier.id) ?? [])
       .some((a) => overlaps(a.period, prevNight)
         && isCountedNight(a.missionClass, ctx.positions.get(a.positionId)?.config?.night_exempt));
-    const fair = rank(g, pool, rule.targetPosition, false);
+    const fair = rank(g, pool, rule.targetPosition, false, undefined, undefined, true);
     pool = trackerPickOrder(pool, {
       nightWindow: overlaps(window, nightRangeAt(window[0])),
       slept: sleptPrevNight,

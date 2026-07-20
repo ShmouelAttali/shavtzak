@@ -760,19 +760,24 @@ export async function validateDay(day: string): Promise<Finding[]> {
   // ── 13a: sub-position rotation (P4b, soft): a soldier should man a
   // DIFFERENT static post each shift within one schedule day ────────────────
   {
-    const seen = new Map<string, { name: string; sub: string; n: number }>();
+    const seen = new Map<string, { name: string; sub: string; periods: [Minutes, Minutes][] }>();
     for (const r of today) {
       if (r.missionClass !== 'static' || r.source === 'import' || !r.subName) continue;
       const key = `${r.soldierId}|${r.positionId}|${nrm(r.subName)}`;
-      const cur = seen.get(key) ?? { name: r.soldierName, sub: r.subName, n: 0 };
-      cur.n++;
+      const cur = seen.get(key) ?? { name: r.soldierName, sub: r.subName, periods: [] };
+      cur.periods.push(r.period);
       seen.set(key, cur);
     }
-    for (const [key, { name, sub, n }] of seen) {
-      if (n < 2) continue;
+    for (const [key, { name, sub, periods }] of seen) {
+      // CONTIGUOUS same-post rows are one continuous stint (an unavoidable
+      // back-to-back exit pair stays at one post by design) — count stints
+      const sorted = [...periods].sort((a, b) => a[0] - b[0]);
+      let stints = 1;
+      for (let i = 1; i < sorted.length; i++) if (sorted[i][0] > sorted[i - 1][1]) stints++;
+      if (stints < 2) continue;
       findings.push({
         severity: 'warning', rule: 'sub_rotation', soldierId: Number(key.split('|')[0]),
-        message: `${name}: ${n} משמרות באותה עמדה (${sub}) באותה יממה`,
+        message: `${name}: ${sorted.length} משמרות באותה עמדה (${sub}) באותה יממה`,
       });
     }
   }
