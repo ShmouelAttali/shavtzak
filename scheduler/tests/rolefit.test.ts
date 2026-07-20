@@ -1,4 +1,4 @@
-// P5 role fit (SPEC §6.1): driver preferences + מ"כ spread as tie-break keys
+// P5 role fit (SPEC §6.1): driver preferences as tie-break keys
 // placed after the P4 rotation keys.
 import './env.js';
 import { test, before, after } from 'node:test';
@@ -72,24 +72,3 @@ test('H6d: every patrol shift crew includes a נהג דוד (hard driver rule)',
   await query(`delete from day_assignments where day = $1`, [D3]);
 });
 
-test('P5 מ"כ spread: no hour of the defense grid stacks two commanders when fighters suffice', async () => {
-  // focused world: only עמדות הגנה slots, exactly 2 static commanders in the
-  // pool — 4 commander-shifts over 6 grid hours can and must avoid stacking
-  await freshSchema();
-  await seedSoldiers();
-  await query(`update soldiers set role = 'לוחם' where full_name in ('חייל 03','חייל 04','חייל 05','חייל 06')`);
-  await query(`delete from slot_templates where position_id <> (select id from positions where name = 'עמדות הגנה')`);
-  const D4 = '2026-08-04';
-  await persist(await generate(D4));
-  const rows = await query<{ lo: string; n: string }>(`
-    select lower(sa.period)::text lo, count(*) filter (where s.role in ('מ"כ', 'מ"ח')) n
-    from shift_assignments sa
-    join positions p on p.id = sa.position_id
-    join soldiers s on s.id = sa.soldier_id
-    where sa.day = $1 and p.name = 'עמדות הגנה'
-    group by 1`, [D4]);
-  assert.ok(rows.length >= 6, 'defense grid hours exist');
-  for (const r of rows) {
-    assert.ok(Number(r.n) <= 1, `hour ${r.lo}: ${r.n} commanders on static posts (max 1 expected)`);
-  }
-});

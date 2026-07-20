@@ -450,7 +450,7 @@ soldier joined the group:
 | 3 | **P4b sub-post rotation** — within the same 24h round, a soldier mans a DIFFERENT static post each shift (not שג twice in one day); a CONTIGUOUS same-post pair is one continuous stint, not a repeat (non-static positions only; static grids use the two-phase post spread instead, §7 Level 2) | current day |
 | 4 | **P2** — fewest **night assignments** (00–06, incl. today's fresh nights when ranking a night slot). Readiness assignments do **not** count as nights (sleeping assumption, R2) | current week |
 | 5 | **P3** — fewest **weighted mission hours** (readiness hours × low weight, default 0.25), compared in **8-hour buckets** (one duty-day). The soldier's TOTAL for the week across ALL positions | current week |
-| 6 | **P5 role fit** (ties only, beyond the H6d required driver): נהג טיגריס preferred for the התקפי crew; נהג דוד preferred for a סיור slot overlapping the night window; מ"כ spread (a commander is demoted for a static slot when a commander already mans a static post starting at the same hour) | current crew |
+| 6 | **P5 role fit** (ties only, beyond the H6d required driver): נהג טיגריס preferred for the התקפי crew; נהג דוד preferred for a סיור slot overlapping the night window | current crew |
 | 7 | P3 fine tie-break — exact weighted hours | current week |
 | 8 | **P6** — most rest since last shift (clamped at 48h) | — |
 

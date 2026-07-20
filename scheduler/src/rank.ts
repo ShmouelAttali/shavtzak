@@ -75,13 +75,6 @@ export function rotationPenalty(g: Gen, st: SoldierState, positionId: number): {
   return { penalty: 0, tag: null };
 }
 
-/** P5 מ"כ spread: is a commander already assigned to a static post starting at `start`? */
-function staticCommanderAt(g: Gen, start: Minutes): boolean {
-  return g.assignments.some((a) => a.period[0] === start
-    && g.ctx.positions.get(a.positionId)?.missionClass === 'static'
-    && g.state.get(a.soldierId)?.soldier.isCommander);
-}
-
 /** Priority-list comparator (SPEC §6.1) for slot selection.
  *  When ranking for a concrete slot, pass its start so candidates with a
  *  full 8h rest before it win over short-rest ones (keeps 4h shifts spaced
@@ -139,10 +132,6 @@ export function rank(g: Gen, candidates: SoldierState[], positionId: number,
       // slot overlapping the night window
       posName === 'התקפי' && !st.soldier.isTigerDriver ? 1 : 0,              // P5
       posName === 'סיור' && forNight && !st.soldier.isDudDriver ? 1 : 0,     // P5
-      // P5 מ"כ spread: a commander is demoted for a static slot when a
-      // commander already mans a static post starting at the same hour
-      atStart !== undefined && pos.missionClass === 'static'
-        && st.soldier.isCommander && staticCommanderAt(g, atStart) ? 1 : 0,  // P5
       loadOf(st),                                                            // P3 fine tie-break
       -Math.min(restAt, P6_REST_CLAMP),                                      // P6
     ];
@@ -152,7 +141,7 @@ export function rank(g: Gen, candidates: SoldierState[], positionId: number,
 // ── Level-1 group cascade ───────────────────────────────────────────────────
 
 /** The Level-1 group-selection key vector. Deliberately small: nights (P2),
- *  sub-post rotation (P4b), role fit / מ"כ spread (P5), load (P3) and
+ *  sub-post rotation (P4b), role fit (P5), load (P3) and
  *  accumulated rest (P6) are Level-2 slot considerations only — positions
  *  are not lighter or heavier than each other (owner). Exported (not inlined
  *  in rankGroup) so decisiveEntry compares the EXACT vectors the ranking
