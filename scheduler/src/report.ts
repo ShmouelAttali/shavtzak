@@ -19,7 +19,7 @@
 import type { GenerateResult } from './model.js';
 import { RationaleEntry, RationaleCode, renderRationale, isCaveat } from './rationale.js';
 import { normalizeName as nrm } from './text.js';
-import { Minutes, fmtHM } from './time.js';
+import { Minutes, fmtHM, dayStart, dayEnd } from './time.js';
 
 // ─── input structures (plain + serializable) ───────────────────────────────
 
@@ -423,6 +423,36 @@ export function buildDayReportHtml(input: DayReportInput): string {
   const home = l1Entries.filter(([, pid]) => pid === homeId).length;
   const present = l1Entries.length - home;
 
+  // Availability shape of each present soldier over the schedule day: a
+  // leaver (יוצא — free at 14:00, gone by his bus) and an arriver (נכנס —
+  // absent at 14:00, back later) each hold only part of the day, so on an
+  // exchange day a leaver+arriver PAIR together man one seat. Count each as
+  // half when weighing supply against demand (owner 2026-07-20).
+  const dRange: [Minutes, Minutes] = [dayStart(input.day), dayEnd(input.day)];
+  const shapeOf = (sid: string): 'leaver' | 'arriver' | 'full' => {
+    const clipped = (input.blocked[sid] ?? [])
+      .filter((b) => b[0] < dRange[1] && dRange[0] < b[1])
+      .map((b) => [Math.max(b[0], dRange[0]), Math.min(b[1], dRange[1])] as [Minutes, Minutes])
+      .sort((x, y) => x[0] - y[0]);
+    const merged: [Minutes, Minutes][] = [];
+    for (const b of clipped) {
+      const last = merged[merged.length - 1];
+      if (last && b[0] <= last[1]) last[1] = Math.max(last[1], b[1]);
+      else merged.push([b[0], b[1]]);
+    }
+    if (merged.length !== 1) return 'full';
+    const [b0, b1] = merged[0];
+    if (b0 > dRange[0] && b1 >= dRange[1]) return 'leaver';
+    if (b0 <= dRange[0] && b1 < dRange[1]) return 'arriver';
+    return 'full';
+  };
+  const presentIds = l1Entries.filter(([, pid]) => pid !== homeId).map(([sid]) => sid);
+  const leavers = presentIds.filter((sid) => shapeOf(sid) === 'leaver').length;
+  const arrivers = presentIds.filter((sid) => shapeOf(sid) === 'arriver').length;
+  // effective supply: full-day soldiers count 1, each partial soldier ½
+  const effSupply = (present - leavers - arrivers) + (leavers + arrivers) / 2;
+  const fmtNum = (n: number) => Number.isInteger(n) ? String(n) : n.toFixed(1);
+
   // ── header strip ──
   const header = `
 <div class="card">
@@ -431,6 +461,7 @@ export function buildDayReportHtml(input: DayReportInput): string {
   <div class="chips">
     <span class="chip ok">נוכחים בבסיס: ${present}</span>
     <span class="chip">בבית: ${home}</span>
+    ${leavers || arrivers ? `<span class="chip">יוצאים: ${leavers} · נכנסים: ${arrivers}</span>` : ''}
     <span class="chip ${errors.length ? 'err' : 'ok'}">שגיאות: ${errors.length}</span>
     <span class="chip ${warnings.length ? 'warn' : 'ok'}">אזהרות: ${warnings.length}</span>
   </div>
@@ -455,19 +486,21 @@ export function buildDayReportHtml(input: DayReportInput): string {
   balanceRows.sort((a, b) => orderIndex(a.name) - orderIndex(b.name)
     || a.name.localeCompare(b.name, 'he'));
   const totalNeed = balanceRows.reduce((s, r) => s + r.need, 0);
-  const surplus = present - totalNeed;
+  const surplus = effSupply - totalNeed;
   const magenGrew = input.flex.some((f) =>
     posName(f.positionId) === 'מגן' && f.after > f.before);
   const shrunk = input.flex.filter((f) => f.after < f.before);
-  const balanceSentence = surplus > 0
-    ? `נדרשים ${totalNeed} חיילים · זמינים ${present} · <b>עודף ${surplus}</b>` +
+  const avail = `זמינים ${fmtNum(effSupply)}`
+    + (leavers || arrivers ? ` (${present} נוכחים — יוצא+נכנס נספרים כחצי כל אחד)` : '');
+  const balanceSentence = surplus > 0.001
+    ? `נדרשים ${totalNeed} חיילים · ${avail} · <b>עודף ${fmtNum(surplus)}</b>` +
       (magenGrew ? ' — נקלט בצוות המגן (כולם עובדים)' : '')
-    : surplus < 0
-      ? `נדרשים ${totalNeed} חיילים · זמינים ${present} · <b>חסרים ${-surplus}</b>` +
+    : surplus < -0.001
+      ? `נדרשים ${totalNeed} חיילים · ${avail} · <b>חסרים ${fmtNum(-surplus)}</b>` +
         (shrunk.length
           ? ` — ${shrunk.map((f) => `${esc(posName(f.positionId))} צומצם ל-${f.after}`).join(', ')}`
           : ' — מושבים עלולים להישאר ריקים')
-      : `נדרשים ${totalNeed} חיילים · זמינים ${present} · <b>מאזן מדויק</b>`;
+      : `נדרשים ${totalNeed} חיילים · ${avail} · <b>מאזן מדויק</b>`;
   const balance = `
 <div class="card">
   <h2>מאזן היום — דרישה מול מצבה</h2>
@@ -477,10 +510,11 @@ export function buildDayReportHtml(input: DayReportInput): string {
 ${balanceRows.map((r) => `      <tr><td>${esc(r.name)}</td><td>${r.need}</td><td>${r.got}</td></tr>`).join('\n')}
     </tbody>
     <tfoot>
-      <tr><td>סה"כ</td><td>${totalNeed}</td><td>${present}</td></tr>
+      <tr><td>סה"כ</td><td>${totalNeed}</td><td>${fmtNum(effSupply)}</td></tr>
     </tfoot>
   </table></div>
   <p style="font-size:1.02rem">${balanceSentence}</p>
+${leavers || arrivers ? `  <div class="sub">יום חילופין: ${leavers} יוצאים ו-${arrivers} נכנסים. יוצא ונכנס יכולים לאייש יחד מושב אחד (זוג מתחלף), ולכן כל אחד נספר כחצי חייל במצבה.</div>` : ''}
   <div class="sub">שרשורים (כרמל חטיבה / כונן גשש) אינם צורכים חיילים נוספים — הם מאוישים בצוותים היורדים מהמשמרות המקבילות.</div>
 </div>`;
 

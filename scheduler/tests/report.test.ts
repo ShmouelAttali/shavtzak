@@ -6,6 +6,7 @@ import { generate, persist } from '../src/generate.js';
 import {
   buildDayInput, buildDayReportHtml, buildWeekReportHtml, keyShortages, DayReportInput,
 } from '../src/report.js';
+import { dayStart, dayEnd } from '../src/time.js';
 
 const D = '2026-08-10';
 
@@ -138,6 +139,33 @@ test('day report: demand fill is split into granular rounds with the cascade', (
     'Level-2 slot cascade missing from phase 2');
   assert.ok(dayHtml.includes('רוטציית תת-עמדה'), 'P4b sub-rotation cascade item missing');
   assert.ok(dayHtml.includes('פיזור לילות'), 'P2 night-spread cascade item missing');
+});
+
+test('day report: exchange balance counts a leaver + arriver as one seat (½ each)', () => {
+  const ds = dayStart(D), de = dayEnd(D);
+  const bus = ds + 18 * 60;   // 08:00 next morning
+  const input: DayReportInput = {
+    day: D, generatedAt: 'עכשיו', dryRun: true,
+    soldiers: [1, 2, 3].map((id) => ({
+      id, name: `חייל ${id}`, platoon: '1', role: 'לוחם',
+      nights7d: 0, weightedHours7d: 0, positionCounts: {}, allowedPositions: null,
+    })),
+    positions: [{ id: 2, name: 'עמדות הגנה', missionClass: 'static',
+      daily: false, chainOverlay: false, staffAllRoles: false }],
+    // soldier 1 full-day; 2 = leaver (gone from 08:00); 3 = arriver (back at 08:00)
+    blocked: { 2: [[bus, de]], 3: [[ds, bus]] },
+    exits: {}, locks: [], pools: [], seatReserved: [],
+    level1: { 1: 2, 2: 2, 3: 2 },
+    level1Rationale: {},
+    demand: { 2: 2 }, demandBefore: { 2: 2 },
+    flex: [], assignments: [], issues: [], findings: [],
+  };
+  const html = buildDayReportHtml(input);
+  assert.ok(html.includes('יוצאים: 1 · נכנסים: 1'), 'leaving/arriving chip missing');
+  // supply = 1 full + ½ + ½ = 2 → exactly meets demand 2
+  assert.ok(html.includes('זמינים 2'), 'effective supply not half-counted');
+  assert.ok(html.includes('מאזן מדויק'), `expected exact balance: ${html.match(/נדרשים[^<]*<b>[^<]*<\/b>/)?.[0]}`);
+  assert.ok(html.includes('נספרים כחצי'), 'half-count explanation missing');
 });
 
 test('day report: quota chips carry the pick + why, and leave the general step', () => {
