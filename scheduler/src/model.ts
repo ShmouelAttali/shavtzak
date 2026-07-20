@@ -221,6 +221,9 @@ export interface Context {
   /** the מגן-commander decision effective for `day` (magen_commander_history:
    *  latest valid_from <= day), with the display name joined from soldiers */
   magenCommander?: { soldierId: number; name: string };
+  /** the INCOMING week's מגן commander — set only when tomorrow is a Sunday;
+   *  anchors the arriving crew halves at the Sunday-08:00 changeover */
+  nextMagenCommander?: { soldierId: number; name: string };
   config: Record<string, any>;
   /** resolved numeric tunables from `config` (see src/config.ts) */
   tunables: Tunables;

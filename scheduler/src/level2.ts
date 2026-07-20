@@ -14,7 +14,7 @@ import { Gen, SoldierState, allowedIn, assign, countedHours, exitExempt, isBlock
 import { isNightExitOk } from './config.js';
 import { fits, restInfo, restBefore, isCountedNight, fitText, fitTexts, FitReason, FIT_RATIONALE } from './rest.js';
 import { rank, rotationPenalty, nightsOf, loadOf } from './rank.js';
-import { tryReplacementPair } from './pairs.js';
+import { tryReplacementPair, partialWindow } from './pairs.js';
 import { Level1Plan, isSeatPair } from './level1.js';
 
 const CLASS_HE: Record<string, string> = {
@@ -482,12 +482,87 @@ function fillStaticTwoPhase(g: Gen, pid: number, posName: string, sorted: Slot[]
   }
 }
 
+/** מגן weekly changeover (owner 2026-07-20): the whole crew is replaced at the
+ *  Sunday 08:00 bus, which falls inside SATURDAY's schedule day. Each מגן seat
+ *  becomes a pair split at that bus — an outgoing half (14:00→08:00, a leaver,
+ *  preferring yesterday's crew like every day) and an incoming half
+ *  (08:00→14:00, the fresh crew: the INCOMING week's מגן commander + his
+ *  מחלקה, mixing other platoons only to complete the crew). Runs before the
+ *  general fill so the leavers/arrivers aren't spent as single shifts first;
+ *  remaining seats fall through to the normal מגן fill. Only active when
+ *  tomorrow is a Sunday (ctx.nextMagenCommander set). */
+function magenChangeoverPass(g: Gen, plan1: Level1Plan): void {
+  const { ctx, state, level1 } = g;
+  const cmd = ctx.nextMagenCommander;
+  const magenId = ctx.positionByName.get('מגן');
+  if (!cmd || magenId === undefined) return;
+  const slots = plan1.slotsByPosition.get(magenId);
+  if (!slots || !slots.length) return;
+  const pos = ctx.positions.get(magenId)!;
+  const window = slots[0].period;                        // 14:00 → 14:00
+  const bus = window[0] + 18 * 60;                       // next-day 08:00
+  const firstHalf: [Minutes, Minutes] = [window[0], bus];
+  const secondHalf: [Minutes, Minutes] = [bus, window[1]];
+  const nightExempt = pos.config?.night_exempt ?? false;
+  const noFloor = pos.config?.no_rest_floor ?? false;
+  const cmdPlatoon = state.get(cmd.soldierId)?.soldier.platoon;
+
+  const free = (sid: number, half: [Minutes, Minutes]) =>
+    !(ctx.existing.get(sid) ?? []).some((a) => overlaps(a.period, half))
+    && !g.assignments.some((a) => a.soldierId === sid && overlaps(a.period, half));
+  const halfFit = (st: SoldierState, half: [Minutes, Minutes]) =>
+    fits(g, st, half, false, false, nightExempt, true, false, noFloor).ok;
+
+  const pool = [...state.values()].filter((st) => allowedIn(g, st.soldier, 'מגן'));
+  const departers = pool.filter((st) => {
+    const w = partialWindow(ctx.blocked.get(st.soldier.id) ?? [], window);
+    return w?.kind === 'departing' && w.at === bus && free(st.soldier.id, firstHalf) && halfFit(st, firstHalf);
+  });
+  const arrivers = pool.filter((st) => {
+    const w = partialWindow(ctx.blocked.get(st.soldier.id) ?? [], window);
+    return w?.kind === 'arriving' && w.at === bus && free(st.soldier.id, secondHalf) && halfFit(st, secondHalf);
+  });
+  // outgoing halves: yesterday's crew first (continuity), then fairness
+  const outQ = rank(g, departers, magenId, true, firstHalf[0]).sort((a, b) =>
+    Number(ctx.yesterdayPosition.get(b.soldier.id) === magenId)
+    - Number(ctx.yesterdayPosition.get(a.soldier.id) === magenId));
+  // incoming halves: the commander, then his מחלקה, then others — fairness within tier
+  const tier = (st: SoldierState) => st.soldier.id === cmd.soldierId ? 0
+    : st.soldier.platoon === cmdPlatoon ? 1 : 2;
+  const inQ = rank(g, arrivers, magenId, false, secondHalf[0], null, true)
+    .sort((a, b) => tier(a) - tier(b));
+
+  const preSeats = new Set(g.assignments.filter((a) => a.positionId === magenId
+    && a.period[0] === window[0]).map((a) => a.seatIndex));
+  let seat = 1;
+  const nextFree = () => { while (preSeats.has(seat)) seat++; return seat; };
+  const pairs = Math.min(slots[0].seats - preSeats.size, outQ.length, inQ.length);
+  for (let i = 0; i < pairs; i++) {
+    const d = outQ[i], a = inQ[i];
+    const s = nextFree(); preSeats.add(s);
+    for (const st of [d, a]) if (st.level1 !== magenId) { st.level1 = magenId; level1.set(st.soldier.id, magenId); }
+    const note = `חילופי מגן: החלפה ב-${fmtHM(bus)}`;
+    const dRat = buildRationale(g, d, { ...slots[0], period: firstHalf }, magenId, {
+      pickedFrom: 'primary', fitReasons: [], commanderSeat: false,
+      groupNights: [], groupLoads: [], myNights: 0, myLoad: 0 });
+    dRat.push({ code: 'handover_out', params: { handover: fmtHM(bus), partner: a.soldier.name } });
+    assign(g, d, { ...slots[0], period: firstHalf }, s, false, [note], 'auto', dRat);
+    const aRat = buildRationale(g, a, { ...slots[0], period: secondHalf }, magenId, {
+      pickedFrom: 'primary', fitReasons: [], commanderSeat: false,
+      groupNights: [], groupLoads: [], myNights: 0, myLoad: 0 });
+    if (a.soldier.id === cmd.soldierId) aRat.push({ code: 'magen_commander' });
+    aRat.push({ code: 'handover_in', params: { handover: fmtHM(bus), partner: d.soldier.name } });
+    assign(g, a, { ...slots[0], period: secondHalf }, s, false, [note], 'auto', aRat);
+  }
+}
+
 export function fillLevel2(g: Gen, plan1: Level1Plan): void {
   const { ctx, state, issues, level1 } = g;
   const { slotsByPosition, seatPlan, seatRuleBySub } = plan1;
   const restId = ctx.positionByName.get('מנוחה')!;
 
   exitPrePass(g, plan1);
+  magenChangeoverPass(g, plan1);
 
   for (const [pid, slots] of slotsByPosition) {
     const posName = ctx.positions.get(pid)!.name;

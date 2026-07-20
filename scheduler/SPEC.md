@@ -644,6 +644,16 @@ where nights rank), weighted_hours second, per-position counts third.
   staff / driver-qual / daily positions and exit-day soldiers are untouched.
   Swapped rows carry rationale `rest_repair`; remaining short gaps are
   genuinely unavoidable.
+- **מגן weekly changeover** (owner 2026-07-20): the crew is replaced at the
+  **Sunday 08:00** bus, which falls inside SATURDAY's schedule day. A pre-pass
+  (before the general fill, only when tomorrow is a Sunday) splits each מגן
+  seat at that bus into an **outgoing half** (14:00→08:00 — a leaver,
+  preferring yesterday's crew) and an **incoming half** (08:00→14:00 — the
+  fresh crew: the INCOMING week's מגן commander
+  (`magen_commander_history` effective for that Sunday) + his מחלקה, mixing
+  other platoons only to complete the crew). Halves carry `handover_out` /
+  `handover_in` (the commander half also `magen_commander`). Remaining seats
+  fall through to the normal fill.
 - **Chain ordering**: T4 rules whose source crew descended on a *previous* day
   (`source_day_offset < 0`) are fully determined by yesterday's persisted rows,
   so they are applied **before Level 1** — the standby row is reserved (H3/H3b)

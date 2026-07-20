@@ -1,6 +1,6 @@
 import { multiQuery } from './db.js';
 import { Context, Soldier, Position, Slot, Fairness, ChainRule } from './model.js';
-import { parseRange, dayStart, dayEnd, addDays, overlaps, nightRange, weekStart, Minutes } from './time.js';
+import { parseRange, dayStart, dayEnd, addDays, overlaps, nightRange, weekStart, isSunday, Minutes } from './time.js';
 import { normalizeName } from './text.js';
 import { isCountedNight } from './rest.js';
 import { loadTunables, effectiveConfig, isOnCall } from './config.js';
@@ -24,7 +24,7 @@ export async function loadContext(day: string): Promise<Context> {
   // TLS handshakes) dominate wall-clock over the WAN pooler. Day literals are
   // regex-validated above; no user input reaches this SQL.
   const [, posRows, candRows, soldierRows, allowedRows, magenRows, fairRows, slotRows, existRows, ydayRows,
-    blockRows, exitRows, lockShiftRows, lockDayRows, chainRows, configRows] = await multiQuery([
+    blockRows, exitRows, lockShiftRows, lockDayRows, chainRows, configRows, nextMagenRows] = await multiQuery([
     `insert into schedule_days (day) values ('${day}') on conflict do nothing`,
     `select id, name, mission_class, is_scheduled, config from positions`,
     // id-based closed lists (position_candidates); the name is joined for
@@ -70,6 +70,14 @@ export async function loadContext(day: string): Promise<Context> {
      where day = '${day}' and (locked or source = 'manual')`,
     `select * from chain_rules order by id`,
     `select key, value from config`,
+    // the INCOMING week's מגן-commander decision (effective for tomorrow) —
+    // used only when tomorrow is a Sunday: the Sunday-08:00 crew changeover
+    // falls inside today's (Saturday's) schedule day, and the arriving crew
+    // halves follow the incoming week's commander + מחלקה
+    `select h.soldier_id, s.full_name
+     from magen_commander_history h join soldiers s on s.id = h.soldier_id
+     where h.valid_from <= '${tomorrow}'
+     order by h.valid_from desc limit 1`,
   ]);
 
   const positions = new Map<number, Position>();
@@ -267,6 +275,10 @@ export async function loadContext(day: string): Promise<Context> {
     lockedShift, lockedDay, chainRules,
     magenCommander: magenRows[0]
       ? { soldierId: magenRows[0].soldier_id, name: magenRows[0].full_name }
+      : undefined,
+    // incoming-week מגן commander (used only when tomorrow is a Sunday)
+    nextMagenCommander: isSunday(tomorrow) && nextMagenRows[0]
+      ? { soldierId: nextMagenRows[0].soldier_id, name: nextMagenRows[0].full_name }
       : undefined,
     config, tunables: loadTunables(config),
   };
