@@ -42,6 +42,24 @@ test('flex shortage: pool of 40 shrinks סיור to 3 seats/shift and pins מג�
   assert.equal(Number(magen[0].n), 10);
 });
 
+test('flex bonus seat: an unfilled מגן seat above the min (10) is NOT reported', async () => {
+  await freshSchema();
+  await seedSoldiers();
+  // enlarge מגן to 12 seats but starve the pool so it cannot fill past its
+  // flex minimum: seats 11–12 are a bonus above the min of 10 — an empty one
+  // must NOT be reported (owner 2026-07-20).
+  await query(`insert into seat_overrides (position_id, valid_from, seats, note)
+               values ((select id from positions where name = 'מגן'), $1, 12, 'test')`, [D]);
+  await query(`insert into unavailability (soldier_id, period, kind)
+    select id, tsrange(day_start($1), day_start($1) + interval '1 day'), 'חופש'
+    from soldiers where full_name >= 'חייל 30'`, [D]);   // leave a thin pool
+  const res = await generate(D);
+  const overMin = res.issues.filter((i) => i.includes('מגן') && i.includes('לא אויש'))
+    .filter((i) => { const m = i.match(/מושב (\d+)/); return m && Number(m[1]) > 10; });
+  assert.deepEqual(overMin, [], JSON.stringify(res.issues.filter((i) => i.includes('מגן'))));
+  await query(`delete from seat_overrides where note = 'test'`);
+});
+
 test('H6d shortage: all נהג דוד out → generator reports missing drivers and empty driver seats', async () => {
   await freshSchema();
   await seedSoldiers();

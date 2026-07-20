@@ -643,7 +643,17 @@ export function fillLevel2(g: Gen, plan1: Level1Plan): void {
           viol = fe.fit.reasons.map((r) => `בדוחק: ${fitText(r)}`);
         }
         if (!picked) {
-          issues.push(`${posName} ${fmtHM(slot.period[0])}-${fmtHM(slot.period[1])} מושב ${seat}${commanderSeat ? ' (מפקד)' : driverSeat ? ' (נהג)' : ''}: לא אויש`);
+          // flex positions (מגן 10–12, סיור 3–4): seats above the flex
+          // minimum are a bonus, not a requirement — an empty one is not
+          // reported as long as the minimum is met
+          const flexMin: number | undefined =
+            ctx.positions.get(pid)!.config?.flex_seats?.min;
+          const filled = g.assignments.filter((a) => a.positionId === slot.positionId
+            && a.subPositionId === slot.subPositionId && a.period[0] === slot.period[0]).length
+            + lockedRows.length;
+          if (flexMin === undefined || filled < flexMin) {
+            issues.push(`${posName} ${fmtHM(slot.period[0])}-${fmtHM(slot.period[1])} מושב ${seat}${commanderSeat ? ' (מפקד)' : driverSeat ? ' (נהג)' : ''}: לא אויש`);
+          }
           continue;
         }
         takenThisSlot.add(picked.soldier.id);
