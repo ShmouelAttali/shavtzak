@@ -3,18 +3,29 @@ import { SignIn, SignedIn, SignedOut, UserButton, useUser, useClerk } from '@cle
 import type { TabId, SheetData } from './types';
 import { useSoldiers } from './hooks/useSoldiers';
 import { useShavtzak } from './hooks/useShavtzak';
+import { useIsShavtzakAdmin } from './hooks/useIsShavtzakAdmin';
 import { PersonalSchedule } from './components/PersonalSchedule';
 import { UnitSchedule } from './components/UnitSchedule';
 import { CompanySummary } from './components/CompanySummary';
 import { Shavtzak } from './components/Shavtzak';
+import { DraftSchedule } from './components/DraftSchedule';
+import { FairnessView } from './components/FairnessView';
+import { ExitRequests } from './components/ExitRequests';
+import { AdminExits } from './components/AdminExits';
 
 const COMPANY_ROLES = new Set(['מ"פ', 'סמ"פ', 'מ"מ', 'סמל', 'מ"כ']);
 
-const TABS: { id: TabId; label: string; restricted?: true }[] = [
+// restricted levels: 'company' = command roles only (sheet role);
+// 'scheduler' = command roles OR shavtzak_admins (scheduler DB table)
+const TABS: { id: TabId; label: string; restricted?: 'company' | 'scheduler' }[] = [
   { id: 'personal',  label: 'לוז אישי' },
   { id: 'unit',      label: 'לוז יציאות מחלקתי' },
-  { id: 'company',   label: 'סיכום פלוגתי', restricted: true },
+  { id: 'company',   label: 'סיכום פלוגתי', restricted: 'company' },
   { id: 'shavtzak',  label: 'שבצק' },
+  { id: 'exitreq',   label: 'יציאה קצרה' },
+  { id: 'draft',     label: 'שבצק חדש (טיוטה)', restricted: 'scheduler' },
+  { id: 'fairness',  label: 'הוגנות', restricted: 'scheduler' },
+  { id: 'exitadmin', label: 'ניהול יציאות', restricted: 'scheduler' },
 ];
 
 const APP_VERSION = '1.0.1';
@@ -47,11 +58,14 @@ function AppContent({ data }: { data: SheetData }) {
   const myRole = mySoldier?.role ?? '';
   const mySoldierName = mySoldier?.fullName ?? '';
   const canSeeCompany = COMPANY_ROLES.has(myRole);
+  const isShavtzakAdmin = useIsShavtzakAdmin(myEmail);
+  const canSeeScheduler = canSeeCompany || isShavtzakAdmin;
 
-  // If the company tab becomes inaccessible, fall back to personal
+  // If a restricted tab becomes inaccessible, fall back to personal
   useEffect(() => {
     if (activeTab === 'company' && !canSeeCompany) setActiveTab('personal');
-  }, [activeTab, canSeeCompany]);
+    if (['draft', 'fairness', 'exitadmin'].includes(activeTab) && !canSeeScheduler) setActiveTab('personal');
+  }, [activeTab, canSeeCompany, canSeeScheduler]);
   const { data: shavtzakAll, loading: shavtzakLoading, error: shavtzakError, reload: reloadShavtzak } = useShavtzak();
 
   return (
@@ -91,7 +105,9 @@ function AppContent({ data }: { data: SheetData }) {
       <div className="sticky top-0 z-20 bg-white shadow-sm">
         <div className="mx-auto max-w-6xl">
           <nav className="flex overflow-x-auto" aria-label="Tabs">
-            {TABS.filter(tab => !tab.restricted || canSeeCompany).map((tab) => (
+            {TABS.filter(tab => !tab.restricted
+              || (tab.restricted === 'company' && canSeeCompany)
+              || (tab.restricted === 'scheduler' && canSeeScheduler)).map((tab) => (
               <button
                 key={tab.id}
                 onClick={() => setActiveTab(tab.id)}
@@ -116,6 +132,10 @@ function AppContent({ data }: { data: SheetData }) {
         {activeTab === 'unit' && <UnitSchedule data={data} />}
         {activeTab === 'company' && <CompanySummary data={data} shavtzakAll={shavtzakAll} />}
         {activeTab === 'shavtzak' && <Shavtzak soldiers={data.soldiers} shavtzakAll={shavtzakAll} loading={shavtzakLoading} error={shavtzakError} mySoldierName={mySoldierName} />}
+        {activeTab === 'draft' && <DraftSchedule soldiers={data.soldiers} mySoldierName={mySoldierName} />}
+        {activeTab === 'fairness' && <FairnessView />}
+        {activeTab === 'exitreq' && <ExitRequests soldierName={mySoldierName} email={myEmail} />}
+        {activeTab === 'exitadmin' && <AdminExits soldiers={data.soldiers} email={myEmail} />}
       </main>
     </div>
   );

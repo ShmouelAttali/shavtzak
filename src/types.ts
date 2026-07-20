@@ -19,7 +19,7 @@ export interface SheetData {
   allowedEmails: string[]; // from the 'email' column in the sheet
 }
 
-export type TabId = 'personal' | 'unit' | 'company' | 'shavtzak';
+export type TabId = 'personal' | 'unit' | 'company' | 'shavtzak' | 'draft' | 'fairness' | 'exitreq' | 'exitadmin';
 
 export const STATUS_COLORS: Record<string, { bg: string; text: string; label: string }> = {
   'נוכח': { bg: 'bg-green-100', text: 'text-green-800', label: 'נוכח' },

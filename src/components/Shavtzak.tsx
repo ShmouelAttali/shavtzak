@@ -1,21 +1,32 @@
 import {createContext, useContext, useEffect, useMemo, useRef, useState} from 'react';
 import {todayShavtzakStr} from '../hooks/useShavtzak';
 import type {ShavtzakAllData, ShavtzakData, StationGroup, SubType} from '../../api/shavtzak';
+import type {DraftAssignmentMeta} from '../../api/draft';
 import type {Soldier} from '../types';
 import type {PopupState} from './SoldierPopup';
 import {SoldierPopup} from './SoldierPopup';
+import {isCaveat} from '../../scheduler/src/rationale';
 
 // ── Soldier lookup context ─────────────────────────────────────────────────
-interface SoldierInfo {
+// (exported so other tabs — e.g. the draft schedule — reuse the same
+//  name-rendering/popup system and layout renderers)
+export interface SoldierInfo {
     unit: string;
     role: string;
     phone: string
 }
 
-const SoldierCtx = createContext<Map<string, SoldierInfo>>(new Map());
-const NameClickCtx = createContext<(name: string, info: SoldierInfo | undefined) => void>(() => {
+export const SoldierCtx = createContext<Map<string, SoldierInfo>>(new Map());
+export const NameClickCtx = createContext<(name: string, info: SoldierInfo | undefined) => void>(() => {
 });
-const MyNameCtx = createContext<string>('');
+export const MyNameCtx = createContext<string>('');
+
+// Draft-tab only: per-day `${name}|${time}` meta enables the ⓘ/⚠ rationale
+// glyph next to each name. The live tab mounts no provider (ctx stays null),
+// so it renders exactly as before.
+export const DraftMetaCtx = createContext<Record<string, DraftAssignmentMeta> | null>(null);
+export const RationaleClickCtx = createContext<(name: string, time: string, meta: DraftAssignmentMeta) => void>(() => {
+});
 
 const BOLD_ROLES = new Set(['מ"מ', 'מ"פ', 'סמ"פ', 'סמל', 'מ"כ']);
 const UNIT_COLOR: Record<string, string> = {
@@ -26,20 +37,42 @@ const UNIT_COLOR: Record<string, string> = {
     'חמ"ל': 'text-blue-500',
 };
 
-function SoldierName({name}: { name: string }) {
+function SoldierName({name, time}: { name: string; time?: string }) {
     const lookup = useContext(SoldierCtx);
     const onCLick = useContext(NameClickCtx);
     const myName = useContext(MyNameCtx);
+    const draftMeta = useContext(DraftMetaCtx);
+    const onRationale = useContext(RationaleClickCtx);
+    // draft API pads under-filled slots with this marker — render as a red badge
+    if (name === 'לא מאויש') {
+        return (
+            <span className="text-sm whitespace-nowrap leading-snug select-none font-bold text-red-600 bg-red-50 ring-1 ring-red-300 rounded px-1.5 py-0.5">
+                ⚠ לא מאויש
+            </span>
+        );
+    }
     const info = lookup.get(name);
     const bold = info ? BOLD_ROLES.has(info.role) : false;
     const color = info ? (UNIT_COLOR[info.unit] ?? 'text-gray-800') : 'text-gray-800';
     const isMe = myName !== '' && name === myName;
+    const meta = draftMeta && time !== undefined ? draftMeta[`${name}|${time}`] : undefined;
+    const warn = meta ? meta.violations.length > 0 || meta.rationale.some(isCaveat) : false;
     return (
         <span
             onClick={() => onCLick(name, info)}
             className={`text-sm whitespace-nowrap leading-snug select-none cursor-pointer active:opacity-70 ${isMe ? `font-bold ${color} bg-yellow-200 ring-1 ring-yellow-400 rounded px-1.5 py-0.5` : `${color} ${bold ? 'font-bold' : 'font-medium'}`}`}
         >
       {name}
+            {meta && (
+                <button
+                    onClick={e => {
+                        e.stopPropagation();
+                        onRationale(name, time!, meta);
+                    }}
+                    title="למה שובץ?"
+                    className={`mr-0.5 align-super text-[10px] leading-none font-bold ${warn ? 'text-orange-500' : 'text-blue-500'}`}
+                >{warn ? '⚠' : 'ⓘ'}</button>
+            )}
     </span>
     );
 }
@@ -47,10 +80,12 @@ function SoldierName({name}: { name: string }) {
 // SoldierPopup is imported from ./SoldierPopup
 
 // ── Helpers ────────────────────────────────────────────────────────────────
+// Schedule day runs 14:00→14:00 — shift lists start at 14:00, times before
+// 14:00 belong to the tail of the day (02:00, 06:00, 10:00 come last).
 function timeToVal(t: string): number {
     if (!t || t === 'יומי') return 9999;
     const h = parseInt(t.split(':')[0] ?? '0');
-    return h < 6 ? h + 24 : h;
+    return h < 14 ? h + 24 : h;
 }
 
 function allUniqueTimes(subTypes: SubType[]): string[] {
@@ -217,7 +252,7 @@ function YomiGrid({subTypes, bg, groupName = ''}: { subTypes: SubType[]; bg: str
                             <div className="grid gap-x-4 gap-y-0.5"
                                  style={{gridTemplateColumns: `repeat(${innerCols}, auto)`}}>
                                 {soldiers.map((name, i) => (
-                                    <SoldierName key={i} name={name}/>
+                                    <SoldierName key={i} name={name} time={sub.times[0]?.time}/>
                                 ))}
                             </div>
                         </div>
@@ -241,7 +276,7 @@ function YomiGrid({subTypes, bg, groupName = ''}: { subTypes: SubType[]; bg: str
             )}
             <div className="grid gap-x-6 gap-y-0.5" style={{gridTemplateColumns: `repeat(${cols}, auto)`}}>
                 {soldiers.map((name, i) => (
-                    <SoldierName key={i} name={name}/>
+                    <SoldierName key={i} name={name} time={first?.times[0]?.time}/>
                 ))}
             </div>
         </div>
@@ -281,7 +316,8 @@ function TransposedTable({sub, bg, rowAlt, colHeader, groupName = ''}: {
                     <tr key={rowIdx} className={rowIdx % 2 === 1 ? rowAlt : ''}>
                         {sub.times.map(slot => (
                             <td key={slot.time} className="py-1.5 px-2 sm:px-4 text-center border-b border-gray-100">
-                                {slot.soldiers[rowIdx] ? <SoldierName name={slot.soldiers[rowIdx]}/> : ''}
+                                {slot.soldiers[rowIdx] ?
+                                    <SoldierName name={slot.soldiers[rowIdx]} time={slot.time}/> : ''}
                             </td>
                         ))}
                     </tr>
@@ -329,7 +365,8 @@ function MultiTypeTable({subTypes, bg, rowAlt, colHeader}: {
                             return (
                                 <td key={sub.sug} className="py-2 px-4 text-center">
                                     {soldiers.length > 0
-                                        ? soldiers.map((name, i) => <div key={i}><SoldierName name={name}/></div>)
+                                        ? soldiers.map((name, i) => <div key={i}><SoldierName name={name}
+                                                                                              time={time}/></div>)
                                         : <span className="text-gray-300 text-sm">—</span>}
                                 </td>
                             );
@@ -370,7 +407,8 @@ function MissionCards({subTypes, colHeader}: {
                                 <div
                                     className="text-[11px] font-semibold text-gray-400 mb-0.5">{entry.time || 'יומי'}</div>
                                 <div className="flex flex-wrap gap-x-2 gap-y-0.5">
-                                    {entry.soldiers.map((name, i) => <SoldierName key={i} name={name}/>)}
+                                    {entry.soldiers.map((name, i) => <SoldierName key={i} name={name}
+                                                                                  time={entry.time}/>)}
                                 </div>
                             </div>
                         ))}
@@ -440,8 +478,8 @@ function GroupCard({group}: { group: StationGroup }) {
     );
 }
 
-// ── Groups renderer (shared by date view) ─────────────────────────────────
-function GroupsView({dayData}: { dayData: ShavtzakData }) {
+// ── Groups renderer (shared by date view; also used by the draft tab) ──────
+export function GroupsView({dayData}: { dayData: ShavtzakData }) {
     const smallGroups = sortByOrder(dayData.groups.filter(g => getTier(g) === 'small'), SMALL_ORDER);
     const mediumGroups = dayData.groups.filter(g => getTier(g) === 'medium');
     const wideGroups = dayData.groups.filter(g => getTier(g) === 'wide');

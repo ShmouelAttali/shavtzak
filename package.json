@@ -7,16 +7,20 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "vercel-build": "tsc && vite build"
+    "vercel-build": "tsc && vite build",
+    "dev:api": "tsx watch scripts/dev-api.ts",
+    "test": "node --import tsx --test --test-concurrency=1 tests/*.test.ts"
   },
   "dependencies": {
     "@clerk/clerk-react": "^5.61.8",
     "google-auth-library": "^10.7.0",
+    "pg": "^8.22.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
   },
   "devDependencies": {
     "@types/node": "^20.14.0",
+    "@types/pg": "^8.20.0",
     "@types/react": "^18.3.3",
     "@types/react-dom": "^18.3.0",
     "@vercel/node": "^3.0.0",
@@ -24,6 +28,7 @@
     "autoprefixer": "^10.4.19",
     "postcss": "^8.4.39",
     "tailwindcss": "^3.4.4",
+    "tsx": "^4.23.1",
     "typescript": "^5.2.2",
     "vite": "^5.3.1"
   }
