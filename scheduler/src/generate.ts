@@ -16,7 +16,7 @@ import { runLevel1, reserveSeatCandidates, demand, Level1Plan } from './level1.j
 import { fillLevel2, repairShortRests } from './level2.js';
 import { runChain } from './chains.js';
 import { partialWindow } from './pairs.js';
-import { fmtHM, overlaps } from './time.js';
+import { overlaps } from './time.js';
 
 // Re-exported so cli.ts / api/draft.ts keep importing { generate, persist };
 // trackerPickOrder is re-exported for its unit tests.
