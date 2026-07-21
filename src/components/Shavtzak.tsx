@@ -168,11 +168,19 @@ function TimeLabel({time, gray, dateLabel, activeClass, futureClass = 'text-gray
 }
 
 // ── Display model ───────────────────────────────────────────────────────────
-// Presentation view of a day's groups: every slot resolved to its real
-// calendar moment (date+hour), tagged gray/not by comparing that moment to
-// the day being viewed, and (on the Shavtzak tab) merged with the previous
-// schedule day's own tail so the page reads as one ordinary calendar day —
-// see buildDisplayGroups below.
+// Presentation view of a day's groups, every slot sorted chronologically and
+// tagged gray/not. Two distinct builders below, because the two tabs' data
+// sources disagree about what a row's date means:
+//   - buildDisplayGroups: the draft tab's scheduler DB genuinely anchors a
+//     schedule day at 14:00→14:00, so an early hour in a day's own data can
+//     really belong to the calendar day after — resolved via slotMoment and
+//     (when an adjacent day's data is passed) merged with the previous
+//     schedule day's own tail so the page reads as one ordinary day.
+//   - buildSheetDisplayGroups: the live tab's שבצק sheet has no such
+//     concept — its own תאריך is always the literal, correct day for every
+//     row — so today's own slots are just sorted by literal hour, never
+//     gray. A bounded look-ahead into tomorrow's own record (its shifts
+//     starting before 14:00) is appended, grayed and dated, as a preview.
 interface DisplaySlot {
     time: string;
     gray: boolean;
@@ -307,6 +315,92 @@ export function buildDisplayGroups(selDate: string, current: StationGroup[], pre
     })
         // A position with nobody assigned at all today or in tomorrow's
         // lookahead is a leftover row (e.g. a one-off meeting that isn't
+        // happening this cycle) — don't render an empty box for it.
+        .filter(g => g.subTypes.some(s => s.times.some(t => t.soldiers.length > 0)));
+}
+
+// Tags a raw day's own subTypes with no gray/merge at all — used for the
+// live tab's own literal-hour sort and for its layout-tier decisions (which
+// must reflect a group's own shape, not one inflated by tomorrow's preview).
+function rawSlotsOnly(subTypes: SubType[]): DisplaySubType[] {
+    return subTypes.map(s => ({
+        sug: s.sug,
+        times: s.times.map(t => {
+            const start = parseSlotStart(t.time);
+            return {time: t.time, gray: false, dateLabel: '', soldiers: t.soldiers, ms: start ? start.h * 60 + start.m : Infinity};
+        }),
+    }));
+}
+
+// Always larger than any single day's minutes-of-day (max 1439), so
+// tomorrow's preview sorts after all of today regardless of hour.
+const TOMORROW_OFFSET = 10_000;
+
+// The שבצק sheet's own תאריך is always the literal, correct calendar day for
+// every row (confirmed by the owner) — unlike the newer scheduler DB the
+// draft tab reads, this data source has no 14:00-anchored "this early hour
+// actually belongs to tomorrow" concept. So today's own rows are just
+// sorted by their literal start hour, never gray. On top of that, a bounded
+// look-ahead into `nextDaySource` (tomorrow's own record) is appended,
+// grayed and dated — only its shifts starting before 14:00, per the owner —
+// as a preview of what's coming, without reinterpreting any of today's own
+// rows.
+export function buildSheetDisplayGroups(current: StationGroup[], nextDaySource: StationGroup[] | null, nextDateShort: string): DisplayGroup[] {
+    const names: string[] = [];
+    const seenNames = new Set<string>();
+    for (const g of current) if (!seenNames.has(g.name)) {
+        seenNames.add(g.name);
+        names.push(g.name);
+    }
+    if (nextDaySource) for (const g of nextDaySource) if (!seenNames.has(g.name)) {
+        seenNames.add(g.name);
+        names.push(g.name);
+    }
+
+    const curByName = new Map(current.map(g => [g.name, g]));
+    const nextByName = new Map((nextDaySource ?? []).map(g => [g.name, g]));
+
+    return names.map(name => {
+        const curGroup = curByName.get(name);
+        const nextGroup = nextByName.get(name);
+
+        const sugs: string[] = [];
+        const seenSugs = new Set<string>();
+        for (const s of curGroup?.subTypes ?? []) if (!seenSugs.has(s.sug)) {
+            seenSugs.add(s.sug);
+            sugs.push(s.sug);
+        }
+        for (const s of nextGroup?.subTypes ?? []) if (!seenSugs.has(s.sug)) {
+            seenSugs.add(s.sug);
+            sugs.push(s.sug);
+        }
+
+        const subTypes: DisplaySubType[] = sugs.map(sug => {
+            const curSub = curGroup?.subTypes.find(s => s.sug === sug);
+            const nextSub = nextGroup?.subTypes.find(s => s.sug === sug);
+            const times: DisplaySlot[] = [];
+            for (const t of curSub?.times ?? []) {
+                const start = parseSlotStart(t.time);
+                const ms = start ? start.h * 60 + start.m : Infinity;
+                times.push({time: t.time, gray: false, dateLabel: '', soldiers: t.soldiers, ms});
+            }
+            for (const t of nextSub?.times ?? []) {
+                const start = parseSlotStart(t.time);
+                if (!start || start.h >= 14) continue; // only tomorrow's early look-ahead, before 14:00
+                times.push({
+                    time: t.time, gray: true, dateLabel: nextDateShort, soldiers: t.soldiers,
+                    ms: TOMORROW_OFFSET + start.h * 60 + start.m,
+                });
+            }
+            times.sort((a, b) => a.ms - b.ms);
+            return {sug, times};
+        });
+
+        const tier = getTier(rawSlotsOnly((curGroup ?? nextGroup)?.subTypes ?? []), name);
+        return {name, subTypes, tier};
+    })
+        // A position with nobody assigned at all today or in tomorrow's
+        // look-ahead is a leftover row (e.g. a one-off meeting that isn't
         // happening this cycle) — don't render an empty box for it.
         .filter(g => g.subTypes.some(s => s.times.some(t => t.soldiers.length > 0)));
 }
@@ -783,10 +877,9 @@ export function Shavtzak({soldiers, shavtzakAll: data, loading, error, mySoldier
     const canNext = idx < data.dates.length - 1;
     const dayData = data.byDate[selectedDate] ?? null;
 
-    // Borrow the previous schedule day's own tail (today's own early
-    // morning, per the calendar) so the page reads as one ordinary day.
-    const prevDayData = dayData ? data.byDate[shiftDateStr(selectedDate, -1)] ?? null : null;
-    const displayGroups = dayData ? buildDisplayGroups(dayData.date, dayData.groups, prevDayData?.groups ?? null) : [];
+    const nextDayData = dayData ? data.byDate[shiftDateStr(selectedDate, 1)] ?? null : null;
+    const nextDateShort = dayData ? shortDate(parseAnyDate(shiftDateStr(selectedDate, 1))) : '';
+    const displayGroups = dayData ? buildSheetDisplayGroups(dayData.groups, nextDayData?.groups ?? null, nextDateShort) : [];
 
     const {total: totalDistinct, combat: combatCount} = computeTodayHeadcounts(displayGroups);
 
