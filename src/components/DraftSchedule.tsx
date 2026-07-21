@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import type { Soldier } from '../types';
 import type { DraftDay, DraftFinding } from '../../api/draft';
 import { useDraft } from '../hooks/useDraft';
-import { GroupsView, SoldierCtx, NameClickCtx, MyNameCtx, DraftMetaCtx, RationaleClickCtx, SoldierInfo } from './Shavtzak';
+import { GroupsView, buildDisplayGroups, SoldierCtx, NameClickCtx, MyNameCtx, DraftMetaCtx, RationaleClickCtx, SoldierInfo } from './Shavtzak';
 import { SoldierPopup, PopupState } from './SoldierPopup';
 import { RationalePopup, RationalePopupState } from './RationalePopup';
 import { DateRangePicker, todayIso, addDaysIso, heDate } from './DateRangePicker';
@@ -124,7 +124,7 @@ function DaySection({ day, onGenerate, generating }: {
       ) : (
         <>
           <DraftMetaCtx.Provider value={day.meta}>
-            <GroupsView dayData={{ date: day.day, groups: day.groups }} />
+            <GroupsView groups={buildDisplayGroups(day.day, day.groups, null)} />
           </DraftMetaCtx.Provider>
           <RestList day={day} />
         </>

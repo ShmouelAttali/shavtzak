@@ -1,6 +1,6 @@
 import {createContext, useContext, useEffect, useMemo, useRef, useState} from 'react';
 import {todayShavtzakStr} from '../hooks/useShavtzak';
-import type {ShavtzakAllData, ShavtzakData, StationGroup, SubType} from '../../api/shavtzak';
+import type {ShavtzakAllData, StationGroup, SubType} from '../../api/shavtzak';
 import type {DraftAssignmentMeta} from '../../api/draft';
 import type {Soldier} from '../types';
 import type {PopupState} from './SoldierPopup';
@@ -80,20 +80,143 @@ function SoldierName({name, time}: { name: string; time?: string }) {
 // SoldierPopup is imported from ./SoldierPopup
 
 // ── Helpers ────────────────────────────────────────────────────────────────
-// Schedule day runs 14:00→14:00 — shift lists start at 14:00, times before
-// 14:00 belong to the tail of the day (02:00, 06:00, 10:00 come last).
-function timeToVal(t: string): number {
-    if (!t || t === 'יומי') return 9999;
-    const h = parseInt(t.split(':')[0] ?? '0');
-    return h < 14 ? h + 24 : h;
+// `date` may be "DD/MM/YYYY" (Shavtzak tab, from the sheet) or "YYYY-MM-DD"
+// (draft tab, from the DB) — detect by separator and parse to a local Date
+// at midnight.
+function parseAnyDate(date: string): Date {
+    if (date.includes('-')) {
+        const [y, m, d] = date.split('-').map(Number);
+        return new Date(y, m - 1, d);
+    }
+    const [d, m, y] = date.split('/').map(Number);
+    return new Date(y, m - 1, d);
 }
 
-function allUniqueTimes(subTypes: SubType[]): string[] {
-    const set = new Set(subTypes.flatMap(s => s.times.map(t => t.time)));
-    return Array.from(set).sort((a, b) => timeToVal(a) - timeToVal(b));
+const pad2 = (n: number) => String(n).padStart(2, '0');
+
+// Formats `d` in the same style as `template` ("DD/MM/YYYY" or "YYYY-MM-DD").
+function formatLikeTemplate(template: string, d: Date): string {
+    return template.includes('-')
+        ? `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`
+        : `${pad2(d.getDate())}/${pad2(d.getMonth() + 1)}/${d.getFullYear()}`;
 }
 
-function isYomiOnly(subTypes: SubType[]): boolean {
+const shortDate = (d: Date) => `${pad2(d.getDate())}/${pad2(d.getMonth() + 1)}`;
+
+// Shifts a date string by `deltaDays` calendar days, same format in and
+// out — used to look up the adjacent schedule day's record when merging in
+// its tail.
+function shiftDateStr(date: string, deltaDays: number): string {
+    const base = parseAnyDate(date);
+    const shifted = new Date(base.getFullYear(), base.getMonth(), base.getDate() + deltaDays);
+    return formatLikeTemplate(date, shifted);
+}
+
+// A schedule day covers `recordDate` 14:00 → the next day's 14:00. Parses a
+// slot's time string into its start (hour, minute) plus whether the slot
+// can "roll over" past midnight — i.e. can actually land on the calendar
+// day after `recordDate` when its start hour is before 14:00. Only a bare
+// clock time ("HH:MM") or an overnight range whose end wraps past its
+// start ("22:00-6:00", כרמל חטיבה's night block) roll over; a same-day
+// range ("7:30-20:30", תורנים) and anything unparseable (יומי) are anchored
+// to `recordDate` itself and never roll over.
+function parseSlotStart(time: string): { h: number; m: number; canRollOver: boolean } | null {
+    const bare = /^(\d{1,2}):(\d{2})$/.exec(time);
+    if (bare) return {h: parseInt(bare[1]), m: parseInt(bare[2]), canRollOver: true};
+    const range = /^(\d{1,2}):(\d{2})-(\d{1,2}):(\d{2})$/.exec(time);
+    if (range) {
+        const startMin = parseInt(range[1]) * 60 + parseInt(range[2]);
+        const endMin = parseInt(range[3]) * 60 + parseInt(range[4]);
+        return {h: parseInt(range[1]), m: parseInt(range[2]), canRollOver: endMin <= startMin};
+    }
+    return null;
+}
+
+// Resolves a slot's actual calendar moment given the schedule day it came
+// from — the real date+hour it happens at, computed once so every ordering
+// and gray/dated decision downstream just compares against it. Returns
+// null for slots with no parseable start time (יומי): those have no real
+// hour to place on the timeline.
+function slotMoment(recordDate: string, time: string): { dateStr: string; short: string; ms: number } | null {
+    const start = parseSlotStart(time);
+    if (!start) return null;
+    const base = parseAnyDate(recordDate);
+    const dayOffset = start.canRollOver && start.h < 14 ? 1 : 0;
+    const dt = new Date(base.getFullYear(), base.getMonth(), base.getDate() + dayOffset, start.h, start.m);
+    return {dateStr: formatLikeTemplate(recordDate, dt), short: shortDate(dt), ms: dt.getTime()};
+}
+
+// Shared hour-label renderer: normal styling for same-day hours, grayed +
+// dated for hours that land on a different calendar day than the one being
+// viewed. `gray`/`dateLabel` are precomputed per slot (see slotMoment)
+// rather than re-derived here, since the same clock hour (e.g. "06:00") can
+// appear twice once the previous day's tail is merged in — once as this
+// morning, once as tomorrow morning — and only real date comparison tells
+// them apart.
+function TimeLabel({time, gray, dateLabel, activeClass, futureClass = 'text-gray-400'}: {
+    time: string; gray: boolean; dateLabel: string; activeClass: string; futureClass?: string;
+}) {
+    const label = time || 'יומי';
+    return (
+        <span className={gray ? futureClass : activeClass}>
+            {label}
+            {gray && dateLabel && (
+                <span className="text-[10px] font-normal opacity-80"> ({dateLabel})</span>
+            )}
+        </span>
+    );
+}
+
+// ── Display model ───────────────────────────────────────────────────────────
+// Presentation view of a day's groups: every slot resolved to its real
+// calendar moment (date+hour), tagged gray/not by comparing that moment to
+// the day being viewed, and (on the Shavtzak tab) merged with the previous
+// schedule day's own tail so the page reads as one ordinary calendar day —
+// see buildDisplayGroups below.
+interface DisplaySlot {
+    time: string;
+    gray: boolean;
+    dateLabel: string;
+    soldiers: string[];
+    ms: number;
+}
+
+interface DisplaySubType {
+    sug: string;
+    times: DisplaySlot[]
+}
+
+interface DisplayGroup {
+    name: string;
+    subTypes: DisplaySubType[];
+    tier: Tier
+}
+
+// Tags every slot against its own record's date, with no cross-day merge —
+// used for the draft tab (no adjacent-day fetch) and for layout-tier
+// decisions (which must reflect a group's own unmerged shape).
+function toDisplaySubTypes(recordDate: string, subTypes: SubType[]): DisplaySubType[] {
+    return subTypes.map(s => ({
+        sug: s.sug,
+        times: s.times.map(t => {
+            const moment = slotMoment(recordDate, t.time);
+            if (!moment) return {time: t.time, gray: false, dateLabel: '', soldiers: t.soldiers, ms: Infinity};
+            const gray = moment.dateStr !== recordDate;
+            return {time: t.time, gray, dateLabel: gray ? moment.short : '', soldiers: t.soldiers, ms: moment.ms};
+        }),
+    }));
+}
+
+function allUniqueSlots(subTypes: DisplaySubType[]): DisplaySlot[] {
+    const map = new Map<string, DisplaySlot>();
+    for (const s of subTypes) for (const t of s.times) {
+        const key = `${t.gray ? 1 : 0}:${t.time}`;
+        if (!map.has(key)) map.set(key, t);
+    }
+    return Array.from(map.values()).sort((a, b) => a.ms - b.ms);
+}
+
+function isYomiOnly(subTypes: DisplaySubType[]): boolean {
     return subTypes.every(s =>
         s.times.length === 1 && (!s.times[0].time || s.times[0].time === 'יומי')
     );
@@ -102,18 +225,90 @@ function isYomiOnly(subTypes: SubType[]): boolean {
 // True when most (sug × time) cells are empty — a "pool of missions" where each
 // mission is staffed at its own times, rather than a dense shift table. A wide
 // grid wastes space on dashes here; a per-mission card list is more compact.
-function isSparseMultiType(subTypes: SubType[]): boolean {
+function isSparseMultiType(subTypes: DisplaySubType[]): boolean {
     if (subTypes.length < 3) return false;
-    const times = allUniqueTimes(subTypes);
-    if (times.length === 0) return false;
+    const slots = allUniqueSlots(subTypes);
+    if (slots.length === 0) return false;
     let filled = 0;
     for (const sub of subTypes) {
-        for (const time of times) {
-            const slot = sub.times.find(t => t.time === time);
-            if (slot && slot.soldiers.length > 0) filled++;
+        for (const slot of slots) {
+            const found = sub.times.find(t => t.time === slot.time && t.gray === slot.gray);
+            if (found && found.soldiers.length > 0) filled++;
         }
     }
-    return filled / (subTypes.length * times.length) <= 0.4;
+    return filled / (subTypes.length * slots.length) <= 0.4;
+}
+
+// Merge in the previous schedule day's own tail (slots whose real moment
+// lands on `selDate`) as normal entries ahead of the day's 14:00 block;
+// `current`'s own tail (slots whose real moment lands on the day after)
+// stays the grayed lookahead into tomorrow. `prevDaySource` null (draft tab
+// — no adjacent-day fetch) just tags the day's own tail gray, same as
+// before. Layout tier is decided from each group's own unmerged shape, so
+// borrowing the previous day's tail never changes which stations render
+// compact vs. full-width.
+export function buildDisplayGroups(selDate: string, current: StationGroup[], prevDaySource: StationGroup[] | null): DisplayGroup[] {
+    const prevDate = shiftDateStr(selDate, -1);
+
+    const names: string[] = [];
+    const seenNames = new Set<string>();
+    for (const g of current) if (!seenNames.has(g.name)) {
+        seenNames.add(g.name);
+        names.push(g.name);
+    }
+    if (prevDaySource) for (const g of prevDaySource) if (!seenNames.has(g.name)) {
+        seenNames.add(g.name);
+        names.push(g.name);
+    }
+
+    const curByName = new Map(current.map(g => [g.name, g]));
+    const prevByName = new Map((prevDaySource ?? []).map(g => [g.name, g]));
+
+    return names.map(name => {
+        const curGroup = curByName.get(name);
+        const prevGroup = prevByName.get(name);
+
+        const sugs: string[] = [];
+        const seenSugs = new Set<string>();
+        for (const s of curGroup?.subTypes ?? []) if (!seenSugs.has(s.sug)) {
+            seenSugs.add(s.sug);
+            sugs.push(s.sug);
+        }
+        for (const s of prevGroup?.subTypes ?? []) if (!seenSugs.has(s.sug)) {
+            seenSugs.add(s.sug);
+            sugs.push(s.sug);
+        }
+
+        const subTypes: DisplaySubType[] = sugs.map(sug => {
+            const curSub = curGroup?.subTypes.find(s => s.sug === sug);
+            const prevSub = prevGroup?.subTypes.find(s => s.sug === sug);
+            const times: DisplaySlot[] = [];
+            for (const t of prevSub?.times ?? []) {
+                const moment = slotMoment(prevDate, t.time);
+                if (moment && moment.dateStr === selDate) {
+                    times.push({time: t.time, gray: false, dateLabel: '', soldiers: t.soldiers, ms: moment.ms});
+                }
+            }
+            for (const t of curSub?.times ?? []) {
+                const moment = slotMoment(selDate, t.time);
+                if (!moment) {
+                    times.push({time: t.time, gray: false, dateLabel: '', soldiers: t.soldiers, ms: Infinity});
+                    continue;
+                }
+                const gray = moment.dateStr !== selDate;
+                times.push({time: t.time, gray, dateLabel: gray ? moment.short : '', soldiers: t.soldiers, ms: moment.ms});
+            }
+            times.sort((a, b) => a.ms - b.ms);
+            return {sug, times};
+        });
+
+        const tier = getTier(toDisplaySubTypes(selDate, (curGroup ?? prevGroup)?.subTypes ?? []), name);
+        return {name, subTypes, tier};
+    })
+        // A position with nobody assigned at all today or in tomorrow's
+        // lookahead is a leftover row (e.g. a one-off meeting that isn't
+        // happening this cycle) — don't render an empty box for it.
+        .filter(g => g.subTypes.some(s => s.times.some(t => t.soldiers.length > 0)));
 }
 
 // ── Color palette ──────────────────────────────────────────────────────────
@@ -233,7 +428,7 @@ function getColors(name: string): Colors {
 }
 
 // ── Layout 1: יומי-only ────────────────────────────────────────────────────
-function YomiGrid({subTypes, bg, groupName = ''}: { subTypes: SubType[]; bg: string; groupName?: string }) {
+function YomiGrid({subTypes, bg, groupName = ''}: { subTypes: DisplaySubType[]; bg: string; groupName?: string }) {
     if (subTypes.length > 1) {
         return (
             <div className={`${bg} flex`} dir="rtl">
@@ -285,7 +480,7 @@ function YomiGrid({subTypes, bg, groupName = ''}: { subTypes: SubType[]; bg: str
 
 // ── Layout 2: single sub-type, timed → times as columns ───────────────────
 function TransposedTable({sub, bg, rowAlt, colHeader, groupName = ''}: {
-    sub: SubType; bg: string; rowAlt: string; colHeader: string; groupName?: string;
+    sub: DisplaySubType; bg: string; rowAlt: string; colHeader: string; groupName?: string;
 }) {
     const maxRows = Math.max(...sub.times.map(t => t.soldiers.length), 0);
     return (
@@ -304,9 +499,10 @@ function TransposedTable({sub, bg, rowAlt, colHeader, groupName = ''}: {
                 )}
                 <tr>
                     {sub.times.map(slot => (
-                        <th key={slot.time}
-                            className={`py-2 px-2 sm:px-4 text-center text-sm font-semibold text-gray-700 border-b-2 border-gray-200 ${colHeader}`}>
-                            {slot.time || 'יומי'}
+                        <th key={`${slot.gray ? 1 : 0}:${slot.time}`}
+                            className={`py-2 px-2 sm:px-4 text-center text-sm font-semibold border-b-2 border-gray-200 ${colHeader}`}>
+                            <TimeLabel time={slot.time} gray={slot.gray} dateLabel={slot.dateLabel}
+                                       activeClass="text-gray-700"/>
                         </th>
                     ))}
                 </tr>
@@ -315,7 +511,8 @@ function TransposedTable({sub, bg, rowAlt, colHeader, groupName = ''}: {
                 {Array.from({length: maxRows}).map((_, rowIdx) => (
                     <tr key={rowIdx} className={rowIdx % 2 === 1 ? rowAlt : ''}>
                         {sub.times.map(slot => (
-                            <td key={slot.time} className="py-1.5 px-2 sm:px-4 text-center border-b border-gray-100">
+                            <td key={`${slot.gray ? 1 : 0}:${slot.time}`}
+                                className="py-1.5 px-2 sm:px-4 text-center border-b border-gray-100">
                                 {slot.soldiers[rowIdx] ?
                                     <SoldierName name={slot.soldiers[rowIdx]} time={slot.time}/> : ''}
                             </td>
@@ -330,13 +527,13 @@ function TransposedTable({sub, bg, rowAlt, colHeader, groupName = ''}: {
 
 // ── Layout 3: multiple sub-types, times as rows ────────────────────────────
 function MultiTypeTable({subTypes, bg, rowAlt, colHeader}: {
-    subTypes: SubType[]; bg: string; rowAlt: string; colHeader: string;
+    subTypes: DisplaySubType[]; bg: string; rowAlt: string; colHeader: string;
 }) {
-    const times = allUniqueTimes(subTypes);
+    const slots = allUniqueSlots(subTypes);
     const lookup: Record<string, Record<string, string[]>> = {};
     for (const sub of subTypes) {
         lookup[sub.sug] = {};
-        for (const slot of sub.times) lookup[sub.sug][slot.time] = slot.soldiers;
+        for (const slot of sub.times) lookup[sub.sug][`${slot.gray ? 1 : 0}:${slot.time}`] = slot.soldiers;
     }
     return (
         <div className={`overflow-x-auto ${bg}`}>
@@ -355,24 +552,28 @@ function MultiTypeTable({subTypes, bg, rowAlt, colHeader}: {
                 </tr>
                 </thead>
                 <tbody>
-                {times.map((time, idx) => (
-                    <tr key={time} className={`border-b border-gray-100 ${idx % 2 === 1 ? rowAlt : ''}`}>
-                        <td className="py-2 px-4 text-sm font-bold text-gray-600 whitespace-nowrap">
-                            {time || 'יומי'}
-                        </td>
-                        {subTypes.map(sub => {
-                            const soldiers = lookup[sub.sug]?.[time] ?? [];
-                            return (
-                                <td key={sub.sug} className="py-2 px-4 text-center">
-                                    {soldiers.length > 0
-                                        ? soldiers.map((name, i) => <div key={i}><SoldierName name={name}
-                                                                                              time={time}/></div>)
-                                        : <span className="text-gray-300 text-sm">—</span>}
-                                </td>
-                            );
-                        })}
-                    </tr>
-                ))}
+                {slots.map((slot, idx) => {
+                    const key = `${slot.gray ? 1 : 0}:${slot.time}`;
+                    return (
+                        <tr key={key} className={`border-b border-gray-100 ${idx % 2 === 1 ? rowAlt : ''}`}>
+                            <td className="py-2 px-4 text-sm font-bold whitespace-nowrap">
+                                <TimeLabel time={slot.time} gray={slot.gray} dateLabel={slot.dateLabel}
+                                           activeClass="text-gray-600"/>
+                            </td>
+                            {subTypes.map(sub => {
+                                const soldiers = lookup[sub.sug]?.[key] ?? [];
+                                return (
+                                    <td key={sub.sug} className="py-2 px-4 text-center">
+                                        {soldiers.length > 0
+                                            ? soldiers.map((name, i) => <div key={i}><SoldierName name={name}
+                                                                                                  time={slot.time}/></div>)
+                                            : <span className="text-gray-300 text-sm">—</span>}
+                                    </td>
+                                );
+                            })}
+                        </tr>
+                    );
+                })}
                 </tbody>
             </table>
         </div>
@@ -381,14 +582,14 @@ function MultiTypeTable({subTypes, bg, rowAlt, colHeader}: {
 
 // ── Layout 4: sparse multi sub-type "mission pool" → one card per mission ──
 function MissionCards({subTypes, colHeader}: {
-    subTypes: SubType[]; colHeader: string;
+    subTypes: DisplaySubType[]; colHeader: string;
 }) {
     const missions = subTypes
         .map(sub => ({
             sug: sub.sug,
             entries: [...sub.times]
                 .filter(t => t.soldiers.length > 0)
-                .sort((a, b) => timeToVal(a.time) - timeToVal(b.time)),
+                .sort((a, b) => a.ms - b.ms),
         }))
         .filter(m => m.entries.length > 0);
 
@@ -403,9 +604,11 @@ function MissionCards({subTypes, colHeader}: {
                     </div>
                     <div className="divide-y divide-gray-100">
                         {mission.entries.map(entry => (
-                            <div key={entry.time} className="px-3 py-1.5">
-                                <div
-                                    className="text-[11px] font-semibold text-gray-400 mb-0.5">{entry.time || 'יומי'}</div>
+                            <div key={`${entry.gray ? 1 : 0}:${entry.time}`} className="px-3 py-1.5">
+                                <div className="text-[11px] font-semibold text-gray-400 mb-0.5">
+                                    <TimeLabel time={entry.time} gray={entry.gray} dateLabel={entry.dateLabel}
+                                               activeClass="text-gray-400"/>
+                                </div>
                                 <div className="flex flex-wrap gap-x-2 gap-y-0.5">
                                     {entry.soldiers.map((name, i) => <SoldierName key={i} name={name}
                                                                                   time={entry.time}/>)}
@@ -429,18 +632,32 @@ const FORCE_SMALL_NAMES = ['חמ"ל', 'חמל', 'חפק', 'רכב', 'סיור'];
 // Display order within each tier (first = rightmost in RTL grid)
 const SMALL_ORDER = ['סיור', 'רכב', 'חפק', 'חמ"ל', 'חמל'];
 
+// Excluded from the "לוחמים במשימות" headcount — staff/duty desks, not
+// field missions.
+const NON_MISSION_NAMES = ['חפק', 'חמ"ל', 'חמל'];
+
+// Both headcounts are for today only — the grayed tomorrow-morning
+// lookahead doesn't count toward either.
+export function computeTodayHeadcounts(groups: DisplayGroup[]): { total: number; combat: number } {
+    const todaySoldiers = (gs: DisplayGroup[]) =>
+        new Set(gs.flatMap(g => g.subTypes.flatMap(s => s.times.filter(t => !t.gray).flatMap(t => t.soldiers))));
+    const total = todaySoldiers(groups).size;
+    const combat = todaySoldiers(groups.filter(g => !NON_MISSION_NAMES.some(k => g.name.includes(k)))).size;
+    return {total, combat};
+}
+
 type Tier = 'small' | 'medium' | 'wide';
 
-function getTier(group: StationGroup): Tier {
-    if (FORCE_SMALL_NAMES.some(k => group.name.includes(k))) return 'small';
-    const yomi = isYomiOnly(group.subTypes);
+function getTier(subTypes: DisplaySubType[], name: string): Tier {
+    if (FORCE_SMALL_NAMES.some(k => name.includes(k))) return 'small';
+    const yomi = isYomiOnly(subTypes);
     if (yomi) return 'medium'; // יומי multi-sub → side-by-side pairs
     // timed single sub-type with few time slots → small
-    if (group.subTypes.length === 1 && allUniqueTimes(group.subTypes).length <= 4) return 'small';
+    if (subTypes.length === 1 && allUniqueSlots(subTypes).length <= 4) return 'small';
     return 'wide';
 }
 
-function sortByOrder(groups: StationGroup[], order: string[]): StationGroup[] {
+function sortByOrder(groups: DisplayGroup[], order: string[]): DisplayGroup[] {
     return [...groups].sort((a, b) => {
         const ai = order.findIndex(k => a.name.includes(k));
         const bi = order.findIndex(k => b.name.includes(k));
@@ -449,7 +666,7 @@ function sortByOrder(groups: StationGroup[], order: string[]): StationGroup[] {
 }
 
 // ── Group card ─────────────────────────────────────────────────────────────
-function GroupCard({group}: { group: StationGroup }) {
+function GroupCard({group}: { group: DisplayGroup }) {
     const c = getColors(group.name);
     const totalSoldiers = new Set(
         group.subTypes.flatMap(s => s.times.flatMap(t => t.soldiers))
@@ -469,20 +686,21 @@ function GroupCard({group}: { group: StationGroup }) {
             ) : sparse ? (
                 <MissionCards subTypes={group.subTypes} colHeader={c.colHeader}/>
             ) : multiType ? (
-                <MultiTypeTable subTypes={group.subTypes} bg={c.bg} rowAlt={c.rowAlt} colHeader={c.colHeader}/>
+                <MultiTypeTable subTypes={group.subTypes} bg={c.bg} rowAlt={c.rowAlt}
+                                 colHeader={c.colHeader}/>
             ) : (
-                <TransposedTable sub={group.subTypes[0]} bg={c.bg} rowAlt={c.rowAlt} colHeader={c.colHeader}
-                                 groupName={group.name}/>
+                <TransposedTable sub={group.subTypes[0]} bg={c.bg} rowAlt={c.rowAlt}
+                                 colHeader={c.colHeader} groupName={group.name}/>
             )}
         </div>
     );
 }
 
 // ── Groups renderer (shared by date view; also used by the draft tab) ──────
-export function GroupsView({dayData}: { dayData: ShavtzakData }) {
-    const smallGroups = sortByOrder(dayData.groups.filter(g => getTier(g) === 'small'), SMALL_ORDER);
-    const mediumGroups = dayData.groups.filter(g => getTier(g) === 'medium');
-    const wideGroups = dayData.groups.filter(g => getTier(g) === 'wide');
+export function GroupsView({groups}: { groups: DisplayGroup[] }) {
+    const smallGroups = sortByOrder(groups.filter(g => g.tier === 'small'), SMALL_ORDER);
+    const mediumGroups = groups.filter(g => g.tier === 'medium');
+    const wideGroups = groups.filter(g => g.tier === 'wide');
 
     return (
         <div className="space-y-3">
@@ -565,9 +783,12 @@ export function Shavtzak({soldiers, shavtzakAll: data, loading, error, mySoldier
     const canNext = idx < data.dates.length - 1;
     const dayData = data.byDate[selectedDate] ?? null;
 
-    const totalDistinct = dayData
-        ? new Set(dayData.groups.flatMap(g => g.subTypes.flatMap(s => s.times.flatMap(t => t.soldiers)))).size
-        : 0;
+    // Borrow the previous schedule day's own tail (today's own early
+    // morning, per the calendar) so the page reads as one ordinary day.
+    const prevDayData = dayData ? data.byDate[shiftDateStr(selectedDate, -1)] ?? null : null;
+    const displayGroups = dayData ? buildDisplayGroups(dayData.date, dayData.groups, prevDayData?.groups ?? null) : [];
+
+    const {total: totalDistinct, combat: combatCount} = computeTodayHeadcounts(displayGroups);
 
     // "DD/MM/YYYY" ↔ "YYYY-MM-DD" for <input type="date">
     const toInputVal = (d: string) => {
@@ -630,6 +851,10 @@ export function Shavtzak({soldiers, shavtzakAll: data, loading, error, mySoldier
             {totalDistinct} חיילים
           </span>
 
+                            <span className="rounded-lg bg-emerald-600 px-3 py-2 text-sm font-bold text-white">
+            {combatCount} חיילים ללא חפק וחמל
+          </span>
+
                             {loading && (
                                 <span className="ml-auto text-sm text-gray-400 flex items-center gap-1.5">
               <span className="animate-spin inline-block">↺</span>
@@ -640,7 +865,7 @@ export function Shavtzak({soldiers, shavtzakAll: data, loading, error, mySoldier
 
                         {/* Day content */}
                         {dayData ? (
-                            <GroupsView dayData={dayData}/>
+                            <GroupsView groups={displayGroups}/>
                         ) : (
                             <div
                                 className="rounded-xl border-2 border-dashed border-gray-200 py-16 text-center text-gray-400">
