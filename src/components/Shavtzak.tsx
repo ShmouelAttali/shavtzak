@@ -132,6 +132,20 @@ function parseSlotStart(time: string): { h: number; m: number; canRollOver: bool
     return null;
 }
 
+// Minutes-of-day for a slot's start time (a bare "HH:MM", or the leading
+// "HH:MM" of a range like "22:00-6:00"/"7:30-20:30") — for chronological
+// sort/comparison purely within one literal day. No day-boundary offset:
+// the שבצק sheet's own תאריך is always the correct day already (see
+// buildSheetDisplayGroups below), so an early hour is exactly that early
+// hour, not a later slot in disguise. Returns Infinity for unparseable
+// strings (יומי), sorting them last. Exported for other views (e.g.
+// PersonalSchedule's "next shift" card) that need the same, non-buggy
+// hour extraction instead of re-deriving their own.
+export function timeOfDayMinutes(time: string): number {
+    const start = parseSlotStart(time);
+    return start ? start.h * 60 + start.m : Infinity;
+}
+
 // Resolves a slot's actual calendar moment given the schedule day it came
 // from — the real date+hour it happens at, computed once so every ordering
 // and gray/dated decision downstream just compares against it. Returns
@@ -325,10 +339,7 @@ export function buildDisplayGroups(selDate: string, current: StationGroup[], pre
 function rawSlotsOnly(subTypes: SubType[]): DisplaySubType[] {
     return subTypes.map(s => ({
         sug: s.sug,
-        times: s.times.map(t => {
-            const start = parseSlotStart(t.time);
-            return {time: t.time, gray: false, dateLabel: '', soldiers: t.soldiers, ms: start ? start.h * 60 + start.m : Infinity};
-        }),
+        times: s.times.map(t => ({time: t.time, gray: false, dateLabel: '', soldiers: t.soldiers, ms: timeOfDayMinutes(t.time)})),
     }));
 }
 
@@ -380,9 +391,7 @@ export function buildSheetDisplayGroups(current: StationGroup[], nextDaySource: 
             const nextSub = nextGroup?.subTypes.find(s => s.sug === sug);
             const times: DisplaySlot[] = [];
             for (const t of curSub?.times ?? []) {
-                const start = parseSlotStart(t.time);
-                const ms = start ? start.h * 60 + start.m : Infinity;
-                times.push({time: t.time, gray: false, dateLabel: '', soldiers: t.soldiers, ms});
+                times.push({time: t.time, gray: false, dateLabel: '', soldiers: t.soldiers, ms: timeOfDayMinutes(t.time)});
             }
             for (const t of nextSub?.times ?? []) {
                 const start = parseSlotStart(t.time);

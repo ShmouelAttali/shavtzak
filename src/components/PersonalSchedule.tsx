@@ -3,6 +3,7 @@ import type { SheetData } from '../types';
 import { ScheduleGrid } from './ScheduleGrid';
 import { getStationBadgeColors } from '../utils/stationColors';
 import { todayShavtzakStr } from '../hooks/useShavtzak';
+import { timeOfDayMinutes } from './Shavtzak';
 import type { ShavtzakAllData, ShavtzakData } from '../../api/shavtzak';
 
 interface Mission {
@@ -11,13 +12,7 @@ interface Mission {
   time: string;
 }
 
-function missionTimeVal(t: string): number {
-  if (!t || t === 'יומי') return 9999;
-  const h = parseInt(t.split(':')[0] ?? '0');
-  return h < 6 ? h + 24 : h;
-}
-
-function findMissions(soldierName: string, shavtzak: ShavtzakData): Mission[] {
+export function findMissions(soldierName: string, shavtzak: ShavtzakData): Mission[] {
   const missions: Mission[] = [];
   for (const group of shavtzak.groups) {
     for (const sub of group.subTypes) {
@@ -28,7 +23,10 @@ function findMissions(soldierName: string, shavtzak: ShavtzakData): Mission[] {
       }
     }
   }
-  return missions.sort((a, b) => missionTimeVal(a.time) - missionTimeVal(b.time));
+  // The שבצק sheet's own date is always the literal, correct day (no
+  // 14:00/06:00-anchored rollover) — a plain ascending sort by hour is
+  // correct within one day; there's no "night belongs to a later slot".
+  return missions.sort((a, b) => timeOfDayMinutes(a.time) - timeOfDayMinutes(b.time));
 }
 
 interface Props {
@@ -249,8 +247,8 @@ function NextShiftCard({
   shavtzakAll: ShavtzakAllData;
 }) {
   const todayNum = dateToNum(todayShavtzakStr());
-  const h = new Date().getHours();
-  const nowVal = h < 6 ? h + 24 : h;
+  const now = new Date();
+  const nowVal = now.getHours() * 60 + now.getMinutes();
 
   let result: { date: string; mission: Mission } | null = null;
   for (const date of shavtzakAll.dates) {
@@ -260,7 +258,7 @@ function NextShiftCard({
     if (!dayData) continue;
     let missions = findMissions(soldierName, dayData);
     if (dateNum === todayNum) {
-      missions = missions.filter(m => missionTimeVal(m.time) > nowVal);
+      missions = missions.filter(m => timeOfDayMinutes(m.time) > nowVal);
     }
     if (missions.length > 0) { result = { date, mission: missions[0] }; break; }
   }
