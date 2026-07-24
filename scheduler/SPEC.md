@@ -437,7 +437,11 @@ the report's decisive-key rationale labels cite these item numbers (e.g.
 Nights (P2), sub-post rotation (P4b), role fit (P5), load (P3) and
 accumulated rest (P6) are **Level-2 keys only** — positions are not lighter
 or heavier than each other, so burden considerations play no part in
-choosing WHICH position a soldier gets.
+choosing WHICH position a soldier gets. The same holds for group
+**composition** within a position (the התקפי platoon groups, the מגן crew):
+everyone in a group serves identical hours, so **weekly load never selects a
+group's members** — group fill uses only the Level-1 group cascade above (and
+no "low weekly load in the group" pick rationale is emitted).
 
 **Level-2 slot cascade** (which concrete shift window/seat inside the group)
 — slot-level keys only; the day-level keys were already decided when the

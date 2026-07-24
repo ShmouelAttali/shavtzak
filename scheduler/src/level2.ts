@@ -70,14 +70,19 @@ function buildRationale(g: Gen, st: SoldierState, slot: Slot, pid: number, opts:
       }
   }
 
-  // one comparative fairness claim, only against a real group (>1 candidate)
+  // one comparative fairness claim, only against a real group (>1 candidate).
+  // Weekly load (P3) is NOT reported here (owner 2026-07-24): within a
+  // structurally-composed group (התקפי platoon groups, מגן crew) everyone
+  // serves identical hours, so load never determines WHICH soldiers form the
+  // group — the old "עומס שבועי נמוך בקבוצה" (low_load) claim was misleading and
+  // is no longer emitted. The P3 load KEY is untouched — it still ranks the
+  // per-slot individual fill (§6.1 Level-2 cascade); only the rationale label
+  // is dropped. (The low_load code/template survive for rendering pre-existing
+  // persisted drafts.)
   if (opts.pickedFrom === 'primary' && opts.groupNights.length > 1) {
     const mN = median(opts.groupNights);
-    const mL = median(opts.groupLoads);
     if (opts.myNights <= mN) {
       out.push({ code: 'fewest_nights', params: { nights: opts.myNights, median: mN } });
-    } else if (opts.myLoad <= mL) {
-      out.push({ code: 'low_load', params: { hours: opts.myLoad.toFixed(1), median: mL.toFixed(1) } });
     }
   }
 
