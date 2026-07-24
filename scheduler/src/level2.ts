@@ -634,8 +634,14 @@ export function fillLevel2(g: Gen, plan1: Level1Plan): void {
       continue;
     }
 
-    // staff_all_roles crew (חמל): everyone in the group takes a seat, no demand math
+    // staff_all_roles crew (מפלג): everyone in the group takes a seat, no demand math
     if (ctx.positions.get(pid)!.config?.staff_all_roles) {
+      // Manual-only staff_all_roles positions (חמל, is_scheduled=false) are
+      // never auto-filled — the חמל tab owns every pick. מפלג (is_scheduled=
+      // true) still gets its full-day staff crew auto-filled below.
+      // (slotsByPosition already excludes !isScheduled slots — this is the
+      // explicit gate.)
+      if (!ctx.positions.get(pid)!.isScheduled) continue;
       // Manual override (חמל tab): locked/manual rows for the day are
       // authoritative — keep them as-is and skip the auto role-based fill
       // (manual replaces auto-staffing). persist() never deletes locked/manual

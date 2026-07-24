@@ -234,6 +234,12 @@ export function runLevel1(g: Gen): Level1Plan {
   for (const pos of ctx.positions.values()) {
     const roles: string[] = pos.config?.staff_all_roles ?? [];
     if (!roles.length || !slotsByPosition.has(pos.id)) continue;
+    // Manual-only staff_all_roles positions (חמל, is_scheduled=false) are never
+    // auto-staffed — the חמל tab places every pick by hand. מפלג stays
+    // is_scheduled=true, so its full-day staff crew is still auto-filled here.
+    // (slotsByPosition already excludes !isScheduled slots — this is the
+    // explicit, self-documenting gate.)
+    if (!pos.isScheduled) continue;
     // Manual override (חמל tab): a staff_all_roles position that already has
     // locked/manual rows for the day is human-managed — those picks are
     // authoritative, so skip the auto role-based crew fill (manual replaces
