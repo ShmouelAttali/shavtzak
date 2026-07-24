@@ -234,6 +234,12 @@ export function runLevel1(g: Gen): Level1Plan {
   for (const pos of ctx.positions.values()) {
     const roles: string[] = pos.config?.staff_all_roles ?? [];
     if (!roles.length || !slotsByPosition.has(pos.id)) continue;
+    // Manual override (חמל tab): a staff_all_roles position that already has
+    // locked/manual rows for the day is human-managed — those picks are
+    // authoritative, so skip the auto role-based crew fill (manual replaces
+    // auto-staffing). The picks carry their own day_assignments locks, which
+    // pin their Level-1 bucket above (ctx.lockedDay).
+    if (ctx.lockedShift.some((l) => l.positionId === pos.id)) continue;
     const posSlots = slotsByPosition.get(pos.id)!;
     for (const st of state.values()) {
       if (st.level1 !== null || fullyBlocked(g, st.soldier.id)) continue;

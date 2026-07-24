@@ -636,6 +636,11 @@ export function fillLevel2(g: Gen, plan1: Level1Plan): void {
 
     // staff_all_roles crew (חמל): everyone in the group takes a seat, no demand math
     if (ctx.positions.get(pid)!.config?.staff_all_roles) {
+      // Manual override (חמל tab): locked/manual rows for the day are
+      // authoritative — keep them as-is and skip the auto role-based fill
+      // (manual replaces auto-staffing). persist() never deletes locked/manual
+      // rows, so the human picks survive regeneration untouched.
+      if (ctx.lockedShift.some((l) => l.positionId === pid)) continue;
       const crew = rank(g, [...state.values()].filter((st) => st.level1 === pid), pid, false);
       for (const slot of [...slots].sort((a, b) => a.period[0] - b.period[0])) {
         let seat = 1;
