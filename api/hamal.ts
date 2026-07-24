@@ -1,14 +1,23 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { getPool, DATE_RE } from './_db.js';
 
-// ── חמל tab API (per-shift staffing, 2026-07-24) ─────────────────────────────
-// The חמל crew is picked PER SHIFT. A day is split into shift windows; each
-// window gets its own crew. Two layers of storage:
+// ── חמל tab API (per-shift, fully MANUAL, 2026-07-24) ────────────────────────
+// חמל is manual-only (positions.is_scheduled=false) — the generator NEVER
+// auto-fills it. The חמל tab picks the crew PER SHIFT. A day is split into shift
+// windows; each window gets its own crew. Two layers of storage, both on the
+// EXISTING slot infrastructure:
 //
-//  1. STRUCTURE — position_day_shifts holds a day's shift windows ONLY when the
-//     day is customized away from the 3 implicit defaults (14:00-22:00,
-//     22:00-06:00, 06:00-14:00; from config `hamal_default_shifts` or the
-//     hardcoded fallback below). No rows ⇒ the day uses the defaults.
+//  1. STRUCTURE — DAY-SCOPED slot_templates rows (position=חמל, sub=null,
+//     valid_from = valid_to = the schedule day) hold a day's shift windows.
+//     This is the generic "add a shift on this one day" mechanism (day_slots
+//     materializes them; seat_overrides could resize/cancel them; מגן internal
+//     shifts will reuse it). A day stores rows ONLY when its window list is
+//     CUSTOMIZED away from the 3 implicit defaults (14:00-22:00, 22:00-06:00,
+//     06:00-14:00; from config `hamal_default_shifts` or the hardcoded fallback
+//     below) OR when it carries picks. No rows ⇒ the day shows empty defaults.
+//     duration_minutes encodes the window (incl. cross-midnight); seats = a sane
+//     default (max picks, 1). Distinct start_times per day satisfy
+//     slot_templates_no_overlap.
 //  2. PICKS — ordinary shift_assignments rows (position חמל, source='manual',
 //     locked=true, blocks_overlap=false), one per (shift, soldier). `period` is
 //     the concrete shift window (computed like the day_slots lateral), not the
@@ -18,9 +27,7 @@ import { getPool, DATE_RE } from './_db.js';
 //
 // Owner decisions: a חמל pick RESERVES the soldier for the whole 14:00→14:00 day
 // (D2) — a locked day_assignments bucket per picked soldier keeps the generator
-// from seating them elsewhere. "Manual replaces auto": a day with any
-// manual/locked חמל rows is authoritative — the generator SKIPS its auto
-// role-based (staff_all_roles) fill for that day.
+// from seating them elsewhere.
 //
 //   GET  /api/hamal?from=YYYY-MM-DD[&to=YYYY-MM-DD]
 //        -> { defaults, days: [{ day, custom, shifts: [{ start, end, picks }] }], roster }
@@ -84,6 +91,15 @@ function daysInRange(from: string, to: string): string[] {
   return out;
 }
 
+const toMin = (hhmm: string) => { const [h, m] = hhmm.split(':').map(Number); return h * 60 + m; };
+
+/** Duration (minutes) of a [start,end) window, handling cross-midnight
+ *  (end <= start ⇒ ends the next day) and a full 24h window (start === end). */
+function windowMinutes(start: string, end: string): number {
+  const s = toMin(start), e = toMin(end);
+  return e > s ? e - s : e + 1440 - s;
+}
+
 /** Concrete [start,end) window of a shift on schedule day D, as naive-local
  *  'YYYY-MM-DDTHH:MM' timestamp strings. Matches the day_slots lateral:
  *  start rolls to D+1 when its clock time is before 14:00; end rolls a further
@@ -122,20 +138,28 @@ async function getHamal(from: string, to: string): Promise<HamalResponse> {
        where sa.position_id = $1 and sa.day between $2 and $3
          and (sa.locked or sa.source = 'manual')
        order by sa.day, lower(sa.period), sa.seat_index`, [pid, from, to]),
+    // day-scoped slot_templates = the per-day shift STRUCTURE (valid_from =
+    // valid_to = the schedule day). end_t is derived from start + duration and
+    // wraps past midnight. Order by the schedule-day-adjusted start so windows
+    // come out 14:00-first (pre-14:00 windows are the day's tail).
     pool.query(
-      `select day::text as day,
+      `select valid_from::text as day,
               to_char(start_time, 'HH24:MI') start_t,
-              to_char(end_time, 'HH24:MI') end_t
-       from position_day_shifts
-       where position_id = $1 and day between $2 and $3
-       order by day, start_time`, [pid, from, to]),
+              to_char((start_time + make_interval(mins => duration_minutes)), 'HH24:MI') end_t
+       from slot_templates
+       where position_id = $1 and valid_from = valid_to
+         and valid_from between $2 and $3
+       order by valid_from,
+                case when start_time < time '14:00' then 1 else 0 end,
+                start_time`,
+      [pid, from, to]),
     // whole roster (all soldiers, NOT just schedulable/present ones)
     pool.query(
       `select id, full_name, coalesce(role,'') role, coalesce(platoon,'') platoon, is_schedulable
        from soldiers order by full_name`),
   ]);
 
-  // structure override rows by day
+  // structure rows by day (day-scoped slot_templates)
   const structByDay = new Map<string, HamalWindow[]>();
   for (const r of structRes.rows) {
     const arr = structByDay.get(r.day) ?? [];
@@ -151,9 +175,12 @@ async function getHamal(from: string, to: string): Promise<HamalResponse> {
   }
 
   const days: HamalDay[] = daysInRange(from, to).map((day) => {
-    const override = structByDay.get(day);
-    const custom = override !== undefined;
-    const windows = override ?? defaults;
+    const stored = structByDay.get(day);
+    const windows = stored ?? defaults;
+    // custom = the day's window list differs from the defaults. Computed from
+    // the windows (not merely "has templates"): a default-shaped day that stored
+    // templates only because it has picks is still NOT custom.
+    const custom = !sameWindows(windows, defaults);
     const shifts: HamalShift[] = windows.map((w) => ({ start: w.start, end: w.end, picks: [] }));
     // index shifts by their concrete window for exact-period bucketing
     const byWindow = new Map<string, HamalShift>();
@@ -203,16 +230,22 @@ async function setHamal(day: string, shiftsIn: ShiftInput[]): Promise<HamalWrite
       throw Object.assign(new Error('bad shift time (HH:MM)'), { status: 400 });
     }
   }
+  // start_time must be UNIQUE per day: day-scoped slot_templates are keyed by
+  // start_time (slot_templates_no_overlap excludes on start_time within the same
+  // day) — two windows with the same start can't both be stored. (This is
+  // stricter than "distinct start+end".)
   const seen = new Set<string>();
   for (const w of windows) {
-    const key = `${w.start}-${w.end}`;
-    if (seen.has(key)) throw Object.assign(new Error('duplicate shift window'), { status: 400 });
-    seen.add(key);
+    if (seen.has(w.start)) {
+      throw Object.assign(new Error('duplicate shift start (each window needs a distinct start time)'), { status: 400 });
+    }
+    seen.add(w.start);
   }
   // dedup soldier ids within each shift
   const perShift = shiftsIn.map((s) => [...new Set(
     (Array.isArray(s.soldierIds) ? s.soldierIds : []).map(Number)
       .filter((n) => Number.isInteger(n) && n > 0))]);
+  const totalPicks = perShift.reduce((n, ids) => n + ids.length, 0);
 
   const client = await pool.connect();
   try {
@@ -221,18 +254,28 @@ async function setHamal(day: string, shiftsIn: ShiftInput[]): Promise<HamalWrite
     // this tab fully owns the חמל position for the day
     await client.query(`delete from shift_assignments where day = $1 and position_id = $2`, [day, pid]);
     await client.query(`delete from day_assignments where day = $1 and position_id = $2`, [day, pid]);
-    await client.query(`delete from position_day_shifts where day = $1 and position_id = $2`, [day, pid]);
+    // clear the day's own on-demand (day-scoped) חמל templates only
+    await client.query(
+      `delete from slot_templates where position_id = $1 and valid_from = $2 and valid_to = $2`, [pid, day]);
 
-    // structure override rows ONLY when the windows differ from the defaults
-    // (equal ⇒ leave none ⇒ the day reverts to defaults). Stored even for empty
-    // shifts so a nobody-assigned custom window survives a reload.
-    if (!sameWindows(windows, defaults)) {
+    // Write day-scoped slot_templates for the shown windows UNLESS the day is
+    // the untouched default (default windows AND no picks) — then leave none and
+    // the day reverts to showing the empty defaults with no stored structure.
+    // When there are picks (or a customized window list), store every shown
+    // window so empty custom windows persist and the picks have their slots.
+    if (!(sameWindows(windows, defaults) && totalPicks === 0)) {
       const sv: string[] = [];
-      const sp: unknown[] = [day, pid];
-      windows.forEach((w) => { sp.push(w.start, w.end); const b = sp.length - 1;
-        sv.push(`($1::date, $2, $${b}::time, $${b + 1}::time)`); });
+      const sp: unknown[] = [pid, day];   // $1 = position_id, $2 = day
+      windows.forEach((w, i) => {
+        const seats = Math.max(perShift[i].length, 1);
+        sp.push(w.start, windowMinutes(w.start, w.end), seats);
+        const b = sp.length - 2;   // $start_time, $duration, $seats
+        sv.push(`($1, $${b}::time, $${b + 1}::int, $${b + 2}::smallint, $2::date, $2::date)`);
+      });
       await client.query(
-        `insert into position_day_shifts (day, position_id, start_time, end_time) values ${sv.join(',')}`, sp);
+        `insert into slot_templates
+           (position_id, start_time, duration_minutes, seats, valid_from, valid_to)
+         values ${sv.join(',')}`, sp);
     }
 
     // one shift_assignments row per (shift, soldier); seat_index restarts per shift
@@ -246,7 +289,7 @@ async function setHamal(day: string, shiftsIn: ShiftInput[]): Promise<HamalWrite
         rowParams.push(sid, seat + 1, startTs, endTs);
         const b = rowParams.length - 3;  // $sid, $seat, $startTs, $endTs
         // readiness row → blocks_overlap=false; locked + source=manual so the
-        // generator keeps it and skips auto חמל fill
+        // generator keeps it (and it never auto-fills חמל anyway)
         rowVals.push(`($1::date, $2, $${b}, tsrange($${b + 2}::timestamp, $${b + 3}::timestamp), $${b + 1}, false, 'manual', false, true)`);
       });
     });
@@ -281,7 +324,7 @@ async function setHamal(day: string, shiftsIn: ShiftInput[]): Promise<HamalWrite
   return days[0];
 }
 
-/** Virgin reset: clear picks AND the structure override for the day. */
+/** Virgin reset: clear picks AND the day-scoped structure for the day. */
 async function clearHamal(day: string): Promise<HamalWriteResponse> {
   const pool = getPool();
   const pid = await hamalPositionId();
@@ -291,7 +334,8 @@ async function clearHamal(day: string): Promise<HamalWriteResponse> {
     await client.query(`insert into schedule_days (day) values ($1) on conflict do nothing`, [day]);
     await client.query(`delete from shift_assignments where day = $1 and position_id = $2`, [day, pid]);
     await client.query(`delete from day_assignments where day = $1 and position_id = $2`, [day, pid]);
-    await client.query(`delete from position_day_shifts where day = $1 and position_id = $2`, [day, pid]);
+    await client.query(
+      `delete from slot_templates where position_id = $1 and valid_from = $2 and valid_to = $2`, [pid, day]);
     await client.query('commit');
   } catch (e) {
     await client.query('rollback');
