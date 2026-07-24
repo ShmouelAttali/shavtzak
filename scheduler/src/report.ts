@@ -19,6 +19,7 @@
 import type { GenerateResult } from './model.js';
 import { RationaleEntry, RationaleCode, renderRationale, isCaveat } from './rationale.js';
 import { normalizeName as nrm } from './text.js';
+import { orderCrew } from './crewOrder.js';
 import { Minutes, fmtHM, dayStart, dayEnd } from './time.js';
 
 // ─── input structures (plain + serializable) ───────────────────────────────
@@ -656,8 +657,25 @@ ${narrative.length ? `  <ul class="narrative">\n${narrative.map((n) => `    <li>
       (a.violations.length ? `<div class="viol">⚠ ${esc(a.violations.join(' | '))}</div>` : '');
   };
 
+  // Display order within a single time window (same a.start): commander(s)
+  // first, then the remaining crew grouped by platoon (P5/platoon_group
+  // crews like התקפי) — see crewOrder.ts. Windows themselves stay in start
+  // order; this only reorders same-start entries (a window's crew).
+  const orderWindowCrew = (group: ReportAssignment[]): ReportAssignment[] =>
+    orderCrew(group.map((a) => {
+      const s = soldier(a.soldierId);
+      return { a, role: s?.role ?? '', platoon: s?.platoon ?? '', seatIndex: a.seatIndex, name: name(a.soldierId) };
+    })).map((w) => w.a);
+
   const grids = posOrder.map((pid) => {
-    const rows = [...autoByPos.get(pid)!].sort((a, b) => a.start - b.start || a.seatIndex - b.seatIndex);
+    const byStart = new Map<number, ReportAssignment[]>();
+    for (const a of autoByPos.get(pid)!) {
+      const g = byStart.get(a.start) ?? [];
+      g.push(a);
+      byStart.set(a.start, g);
+    }
+    const rows = [...byStart.keys()].sort((a, b) => a - b)
+      .flatMap((start) => orderWindowCrew(byStart.get(start)!));
     // merge H1 handover pairs into one cell spanning the full window
     const cells: Cell[] = [];
     const consumed = new Set<ReportAssignment>();
@@ -789,7 +807,7 @@ ${grids || '<p class="empty">לא נוצרו שיבוצי משמרות.</p>'}
       const src = chainEntry
         ? `${esc(String(chainEntry.params?.source ?? ''))} של ${esc(String(chainEntry.params?.sourceStart ?? ''))}`
         : '—';
-      const crew = [...group].sort((x, y) => x.seatIndex - y.seatIndex).map((a) => {
+      const crew = orderWindowCrew(group).map((a) => {
         const b: string[] = [];
         if (a.isCommanderSeat) b.push('<span class="badge cmd">מפקד</span>');
         if (hasCode(a, 'chain_completion')) b.push('<span class="badge warn">השלמה</span>');

@@ -1,11 +1,39 @@
 import { useMemo, useState } from 'react';
 import type { Soldier } from '../types';
 import type { DraftDay, DraftFinding } from '../../api/draft';
+import type { StationGroup } from '../../api/shavtzak';
 import { useDraft } from '../hooks/useDraft';
 import { GroupsView, buildDisplayGroups, SoldierCtx, NameClickCtx, MyNameCtx, DraftMetaCtx, RationaleClickCtx, SoldierInfo } from './Shavtzak';
 import { SoldierPopup, PopupState } from './SoldierPopup';
 import { RationalePopup, RationalePopupState } from './RationalePopup';
 import { DateRangePicker, todayIso, addDaysIso, heDate } from './DateRangePicker';
+import { orderCrew } from '../../scheduler/src/crewOrder';
+
+// Draft-only display ordering (owner request): commander(s) first, then the
+// remaining soldiers grouped by מחלקה (platoon) — reuses the SAME generic
+// helper the generation report applies (scheduler/src/crewOrder.ts), so a
+// crew like התקפי's 1 מפקד + 3 same-platoon soldiers renders the same way
+// here as in the report. The live שבצק sheet tab (Shavtzak.tsx's own
+// buildSheetDisplayGroups path) never calls this — it has no reliable
+// platoon/role data on its rows and this file is never imported there, so
+// that tab's rendering is untouched.
+export function orderStationGroups(groups: StationGroup[], lookup: Map<string, SoldierInfo>): StationGroup[] {
+  const orderNames = (names: string[]): string[] => {
+    if (names.length < 2) return names;
+    const wrapped = names.map((name, seatIndex) => {
+      const info = lookup.get(name);
+      return { name, seatIndex, role: info?.role ?? '', platoon: info?.unit ?? '' };
+    });
+    return orderCrew(wrapped).map((w) => w.name);
+  };
+  return groups.map((g) => ({
+    ...g,
+    subTypes: g.subTypes.map((s) => ({
+      ...s,
+      times: s.times.map((t) => ({ ...t, soldiers: orderNames(t.soldiers) })),
+    })),
+  }));
+}
 
 function daysBetween(from: string, to: string): string[] {
   const out: string[] = [];
@@ -91,8 +119,9 @@ function DayViolations({ day }: { day: DraftDay }) {
   );
 }
 
-function DaySection({ day, onGenerate, generating }: {
+function DaySection({ day, onGenerate, generating, soldierLookup }: {
   day: DraftDay; onGenerate: (d: string) => void; generating: string | null;
+  soldierLookup: Map<string, SoldierInfo>;
 }) {
   const badge = STATUS_BADGE[day.status] ?? STATUS_BADGE.draft;
   const isEmpty = day.groups.length === 0;
@@ -124,7 +153,7 @@ function DaySection({ day, onGenerate, generating }: {
       ) : (
         <>
           <DraftMetaCtx.Provider value={day.meta}>
-            <GroupsView groups={buildDisplayGroups(day.day, day.groups, null)} />
+            <GroupsView groups={buildDisplayGroups(day.day, orderStationGroups(day.groups, soldierLookup), null)} />
           </DraftMetaCtx.Provider>
           <RestList day={day} />
         </>
@@ -193,7 +222,7 @@ export function DraftSchedule({ soldiers, mySoldierName = '' }: {
             {days.map((day) => {
               const d = data?.days.find((x) => x.day === day)
                 ?? { day, status: 'draft', generatedAt: null, validation: [], groups: [], meta: {}, dayAssignments: {} };
-              return <DaySection key={day} day={d} onGenerate={generateOne} generating={generating} />;
+              return <DaySection key={day} day={d} onGenerate={generateOne} generating={generating} soldierLookup={lookup} />;
             })}
           </div>
           {popup && <SoldierPopup info={popup} onClose={() => setPopup(null)} />}
