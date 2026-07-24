@@ -31,7 +31,10 @@ before(async () => {
   await getPool().query(`
     create table if not exists shavtzak_admins (
       email text primary key, note text, added_at timestamp not null default now());
+    create table if not exists hamal_members (
+      email text primary key, note text, added_at timestamp not null default now());
     delete from shavtzak_admins;
+    delete from hamal_members;
     insert into shavtzak_admins (email) values ('admin@example.com');`);
 });
 after(() => getPool().end());
@@ -39,17 +42,23 @@ after(() => getPool().end());
 test('admin email -> true', async () => {
   const res = await call('GET', { email: 'admin@example.com' });
   assert.equal(res.statusCode, 200);
-  assert.deepEqual(res.body, { isShavtzakAdmin: true });
+  assert.deepEqual(res.body, { isShavtzakAdmin: true, isHamalMember: false });
 });
 
 test('lookup is case-insensitive', async () => {
   const res = await call('GET', { email: 'Admin@Example.COM' });
-  assert.deepEqual(res.body, { isShavtzakAdmin: true });
+  assert.deepEqual(res.body, { isShavtzakAdmin: true, isHamalMember: false });
 });
 
 test('unknown email -> false', async () => {
   const res = await call('GET', { email: 'someone@else.com' });
-  assert.deepEqual(res.body, { isShavtzakAdmin: false });
+  assert.deepEqual(res.body, { isShavtzakAdmin: false, isHamalMember: false });
+});
+
+test('חמל member -> isHamalMember true', async () => {
+  await getPool().query(`insert into hamal_members (email) values ('hamal@example.com')`);
+  const res = await call('GET', { email: 'hamal@example.com' });
+  assert.deepEqual(res.body, { isShavtzakAdmin: false, isHamalMember: true });
 });
 
 test('missing email -> 400', async () => {
