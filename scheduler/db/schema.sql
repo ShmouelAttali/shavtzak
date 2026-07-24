@@ -294,6 +294,22 @@ create unique index shift_assignments_seat_key
 alter table shift_assignments add constraint no_double_booking
   exclude using gist (soldier_id with =, period with &&) where (blocks_overlap);
 
+-- Per-day, per-position shift STRUCTURE override for the חמל tab's per-shift
+-- staffing (2026-07-24). Rows exist for (day, position) ⇒ they REPLACE that
+-- position's default shift windows for the day; no rows ⇒ defaults (the config
+-- row hamal_default_shifts / api/hamal.ts fallback: 14:00-22:00, 22:00-06:00,
+-- 06:00-14:00). An empty custom window (nobody assigned) still persists here.
+-- end_time <= start_time ⇒ the window crosses midnight (ends the next day). The
+-- picks themselves are ordinary shift_assignments rows whose period is the
+-- concrete shift window (computed like the day_slots lateral) — see api/hamal.ts.
+create table position_day_shifts (
+  day         date     not null references schedule_days,
+  position_id smallint not null references positions,
+  start_time  time     not null,
+  end_time    time     not null,          -- end <= start ⇒ crosses midnight
+  primary key (day, position_id, start_time)
+);
+
 -- Emails allowed to see the scheduler tabs in the viewer app (SPEC §12),
 -- independent of sheet role. Managed by hand in the Supabase dashboard.
 create table shavtzak_admins (
