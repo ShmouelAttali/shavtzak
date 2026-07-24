@@ -55,7 +55,7 @@ export async function loadContext(day: string): Promise<Context> {
      where ds.day = '${day}'`,
     // NB: the day's own auto/chain unlocked rows are EXCLUDED — regeneration
     // replaces them; including them makes every soldier look already-assigned.
-    `select sa.soldier_id, sa.position_id, sa.period::text, p.mission_class
+    `select sa.soldier_id, sa.position_id, sa.sub_position_id, sa.period::text, p.mission_class
      from shift_assignments sa join positions p on p.id = sa.position_id
      where sa.period && tsrange(day_start('${winFrom}'), day_start('${tomorrow}'))
        and not (sa.day = '${day}' and sa.source in ('auto','chain') and not sa.locked)`,
@@ -135,11 +135,30 @@ export async function loadContext(day: string): Promise<Context> {
     }));
 
   // Existing assignments in the rest/rotation window (history + prior drafts).
-  const existing = new Map<number, { positionId: number; period: [Minutes, Minutes]; missionClass: string }[]>();
+  const existing = new Map<number, { positionId: number; subPositionId: number | null;
+                                     period: [Minutes, Minutes]; missionClass: string }[]>();
   for (const a of existRows) {
     const list = existing.get(a.soldier_id) ?? [];
-    list.push({ positionId: a.position_id, period: parseRange(a.period), missionClass: a.mission_class });
+    list.push({ positionId: a.position_id, subPositionId: a.sub_position_id ?? null,
+                period: parseRange(a.period), missionClass: a.mission_class });
     existing.set(a.soldier_id, list);
+  }
+
+  // P4c cross-day sub-post spread: count how many times each soldier held each
+  // sub_position over the RECENT days BEFORE today (the loaded window, up to a
+  // week back). The last Level-2 tie-break prefers a sub he held least — so a
+  // soldier rotates across the static posts over the days, not just within a
+  // single 24h round (that is P4b). Today's own fresh rows are excluded
+  // (period start ≥ this schedule day's 14:00).
+  const recentSubCount = new Map<number, Map<number, number>>();
+  const todayStart = dayStart(day);
+  for (const [sid, list] of existing) {
+    const counts = new Map<number, number>();
+    for (const a of list) {
+      if (a.subPositionId === null || a.period[0] >= todayStart) continue;
+      counts.set(a.subPositionId, (counts.get(a.subPositionId) ?? 0) + 1);
+    }
+    if (counts.size) recentSubCount.set(sid, counts);
   }
 
   // Yesterday's Level-1 position: prefer day_assignments, fall back to the
@@ -270,7 +289,7 @@ export async function loadContext(day: string): Promise<Context> {
   for (const c of configRows) config[c.key] = c.value;
 
   return {
-    day, soldiers, positions, positionByName, slots, fairness, existing,
+    day, soldiers, positions, positionByName, slots, fairness, existing, recentSubCount,
     yesterdayPosition, staticStreak, onCallStreak, nightStreak, toranutCount7d, blocked, exits,
     lockedShift, lockedDay, chainRules,
     magenCommander: magenRows[0]

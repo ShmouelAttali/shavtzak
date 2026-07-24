@@ -1087,7 +1087,9 @@ function buildProcessSection(input: DayReportInput, h: NameHelpers): string {
   // (and is recorded as the pick's decisive_key). Night spread (P2) and
   // sub-position rotation (P4b) moved into the Level-2 slot cascade.
   // NB: item numbers MUST match rank.ts's groupKey/GROUP_DIMS order — the
-  // decisive_key labels cite them (e.g. "5 — עומס שבועי").
+  // decisive_key labels cite them (e.g. "5 — רוטציה מאתמול"). The Level-1
+  // group cascade has NO weekly-load (P3) key — load is a Level-2 slot key
+  // only; positions are not lighter/heavier than each other.
   const CASCADE = [
     'מנוחה מלאה לפני תחילת המשימה — רק בעמדה יומית שדורשת מנוחה לפני הכניסה (בפועל: תורנים); מי שלא ינוח 8 שעות עד 14:00 נדחק לסוף (R1)',
     'תורנות השבוע — רק בעמדת תורנים: מי שכבר עשה תורנות השבוע נדחק (T5)',
@@ -1112,10 +1114,11 @@ function buildProcessSection(input: DayReportInput, h: NameHelpers): string {
     'מנוחה מלאה לפני תחילת המשמרת — מי שלא נח 8 שעות עד תחילת המשמרת הקונקרטית נדחק לסופה (R1)',
     'רוטציית תת-עמדה — באותה יממה לא מאיישים את אותו פוסט פעמיים (למשל לא שג פעמיים ביום) (P4b)',
     'פיזור לילות — מי שעשה הכי מעט לילות השבוע מקבל את משמרת הלילה (P2)',
+    'התאמת תפקיד — נהג טיגריס למשמרת התקפי; נהג דוד למשמרת סיור החופפת ללילה (P5) — מכריע לפני העומס',
     'מי שצבר השבוע הכי מעט שעות עומס משוקללות — סך כל המשימות בכל העמדות יחד, בדליים של יממת עבודה (P3)',
-    'התאמת תפקיד — נהג טיגריס למשמרת התקפי; נהג דוד למשמרת סיור החופפת ללילה (P5)',
     'העומס השבועי המדויק (P3)',
     'מי שצבר הכי הרבה מנוחה — עד 48 שעות (P6)',
+    'פיזור תתי-עמדה לאורך הימים — שובר השוויון האחרון לפני האקראי: עדיפות למי שאייש את תת-העמדה הזו הכי מעט בימים האחרונים (P4c)',
   ];
   const slotCascadeLine =
     `<details class="inner"><summary>סדר העדיפויות המלא של בחירת המשמרת ותת-העמדה בתוך העמדה (מיון מדורג — לא ניקוד)</summary>` +

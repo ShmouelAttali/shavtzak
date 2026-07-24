@@ -533,7 +533,15 @@ export function runLevel1(g: Gen): Level1Plan {
     if (driverQual && need > 0) {
       const isDriver = (st: SoldierState) =>
         hasQualification(st.soldier.quals, st.soldier.role, driverQual);
-      // one qualified driver per distinct slot start (each crew needs one)
+      // one qualified driver per distinct slot start (each crew needs one).
+      // Reserve as many qualified drivers as there are crews (fairness-ranked);
+      // on a shortage we simply take all that are available. The per-crew
+      // assignment then follows the shift PRIORITY at Level 2 (owner
+      // 2026-07-24): crews are filled in chronological start order
+      // (14:00 noon → 22:00 night → 06:00 morning), and the Level-2 driver seat
+      // + driver-preservation keep the scarce drivers on the earlier
+      // (higher-priority) crews — so the morning crew is the first to go
+      // without a driver, the noon crew keeps one longest.
       let drvNeed = new Set(slots.map((s) => s.period[0])).size
         - [...state.values()].filter((st) => st.level1 === pid && isDriver(st)).length;
       const rankedDrv = rankGroup(g, [...state.values()].filter((x) => eligible(x) && isDriver(x)),

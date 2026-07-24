@@ -19,7 +19,9 @@ export type RationaleCode =
   | 'handover_in'           // H1 pair: arriving half — takes over at the handover
   | 'no_prior'              // no earlier shift nearby — fully rested
   | 'fewest_nights'         // at/below the candidate group's night median (P2)
-  | 'low_load'              // at/below the candidate group's load median (P3)
+  | 'low_load'              // LEGACY (owner 2026-07-24: no longer emitted —
+                            // load never decides group composition; kept only
+                            // to render pre-existing persisted drafts)
   | 'position_balance'      // at/below the group's median count for THIS position (P4)
   | 'fairness_pick'         // ranked fill with no dominant comparative key
   | 'decisive_key'          // L1 group pick: the first ranking key that beat the runner-up

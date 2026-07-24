@@ -192,9 +192,23 @@ that did cross the boundary — §10).
   soft/fairness assignment: Level 1 fills a driver quota (one qualified driver
   per distinct slot start) right after the commander quota; Level 2 reserves
   the seat right after the commander seat as a dedicated driver seat until the
-  crew has one. Validated (`driver` rule, error; crews that are entirely
-  imported history are excused). The soft P5 driver preferences remain as
+  crew has one. The soft P5 driver preferences remain as
   tie-breakers beyond the one required driver.
+  **Shortage priority** (owner 2026-07-24): when the נהג דוד pool is too small
+  for every סיור crew, the scarce drivers stay with the **earlier-starting**
+  crews — **noon (14:00) keeps a driver longest → then night (22:00) → the
+  morning (06:00) crew goes without first**. Chronological start order **is**
+  this priority (14:00 < 22:00 < 06:00-next): the Level-1 quota reserves as many
+  drivers as crews (all available on a shortage), and the Level-2 fill —
+  processing crews in start order, with driver-preservation holding a driver
+  for the later crews — leaves the last-starting crew(s) driverless.
+  **Validation** (`driver` rule; crews that are entirely imported history are
+  excused): a driverless crew is an **error** when a qualified driver was idle
+  and free to cover it (skipped) or when a **lower**-priority crew kept a driver
+  while a **higher**-priority one went without (priority violated); it is only a
+  **warning** when the pool is genuinely exhausted (no idle driver could have
+  covered the crew) AND the driverless crews are exactly the lowest-priority
+  (latest-starting) ones.
 - **H7 Crew integrity**: no duplicate soldier in a crew/slot.
 - **H8 Rest floor — absolute**: < 4h rest before a task → hard block. **Never
   a "בדוחק" fallback, no exceptions** — the exemptions are the R5
@@ -437,7 +451,11 @@ the report's decisive-key rationale labels cite these item numbers (e.g.
 Nights (P2), sub-post rotation (P4b), role fit (P5), load (P3) and
 accumulated rest (P6) are **Level-2 keys only** — positions are not lighter
 or heavier than each other, so burden considerations play no part in
-choosing WHICH position a soldier gets.
+choosing WHICH position a soldier gets. The same holds for group
+**composition** within a position (the התקפי platoon groups, the מגן crew):
+everyone in a group serves identical hours, so **weekly load never selects a
+group's members** — group fill uses only the Level-1 group cascade above (and
+no "low weekly load in the group" pick rationale is emitted).
 
 **Level-2 slot cascade** (which concrete shift window/seat inside the group)
 — slot-level keys only; the day-level keys were already decided when the
@@ -449,10 +467,11 @@ soldier joined the group:
 | 2 | R1 quasi-constraint: candidates with a full 8h rest before the slot start sort before all others | — |
 | 3 | **P4b sub-post rotation** — within the same 24h round, a soldier mans a DIFFERENT static post each shift (not שג twice in one day); a CONTIGUOUS same-post pair is one continuous stint, not a repeat (non-static positions only; static grids use the two-phase post spread instead, §7 Level 2) | current day |
 | 4 | **P2** — fewest **night assignments** (00–06, incl. today's fresh nights when ranking a night slot). Readiness assignments do **not** count as nights (sleeping assumption, R2) | current week |
-| 5 | **P3** — fewest **weighted mission hours** (readiness hours × low weight, default 0.25), compared in **8-hour buckets** (one duty-day). The soldier's TOTAL for the week across ALL positions | current week |
-| 6 | **P5 role fit** (ties only, beyond the H6d required driver): נהג טיגריס preferred for the התקפי crew; נהג דוד preferred for a סיור slot overlapping the night window | current crew |
+| 5 | **P5 role fit** (ties only, beyond the H6d required driver): נהג טיגריס preferred for the התקפי crew; נהג דוד preferred for a סיור slot overlapping the night window. Ranks **above** the load keys (owner 2026-07-24: rule 6, the patrol-night driver, is "more of a hard rule") — the hard ≥1-driver-per-crew is already H6d, so this key only decides the RIGHT driver among ties, and it sits **below** R1 rest + P2 nights so a soft driver preference never costs a rest violation or a night | current crew |
+| 6 | **P3** — fewest **weighted mission hours** (readiness hours × low weight, default 0.25), compared in **8-hour buckets** (one duty-day). The soldier's TOTAL for the week across ALL positions | current week |
 | 7 | P3 fine tie-break — exact weighted hours | current week |
 | 8 | **P6** — most rest since last shift (clamped at 48h) | — |
+| 9 | **P4c cross-day sub-post spread** — the LAST discriminator before the seeded random tie: among candidates equal on everything above, prefer whoever held THIS sub-position **least over the recent days** (spreads a soldier across the static posts across the week, e.g. ש.ג. Sunday → בונקר Wednesday). Purely additive — P4b (key 3) still owns the within-24h rotation. Also applied in the עמדות הגנה two-phase post distribution (§7 Level 2) as a secondary tie-break after the within-day even-spread | recent days |
 
 **Recruiting a soldier whose day is not yet settled** — pull-from-מנוחה,
 chain completions, replacement-pair halves — additionally applies the
@@ -605,7 +624,9 @@ where nights rank), weighted_hours second, per-position counts third.
   **no post bias**; phase 2 then distributes the window's soldiers to the
   concrete posts (שג/בונקר/מזרחית/דרומית) where the ONLY consideration is
   **even spread**: a soldier rotates through all posts and never repeats the
-  same post within the same 24h round when an alternative exists. Non-static
+  same post within the same 24h round when an alternative exists; when several
+  posts are equally fresh today, a cross-day tie-break (P4c) prefers the post
+  the soldier held **least over the recent days**. Non-static
   positions keep the single-phase per-slot fill, with P4b as the in-cascade
   rotation mechanism. **Scarce-role preservation** (future-looking): a regular
   seat prefers **non-commanders** when a LATER slot of the position still has
@@ -746,8 +767,12 @@ or **warning** tagged with a rule key:
   non-commander; a commander-first-seat slot with no commander-seat row
   (slots covered only by import rows are excused — imports carry no seat
   metadata).
-- `driver` — H6d: a סיור/התקפי crew with no qualified נהג דוד/נהג טיגריס:
-  error (all-import crews excused).
+- `driver` — H6d: a crew with no qualified נהג דוד/נהג טיגריס. **Error** when a
+  driver was available/skipped or the shift priority was violated (a
+  lower-priority crew kept a driver while a higher-priority one went without);
+  **warning** when the driver pool is genuinely exhausted AND only the
+  lowest-priority (latest-starting) crews lack a driver (H6d shortage
+  priority). All-import crews excused.
 - `consecutive_nights` — R6 over a 7-day lookback: 2 nights in a row =
   warning, 3+ = error (`night_exempt` duties excluded).
 - `static_streak` — T3: a 3rd consecutive static-only day: warning.
