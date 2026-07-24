@@ -9,16 +9,13 @@
 -- generator's persist step never deletes them and they flow straight into the
 -- main שבצק/report display like any other row.
 --
--- Access: the חמל tab is visible to scheduler admins (shavtzak_admins) OR to
--- חמל members. חמל membership is a SEPARATE table (not an is_hamal column on
--- shavtzak_admins) on purpose: a חמל member is NOT a scheduler admin and must
--- NOT gain the other scheduler tabs — keeping the two lists distinct means the
--- admins.ts point-lookup for isShavtzakAdmin stays a pure shavtzak_admins query.
-create table if not exists hamal_members (
-  email    text primary key,     -- lowercased
-  note     text,
-  added_at timestamp not null default timezone('Asia/Jerusalem', now())
-);
+-- Access (owner decision, revised 2026-07-24): NO separate members table.
+-- A "חמל member" is any soldier whose role is one of the חמל position's
+-- config.staff_all_roles, matched to the logged-in user by soldiers.email
+-- (see api/admins.ts). This reuses the roster we already have; soldier emails
+-- are populated from the מצבת החיילים sheet. The index below serves the
+-- case-insensitive email lookup used by the auth check.
 
--- Manage membership by hand in the Supabase dashboard, e.g.:
---   insert into hamal_members (email, note) values ('someone@example.com', 'חמל');
+drop table if exists hamal_members;   -- superseded by the soldiers.email + role derivation
+
+create index if not exists soldiers_email_lower_idx on soldiers (lower(email));

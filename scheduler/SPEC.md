@@ -1011,13 +1011,20 @@ React viewer:
   generated-day freeze is **bypassed with a warning** instead of a block: the
   request is saved/removed and the UI flags that the affected day's שבצ"ק
   must be regenerated for it to take effect.
+- **חמל** — visible to `shavtzak_admins` **OR** any soldier whose role is a חמל
+  staff role (the חמל position's `config.staff_all_roles`), matched to the
+  signed-in user by `soldiers.email`. A date-range picker (like the draft tab)
+  over the **whole roster** (not just present soldiers); picks save immediately
+  (no draft) as locked/manual חמל rows and replace that day's auto חמל fill
+  (see the חמל position). Backed by `api/hamal.ts`.
 
 Data flows through the Vercel serverless endpoints `api/draft.ts`,
 `api/fairness.ts`, `api/exit-requests.ts` (GET list / POST create /
 PATCH edit / DELETE cancel over `exit_requests`; admin mutations are
 parameter-gated, free-form-time variants of the same handlers),
-`api/report.ts` (GET the stored generation report), and `api/publish.ts` /
-`api/unpublish.ts` (POST the publish/unpublish transitions),
+`api/report.ts` (GET the stored generation report), `api/publish.ts` /
+`api/unpublish.ts` (POST the publish/unpublish transitions), and
+`api/hamal.ts` (GET חמל picks + roster / PUT replace a day / DELETE clear),
 reading the scheduler DB via `SCHEDULER_DATABASE_URL`; endpoints are open like the
 existing sheet endpoints (no server-side auth) per current app security model —
 the publish flow trusts the officer email supplied by the client.

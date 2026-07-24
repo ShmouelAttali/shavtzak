@@ -18,7 +18,7 @@ const COMPANY_ROLES = new Set(['מ"פ', 'סמ"פ', 'מ"מ', 'סמל', 'מ"כ']);
 
 // restricted levels: 'company' = command roles only (sheet role);
 // 'scheduler' = shavtzak_admins (scheduler DB table) only — NOT command roles;
-// 'hamal' = shavtzak_admins OR hamal_members (the dedicated חמל tab)
+// 'hamal' = shavtzak_admins OR a חמל-role soldier matched by email (the dedicated חמל tab)
 const TABS: { id: TabId; label: string; restricted?: 'company' | 'scheduler' | 'hamal' }[] = [
   { id: 'personal',  label: 'לוז אישי' },
   { id: 'unit',      label: 'לוז יציאות מחלקתי' },

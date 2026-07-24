@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react';
 import type { AdminResponse } from '../../api/admins';
 
-/** shavtzak_admins + hamal_members membership for an email (one /api/admins
- *  lookup). isShavtzakAdmin gates the scheduler tabs; isHamalMember gates the
- *  חמל tab (shown to admins OR חמל members). */
+/** Scheduler access for an email (one /api/admins lookup). isShavtzakAdmin
+ *  (shavtzak_admins table) gates the scheduler tabs; isHamalMember (a soldier
+ *  with a חמל role, matched by soldiers.email) gates the חמל tab, shown to
+ *  admins OR חמל members. */
 export function useShavtzakAccess(email: string): AdminResponse {
   const [access, setAccess] = useState<AdminResponse>({ isShavtzakAdmin: false, isHamalMember: false });
 

@@ -2,9 +2,12 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { getPool } from './_db.js';
 
 // GET /api/admins?email=x -> { isShavtzakAdmin, isHamalMember }
-// Point lookup against shavtzak_admins (scheduler tabs) and hamal_members (the
-// חמל tab) — grants tab visibility without requiring a command role in the
-// sheet. The two lists are distinct: a חמל member is NOT a scheduler admin.
+// isShavtzakAdmin: point lookup against shavtzak_admins (grants the scheduler tabs).
+// isHamalMember: the email belongs to a soldier whose role is a חמל staff role —
+// derived from the חמל position's config.staff_all_roles (no separate members
+// table, no hardcoded role literal). A חמל member is NOT a scheduler admin: this
+// only unlocks the חמל tab. Requires soldiers.email to be populated (from the
+// roster sheet) and the soldiers(lower(email)) index for the lookup.
 export interface AdminResponse { isShavtzakAdmin: boolean; isHamalMember: boolean }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -15,7 +18,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
     const [admin, hamal] = await Promise.all([
       getPool().query(`select 1 from shavtzak_admins where email = $1`, [email]),
-      getPool().query(`select 1 from hamal_members where email = $1`, [email]),
+      getPool().query(
+        `select 1 from soldiers s
+         join positions p on (p.config -> 'staff_all_roles') ? s.role
+         where lower(s.email) = $1 limit 1`, [email]),
     ]);
     res.setHeader('Cache-Control', 's-maxage=60, stale-while-revalidate=300');
     const out: AdminResponse = {

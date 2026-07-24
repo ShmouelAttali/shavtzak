@@ -302,15 +302,12 @@ create table shavtzak_admins (
   added_at timestamp not null default timezone('Asia/Jerusalem', now())
 );
 
--- Emails allowed to see the dedicated חמל tab (manual חמל assignment). Kept
--- SEPARATE from shavtzak_admins: a חמל member is not a scheduler admin and
--- must not gain the other scheduler tabs. The חמל tab is shown to admins OR
--- חמל members (viewer-side gate). Managed by hand in the Supabase dashboard.
-create table hamal_members (
-  email    text primary key,     -- lowercased
-  note     text,
-  added_at timestamp not null default timezone('Asia/Jerusalem', now())
-);
+-- חמל-tab access is NOT a separate table: a חמל member is any soldier whose
+-- role is a חמל staff role (the חמל position's config.staff_all_roles), matched
+-- to the logged-in user by soldiers.email. The חמל tab is shown to admins OR
+-- חמל members (viewer-side gate). See api/admins.ts. The index below serves the
+-- case-insensitive email lookup.
+create index soldiers_email_lower_idx on soldiers (lower(email));
 
 create table sheet_sync_log (
   id         bigint generated always as identity primary key,
