@@ -151,11 +151,13 @@ test('allowed_positions (H6c): whitelisted soldier serves only there, incl. chai
   await setAllowedPositions('חייל 30', null);
 });
 
-test('staff_all_roles (חמל): every present role soldier staffs daily, absent -> בבית', async () => {
-  const a = await soldierId('חייל 40'), b = await soldierId('חייל 41');
-  // NO explicit allowed_positions — the חמל-only restriction is DERIVED from
-  // the position's staff_all_roles config (implicit H6c whitelist)
-  await query(`update soldiers set role = 'חמל' where id in ($1, $2)`, [a, b]);
+test('staff_all_roles auto-fill (מפלג): present role staffs daily, absent -> בבית; חמל is manual-only', async () => {
+  const a = await soldierId('חייל 40'), b = await soldierId('חייל 41'), h = await soldierId('חייל 45');
+  // NO explicit allowed_positions — the restriction is DERIVED from each
+  // position's staff_all_roles config (implicit H6c whitelist). מפלג
+  // (is_scheduled=true) auto-fills; חמל (is_scheduled=false) is manual-only.
+  await query(`update soldiers set role = 'רס"פ' where id in ($1, $2)`, [a, b]);
+  await query(`update soldiers set role = 'חמל' where id = $1`, [h]);
   const D7 = '2026-08-07';
   await query(`insert into unavailability (soldier_id, period, kind)
                values ($1, tsrange(day_start($2), day_start($2) + interval '1 day'), 'חופש')`, [b, D7]);
@@ -163,35 +165,26 @@ test('staff_all_roles (חמל): every present role soldier staffs daily, absent 
   const rows = await query<{ id: number; pos: string }>(`
     select da.soldier_id id, p.name pos from day_assignments da
     join positions p on p.id = da.position_id
-    where da.day = $1 and da.soldier_id in ($2, $3)`, [D7, a, b]);
-  assert.equal(rows.find((r) => String(r.id) === String(a))?.pos, 'חמל');
+    where da.day = $1 and da.soldier_id in ($2, $3, $4)`, [D7, a, b, h]);
+  // מפלג: present role-רס"פ auto-staffs; absent → בבית
+  assert.equal(rows.find((r) => String(r.id) === String(a))?.pos, 'מפלג');
   assert.equal(rows.find((r) => String(r.id) === String(b))?.pos, 'בבית');
+  // חמל: manual-only — the present role-חמל soldier is NOT auto-filled → מנוחה
+  assert.equal(rows.find((r) => String(r.id) === String(h))?.pos, 'מנוחה');
   const shift = await query(`select 1 from shift_assignments
     where day = $1 and soldier_id = $2
-      and position_id = (select id from positions where name = 'חמל')`, [D7, a]);
-  assert.equal(shift.length, 1, 'present חמל soldier must hold the 24h חמל row');
+      and position_id = (select id from positions where name = 'מפלג')`, [D7, a]);
+  assert.equal(shift.length, 1, 'present מפלג soldier must hold the 24h מפלג row');
   const errs = (await validateDay(D7)).filter((f) => f.severity === 'error');
   assert.deepEqual(errs, [], JSON.stringify(errs));
-  // no other assignment anywhere that day — the derived whitelist held
-  const elsewhere = await query(`
+  // the role-חמל soldier is placed NOWHERE (the derived whitelist restricts him
+  // to חמל, which is never auto-filled)
+  const hamalElsewhere = await query(`
     select p.name from shift_assignments sa join positions p on p.id = sa.position_id
-    where sa.day = $1 and sa.soldier_id = $2 and p.name <> 'חמל'`, [D7, a]);
-  assert.deepEqual(elsewhere, []);
-  // repeat day: a role crew is locked to the same people by design — no
-  // "same position as yesterday" rotation caveat on the repeat
-  const D8 = '2026-08-08';
-  await persist(await generate(D8));
-  const repeat = await query<{ rationale: { code: string }[] }>(`
-    select sa.rationale from shift_assignments sa
-    where sa.day = $1 and sa.soldier_id = $2
-      and sa.position_id = (select id from positions where name = 'חמל')`, [D8, a]);
-  assert.equal(repeat.length, 1);
-  assert.ok(!repeat[0].rationale.some((e) => e.code === 'caveat_same_position'),
-    JSON.stringify(repeat[0].rationale));
-  await query(`delete from shift_assignments where day = $1`, [D8]);
-  await query(`delete from day_assignments where day = $1`, [D8]);
+    where sa.day = $1 and sa.soldier_id = $2`, [D7, h]);
+  assert.deepEqual(hamalElsewhere, []);
   await query(`delete from unavailability where soldier_id = $1`, [b]);
-  await query(`update soldiers set role = 'לוחם' where id in ($1, $2)`, [a, b]);
+  await query(`update soldiers set role = 'לוחם' where id in ($1, $2, $3)`, [a, b, h]);
 });
 
 test('derived whitelist: role-חמל soldier manually assigned elsewhere → allowed_positions error', async () => {

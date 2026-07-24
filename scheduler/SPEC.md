@@ -39,7 +39,7 @@ History shows 39 distinct position names over 20 days; templates change mid-depl
 | תורנים | 2 seats, **14:00–14:00** | full schedule day; class `other` — outside T2/T3 rotation; **soft T5**: at most one תורנות per soldier per schedule week (the count resets on Sunday — §6.1 fairness week); **`night_exit_ok`** — the one position a night-exit soldier may additionally hold on his exit day (H9 night-exit relaxation) |
 | כונן גשש | chained to סיור — see T4c | windows: 22–07, 07–14, 14–22; **only the night window counts as load** (R3) |
 | קצין מוצב | 1 seat, **14:00–14:00** | full schedule day; manned **only from a fixed candidate pool** — see H6-pool; **`no_rest_floor`** — internally-scheduled, may be entered with any rest (H8) |
-| חמל | **14:00–14:00** auto / **per-shift** when manual | standing crew: every present role-חמל soldier daily (`staff_all_roles`, one full-day row); readiness class (rest-transparent); members restricted to חמל only via the derived H6c whitelist. **Manual per-shift override**: the dedicated חמל tab splits a day into shift windows (3 implicit defaults 14:00-22:00 / 22:00-06:00 / 06:00-14:00, or a customized list stored in `position_day_shifts`) and picks a distinct crew per shift from the whole roster. A day with any locked/manual חמל rows is authoritative — the generator SKIPS the auto role-based fill for it and keeps the human picks (manual replaces auto-staffing). A pick RESERVES the soldier for the whole 14:00→14:00 day (one locked `day_assignments` bucket per picked soldier), so they are seated nowhere else; readiness rows keep `blocks_overlap=false`, so overlapping windows never trip `no_double_booking` |
+| חמל | **manual-only, per-shift** | MANUAL-ONLY (`is_scheduled=false`) — the generator NEVER auto-fills חמל; shifts start empty until the dedicated חמל tab places them. readiness class (rest-transparent); role-חמל members are still restricted to חמל only via the derived H6c whitelist (`staff_all_roles` kept — it drives that whitelist + the חמל-tab auth in api/admins.ts), so an unplaced role-חמל soldier is simply unassigned. **Per-shift picks**: the חמל tab splits a day into shift windows (3 implicit defaults 14:00-22:00 / 22:00-06:00 / 06:00-14:00) and picks a distinct crew per shift from the whole roster. **On-demand shifts = day-scoped `slot_templates`** (`valid_from = valid_to = the day`) — the generic "add a shift on this one day" mechanism (day_slots materializes them, seat_overrides can resize/cancel; מגן internal shifts will reuse it). A pick RESERVES the soldier for the whole 14:00→14:00 day (one locked `day_assignments` bucket per picked soldier), so they are seated nowhere else; picks are `shift_assignments` rows with `blocks_overlap=false`, so overlapping windows never trip `no_double_booking` |
 | מפלג | **14:00–14:00**, variable staff crew | the רס"פ/סרס"פ/מנהלה staff do **no shifts**; they appear in the שבצק in this dedicated daily position whenever present on base and are restricted to it (`staff_all_roles`, like חמל). Presence follows the sheet's מפלג tab (סטטוס מגיע/לא מגיע → the soldier's schedulable flag — see Import) |
 | כרמל חטיבה / מפקד כרמל חטיבה | 3+1 × 14,18,22,02,06,10 | 4h — same grid as עמדות הגנה; commander seat: prefer a real מפקד from the descending crew, else highest רובאי (T4a) |
 
@@ -65,7 +65,7 @@ mission rows when they happen; they may **not** overlap a readiness row —
 the readiness assignment must be trimmed/replaced for the attack window (H3).
 
 **Boundary rule for daily missions**: all daily duties — מגן, חפק, התקפי,
-קצין מוצב, תורנים, חמל, מפלג — run **14:00–14:00**, so a daily mission
+קצין מוצב, תורנים, מפלג — run **14:00–14:00**, so a daily mission
 occupies exactly its schedule day and blocks nothing the day after; nothing
 crosses the 14:00 boundary. An assignment's counted hours belong to the
 schedule day containing its start (relevant only for imported history rows
@@ -531,7 +531,8 @@ where nights rank), weighted_hours second, per-position counts third.
   enter those daily rows with any rest at all (H8; התקפי gets the same via
   readiness). The order:
   1. honor Level-1 **locks**;
-  2. **H6b seat-rule pre-pass** (חפק) and **staff_all_roles crews** (חמל, מפלג);
+  2. **H6b seat-rule pre-pass** (חפק) and **staff_all_roles crews** (מפלג;
+     חמל is manual-only / `is_scheduled=false` → skipped, never auto-filled);
   3. **closed-list pre-pass**: every `candidate_pool` position (H6-pool —
      קצין מוצב) is staffed now, from its fixed list only, by the pool's
      fairness rotation — BEFORE the מגן-commander reservation, continuity, or
@@ -1015,18 +1016,23 @@ React viewer:
   staff role (the חמל position's `config.staff_all_roles`), matched to the
   signed-in user by `soldiers.email`. A date-range picker (like the draft tab)
   over the **whole roster** (not just present soldiers), split **per shift**:
-  each day defaults to 3 shift windows (14:00-22:00, 22:00-06:00, 06:00-14:00)
-  and the officer may add / edit-times / remove windows per day and pick a
-  distinct crew per window. Picks save immediately (no draft) as locked/manual
-  per-shift חמל rows and replace that day's auto חמל fill (see the חמל
-  position). **Storage**: the picks are ordinary `shift_assignments` rows whose
-  `period` is the concrete shift window (computed like the `day_slots`
-  lateral); a customized day's shift list lives in `position_day_shifts`
-  (rows present ⇒ they replace the defaults; the default windows come from the
-  `hamal_default_shifts` config row or the `api/hamal.ts` fallback). An empty
-  custom window persists there even with no picks; a legacy full-day row
-  surfaces as a derived 14:00-14:00 window. Backed by `api/hamal.ts` (GET
-  picks+structure+roster / PUT replace a day's shifts / DELETE virgin-reset).
+  each day defaults to 3 shift windows (14:00-22:00, 22:00-06:00, 06:00-14:00),
+  starting EMPTY (חמל is manual-only — no auto-fill), and the officer may add /
+  edit-times / remove windows per day and pick a distinct crew per window. Each
+  window in a day needs a DISTINCT start time (day-scoped `slot_templates` are
+  keyed by start_time). Picks save immediately (no draft) as locked/manual
+  per-shift חמל rows. **Storage — on-demand shifts = day-scoped `slot_templates`**
+  (`valid_from = valid_to = the day`; the generic "add a shift on this one day"
+  mechanism, reused later for מגן): a day stores template rows when its window
+  list is customized away from the defaults OR it carries picks; a virgin
+  default day stores none and shows the empty defaults. The picks themselves are
+  ordinary `shift_assignments` rows whose `period` is the concrete shift window
+  (computed like the `day_slots` lateral). The default windows come from the
+  `hamal_default_shifts` config row or the `api/hamal.ts` fallback. An empty
+  custom window persists (its template row) even with no picks; a legacy
+  full-day row surfaces as a derived 14:00-14:00 window. Backed by
+  `api/hamal.ts` (GET picks+structure+roster / PUT replace a day's shifts /
+  DELETE virgin-reset).
 
 Data flows through the Vercel serverless endpoints `api/draft.ts`,
 `api/fairness.ts`, `api/exit-requests.ts` (GET list / POST create /

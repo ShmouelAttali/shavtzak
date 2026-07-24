@@ -1,8 +1,9 @@
-// Handler-level tests for api/hamal.ts (per-shift חמל staffing): GET
-// materializes the default shift windows + full roster; PUT persists
+// Handler-level tests for api/hamal.ts (manual-only, per-shift חמל staffing):
+// GET materializes the default shift windows + full roster; PUT persists
 // manual/locked חמל rows per shift with the right tsranges + per-shift seat
-// indexes; a customized day stores position_day_shifts override rows; DELETE
-// resets both. חמל is resolved via staff_all_roles (never a hardcoded id).
+// indexes; the day's shift STRUCTURE is stored as DAY-SCOPED slot_templates
+// (valid_from = valid_to = the day); DELETE virgin-resets both. חמל is resolved
+// via staff_all_roles (never a hardcoded id).
 import './env.js';
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
@@ -46,12 +47,17 @@ async function shiftRows(day: string) {
     where sa.day = $1 and p.config->'staff_all_roles' ? 'חמל'
     order by lower(sa.period), sa.seat_index`, [day]);
 }
+/** day-scoped slot_templates (valid_from = valid_to = day) = the day's shift
+ *  STRUCTURE. end_t derived from start + duration (wraps past midnight). */
 async function structRows(day: string) {
   return query<{ start_t: string; end_t: string }>(`
-    select to_char(pds.start_time,'HH24:MI') start_t, to_char(pds.end_time,'HH24:MI') end_t
-    from position_day_shifts pds
-    join positions p on p.id = pds.position_id
-    where pds.day = $1 and p.config->'staff_all_roles' ? 'חמל' order by pds.start_time`, [day]);
+    select to_char(st.start_time,'HH24:MI') start_t,
+           to_char((st.start_time + make_interval(mins => st.duration_minutes)),'HH24:MI') end_t
+    from slot_templates st
+    join positions p on p.id = st.position_id
+    where st.valid_from = $1 and st.valid_to = $1
+      and p.config->'staff_all_roles' ? 'חמל'
+    order by st.start_time`, [day]);
 }
 async function bucketCount(day: string): Promise<number> {
   const r = await query(`
@@ -78,7 +84,7 @@ test('GET materializes the 3 default shifts for a virgin day + full roster', asy
   assert.ok(day.shifts.every((s) => s.picks.length === 0));
 });
 
-test('PUT with picks in two default shifts: right periods, per-shift seats, buckets, NO override rows', async () => {
+test('PUT with picks in two default shifts: right periods, per-shift seats, buckets, day-scoped templates', async () => {
   const D = '2026-08-06';
   const a = await soldierId('חייל 40'), b = await soldierId('חייל 41'), c = await soldierId('חייל 42');
   const out = await call({ method: 'PUT', query: {}, body: { day: D, shifts: [
@@ -88,7 +94,7 @@ test('PUT with picks in two default shifts: right periods, per-shift seats, buck
   ] } });
   assert.equal(out.status, 200);
   const echo = out.body as HamalWriteResponse;
-  assert.equal(echo.custom, false, 'default windows => not custom');
+  assert.equal(echo.custom, false, 'default windows => not custom (even with picks)');
   assert.deepEqual(echo.shifts.map((s) => s.picks.length), [2, 1, 0]);
 
   const rows = await shiftRows(D);
@@ -103,7 +109,20 @@ test('PUT with picks in two default shifts: right periods, per-shift seats, buck
   assert.equal(s2.seat_index, 1); // restarts per shift
 
   assert.equal(await bucketCount(D), 3);          // one locked bucket per soldier
-  assert.deepEqual(await structRows(D), []);      // matches defaults => no override
+  // a day with picks stores day-scoped slot_templates for every shown window
+  // (so the picks have their slots), even when the windows equal the defaults
+  assert.deepEqual((await structRows(D)).map((r) => [r.start_t, r.end_t]),
+    [['06:00', '14:00'], ['14:00', '22:00'], ['22:00', '06:00']]);
+});
+
+test('a virgin default day (no picks) writes NO slot_templates', async () => {
+  const D = '2026-08-07';
+  const out = await call({ method: 'PUT', query: {}, body: { day: D,
+    shifts: DEFAULTS.map((w) => ({ ...w, soldierIds: [] as number[] })) } });
+  assert.equal(out.status, 200);
+  assert.equal((out.body as HamalWriteResponse).custom, false);
+  assert.deepEqual(await structRows(D), []);      // defaults + no picks => nothing stored
+  assert.deepEqual(await shiftRows(D), []);
 });
 
 test('period computation: 22-06 crosses midnight, 06-14 and 09-14 land on D+1', async () => {

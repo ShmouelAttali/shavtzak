@@ -1,6 +1,8 @@
-// חמל tab (Task 8): "manual replaces auto-staffing". A day with manual/locked
-// חמל rows is authoritative — the generator skips its auto role-based
-// (staff_all_roles) fill for that day, and the manual picks survive persist().
+// חמל is MANUAL-ONLY (positions.is_scheduled=false): the generator never
+// auto-fills it — a role-חמל soldier is left unassigned unless the חמל tab
+// places him, and חמל slot_templates present on a day do NOT trigger auto-fill.
+// The other staff_all_roles crew (מפלג, is_scheduled=true) still auto-fills.
+// Manual per-shift picks survive regeneration and reserve the soldier for the day.
 import './env.js';
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
@@ -9,39 +11,58 @@ import { generate, persist } from '../src/generate.js';
 
 const D = '2026-08-01';
 
-async function hamalCrew(day: string): Promise<string[]> {
+async function crewOf(day: string, posName: string): Promise<string[]> {
   const rows = await query<{ full_name: string }>(`
     select s.full_name from shift_assignments sa
     join positions p on p.id = sa.position_id
     join soldiers s on s.id = sa.soldier_id
-    where sa.day = $1 and p.name = 'חמל' order by s.full_name`, [day]);
+    where sa.day = $1 and p.name = $2 order by s.full_name`, [day, posName]);
   return rows.map((r) => r.full_name);
 }
+const hamalCrew = (day: string) => crewOf(day, 'חמל');
 
 before(async () => {
   await freshSchema();
   await seedSoldiers();
-  // two role-חמל soldiers — the auto staff_all_roles fill would pin them to חמל
+  // two role-חמל soldiers (must NOT be auto-assigned anywhere) + one מפלג staff
+  // (role רס"פ — MUST still be auto-assigned to מפלג).
   await query(`insert into soldiers (personal_number, full_name, platoon, role, rifle_level)
                values ('H001', 'חמלניק א', '1', 'חמל', 0),
-                      ('H002', 'חמלניק ב', '2', 'חמל', 0)`);
+                      ('H002', 'חמלניק ב', '2', 'חמל', 0),
+                      ('P001', 'מפלגניק', 'מפלג', 'רס"פ', 0)`);
 });
 after(closePool);
 
-test('baseline: role-חמל soldiers are auto-assigned to חמל', async () => {
+test('generator does NOT auto-fill חמל (manual-only) but STILL auto-fills מפלג', async () => {
   await persist(await generate(D));
-  assert.deepEqual(await hamalCrew(D), ['חמלניק א', 'חמלניק ב'].sort());
+  // role-חמל soldiers are left unassigned to חמל (no auto role fill)
+  assert.deepEqual(await hamalCrew(D), []);
+  // and they are not seated anywhere else either (H6c restricts them to חמל)
+  const hamalElsewhere = await query(`
+    select 1 from shift_assignments sa join soldiers s on s.id = sa.soldier_id
+    where sa.day = $1 and s.full_name in ('חמלניק א','חמלניק ב')`, [D]);
+  assert.deepEqual(hamalElsewhere, [], 'role-חמל soldiers are unassigned when the tab is unused');
+  // מפלג staff crew is still auto-filled
+  assert.deepEqual(await crewOf(D, 'מפלג'), ['מפלגניק']);
 });
 
-test('manual PER-SHIFT rows are authoritative; auto role fill is skipped and the rows survive regen', async () => {
+test('חמל slot_templates present on a day are STILL not auto-filled', async () => {
+  const D2 = '2026-08-02';
+  const hamalId = (await query<{ id: number }>(`select id from positions where name = 'חמל'`))[0].id;
+  await query(`insert into schedule_days (day) values ($1) on conflict do nothing`, [D2]);
+  // a day-scoped חמל slot_template (as the חמל tab would write) — but NO picks
+  await query(`insert into slot_templates
+                 (position_id, start_time, duration_minutes, seats, valid_from, valid_to)
+               values ($1, '14:00', 480, 3, $2, $2)`, [hamalId, D2]);
+  await persist(await generate(D2));
+  assert.deepEqual(await hamalCrew(D2), [], 'is_scheduled=false ⇒ generator ignores the חמל slot');
+});
+
+test('manual PER-SHIFT rows are authoritative and survive regen; the soldier is reserved', async () => {
   // pick a regular לוחם manually across TWO shift windows (mimics api/hamal.ts):
   // per-shift locked/manual חמל rows + one locked/manual day_assignments bucket
   const picked = await soldierId('חייל 40');
   const hamalId = (await query<{ id: number }>(`select id from positions where name = 'חמל'`))[0].id;
-  // the חמל tab resets the day's חמל rows before writing the manual picks
-  await query(`delete from shift_assignments where day = $1 and position_id = $2`, [D, hamalId]);
-  await query(`delete from day_assignments where day = $1 and position_id = $2`, [D, hamalId]);
-  // two shift windows: 14:00-22:00 and 22:00-06:00 (next morning)
   await query(`insert into shift_assignments
                  (day, position_id, soldier_id, period, seat_index, is_commander_seat,
                   source, blocks_overlap, locked)
@@ -58,11 +79,8 @@ test('manual PER-SHIFT rows are authoritative; auto role fill is skipped and the
 
   await persist(await generate(D));
 
-  // the manual pick is the entire חמל crew — the role-חמל soldiers are NOT
-  // auto-added (manual wins). Both shift rows for the same soldier remain.
+  // both manual shift rows for the same soldier remain (and no auto crew appears)
   assert.deepEqual(await hamalCrew(D), ['חייל 40', 'חייל 40']);
-
-  // both manual rows survived persist with source/lock intact
   const meta = await query<{ source: string; locked: boolean }>(`
     select sa.source, sa.locked from shift_assignments sa
     join positions p on p.id = sa.position_id
@@ -79,11 +97,11 @@ test('manual PER-SHIFT rows are authoritative; auto role fill is skipped and the
   assert.deepEqual(elsewhere, []);
 });
 
-test('clearing the manual picks restores auto role-based fill', async () => {
+test('clearing the manual picks leaves חמל empty (no auto fill)', async () => {
   const hamalId = (await query<{ id: number }>(`select id from positions where name = 'חמל'`))[0].id;
   await query(`delete from shift_assignments where day = $1 and position_id = $2 and (locked or source = 'manual')`, [D, hamalId]);
   await query(`delete from day_assignments where day = $1 and position_id = $2 and (locked or source = 'manual')`, [D, hamalId]);
 
   await persist(await generate(D));
-  assert.deepEqual(await hamalCrew(D), ['חמלניק א', 'חמלניק ב'].sort());
+  assert.deepEqual(await hamalCrew(D), []);
 });
