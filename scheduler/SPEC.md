@@ -449,8 +449,8 @@ soldier joined the group:
 | 2 | R1 quasi-constraint: candidates with a full 8h rest before the slot start sort before all others | — |
 | 3 | **P4b sub-post rotation** — within the same 24h round, a soldier mans a DIFFERENT static post each shift (not שג twice in one day); a CONTIGUOUS same-post pair is one continuous stint, not a repeat (non-static positions only; static grids use the two-phase post spread instead, §7 Level 2) | current day |
 | 4 | **P2** — fewest **night assignments** (00–06, incl. today's fresh nights when ranking a night slot). Readiness assignments do **not** count as nights (sleeping assumption, R2) | current week |
-| 5 | **P3** — fewest **weighted mission hours** (readiness hours × low weight, default 0.25), compared in **8-hour buckets** (one duty-day). The soldier's TOTAL for the week across ALL positions | current week |
-| 6 | **P5 role fit** (ties only, beyond the H6d required driver): נהג טיגריס preferred for the התקפי crew; נהג דוד preferred for a סיור slot overlapping the night window | current crew |
+| 5 | **P5 role fit** (ties only, beyond the H6d required driver): נהג טיגריס preferred for the התקפי crew; נהג דוד preferred for a סיור slot overlapping the night window. Ranks **above** the load keys (owner 2026-07-24: rule 6, the patrol-night driver, is "more of a hard rule") — the hard ≥1-driver-per-crew is already H6d, so this key only decides the RIGHT driver among ties, and it sits **below** R1 rest + P2 nights so a soft driver preference never costs a rest violation or a night | current crew |
+| 6 | **P3** — fewest **weighted mission hours** (readiness hours × low weight, default 0.25), compared in **8-hour buckets** (one duty-day). The soldier's TOTAL for the week across ALL positions | current week |
 | 7 | P3 fine tie-break — exact weighted hours | current week |
 | 8 | **P6** — most rest since last shift (clamped at 48h) | — |
 
