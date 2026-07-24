@@ -247,7 +247,9 @@ create table schedule_days (
   status       text not null default 'draft'
                check (status in ('draft','generated','approved','published')),
   generated_at timestamp,
-  approved_by  text,
+  approved_by  text,                       -- email of the officer who published (publish flow)
+  published_at timestamptz,                -- when the day was published (publish flow)
+  report_html  text,                       -- self-contained generation report (built at persist time)
   validation   jsonb not null default '[]'  -- snapshot of last validation run
 );
 

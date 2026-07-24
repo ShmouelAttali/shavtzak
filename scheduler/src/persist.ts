@@ -6,6 +6,7 @@ import { pool } from './db.js';
 import { validateAndStore, Finding } from './validate.js';
 import { GenerateResult } from './model.js';
 import { minToIso } from './time.js';
+import { buildDayInput, buildDayReportHtml } from './report.js';
 
 export async function persist(res: GenerateResult): Promise<Finding[]> {
   const { day } = res;
@@ -73,5 +74,17 @@ export async function persist(res: GenerateResult): Promise<Finding[]> {
   } finally {
     client.release();
   }
-  return validateAndStore(day);
+  const findings = await validateAndStore(day);
+  // Persist the self-contained generation report so the draft UI can re-open
+  // it (GET /api/report). report.ts builders are pure (no fs); best-effort —
+  // a report-build hiccup must never fail the generation itself.
+  if (res.report) {
+    try {
+      const html = buildDayReportHtml(buildDayInput(res, findings, false));
+      await pool.query(`update schedule_days set report_html = $2 where day = $1`, [day, html]);
+    } catch (e) {
+      console.error(`report_html build/store failed for ${day}:`, e);
+    }
+  }
+  return findings;
 }
