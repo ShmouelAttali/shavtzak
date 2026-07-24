@@ -1,8 +1,11 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { HamalResponse, HamalWriteResponse } from '../../api/hamal';
 
-/** חמל picks for a date range + the full DB roster for the picker, with an
- *  immediate (no-draft) save. Reflected in the main שבצק on the next load. */
+/** One shift's picks as sent to the server (whole-day atomic write). */
+export interface ShiftPayload { start: string; end: string; soldierIds: number[] }
+
+/** חמל per-shift picks for a date range + the full DB roster for the picker,
+ *  with an immediate (no-draft) save. Reflected in the main שבצק on next load. */
 export function useHamal(from: string, to: string) {
   const [data, setData] = useState<HamalResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -27,24 +30,25 @@ export function useHamal(from: string, to: string) {
 
   useEffect(() => { void load(); }, [load]);
 
-  /** Persist a day's full pick list (replaces it) and refresh. */
-  const save = useCallback(async (day: string, soldierIds: number[]) => {
+  /** Persist a day's full shift list (structure + picks, replaces it) and
+   *  refresh from the server's echo. */
+  const save = useCallback(async (day: string, shifts: ShiftPayload[]) => {
     setSaving(day);
     setError(null);
     try {
       const res = await fetch('/api/hamal', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ day, soldierIds }),
+        body: JSON.stringify({ day, shifts }),
       });
       const body = await res.json();
       if (!res.ok) throw new Error(body.error ?? 'שגיאה');
-      // optimistic local update from the server's echo
+      // optimistic local update from the server's echo (a materialized HamalDay)
       setData((prev) => {
         if (!prev) return prev;
         const w = body as HamalWriteResponse;
         const days = prev.days.filter((d) => d.day !== day);
-        if (w.picks.length) days.push({ day, picks: w.picks });
+        days.push(w);
         days.sort((a, b) => a.day.localeCompare(b.day));
         return { ...prev, days };
       });
