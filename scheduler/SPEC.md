@@ -453,6 +453,7 @@ soldier joined the group:
 | 6 | **P3** — fewest **weighted mission hours** (readiness hours × low weight, default 0.25), compared in **8-hour buckets** (one duty-day). The soldier's TOTAL for the week across ALL positions | current week |
 | 7 | P3 fine tie-break — exact weighted hours | current week |
 | 8 | **P6** — most rest since last shift (clamped at 48h) | — |
+| 9 | **P4c cross-day sub-post spread** — the LAST discriminator before the seeded random tie: among candidates equal on everything above, prefer whoever held THIS sub-position **least over the recent days** (spreads a soldier across the static posts across the week, e.g. ש.ג. Sunday → בונקר Wednesday). Purely additive — P4b (key 3) still owns the within-24h rotation. Also applied in the עמדות הגנה two-phase post distribution (§7 Level 2) as a secondary tie-break after the within-day even-spread | recent days |
 
 **Recruiting a soldier whose day is not yet settled** — pull-from-מנוחה,
 chain completions, replacement-pair halves — additionally applies the
@@ -605,7 +606,9 @@ where nights rank), weighted_hours second, per-position counts third.
   **no post bias**; phase 2 then distributes the window's soldiers to the
   concrete posts (שג/בונקר/מזרחית/דרומית) where the ONLY consideration is
   **even spread**: a soldier rotates through all posts and never repeats the
-  same post within the same 24h round when an alternative exists. Non-static
+  same post within the same 24h round when an alternative exists; when several
+  posts are equally fresh today, a cross-day tie-break (P4c) prefers the post
+  the soldier held **least over the recent days**. Non-static
   positions keep the single-phase per-slot fill, with P4b as the in-cascade
   rotation mechanism. **Scarce-role preservation** (future-looking): a regular
   seat prefers **non-commanders** when a LATER slot of the position still has

@@ -142,6 +142,13 @@ export function rank(g: Gen, candidates: SoldierState[], positionId: number,
       Math.floor(loadOf(st) / dailyCap),                                     // P3
       loadOf(st),                                                            // P3 fine tie-break
       -Math.min(restAt, P6_REST_CLAMP),                                      // P6
+      // P4c cross-day sub-post spread (owner 2026-07-24): the LAST
+      // discriminator before the seeded random tie — among candidates equal
+      // on everything above, prefer whoever held THIS sub-position least over
+      // the recent days (spreads a soldier across the static posts across the
+      // week, e.g. ש.ג. Sunday → בונקר Wednesday). Purely additive; P4b above
+      // still owns the within-24h rotation.
+      forSub != null ? (g.ctx.recentSubCount.get(st.soldier.id)?.get(forSub) ?? 0) : 0, // P4c
     ];
   }
 }

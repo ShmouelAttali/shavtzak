@@ -440,14 +440,22 @@ function fillStaticTwoPhase(g: Gen, pid: number, posName: string, sorted: Slot[]
     // behavior-identical to assigning inline.
     const cnt = (st: SoldierState, m: Slot) => g.assignments.filter((a) =>
       a.soldierId === st.soldier.id && a.subPositionId === m.subPositionId).length;
+    // P4c cross-day spread (owner 2026-07-24): among posts tied on today's
+    // even-spread count, prefer the one this soldier held LEAST over the
+    // recent days — so the static grid rotates a soldier across posts across
+    // the week, not only within the 24h round (that stays the today-count
+    // primary key). Secondary tie-break only; never overrides within-day
+    // distinctness.
+    const recent = (st: SoldierState, m: Slot) => m.subPositionId != null
+      ? (g.ctx.recentSubCount.get(st.soldier.id)?.get(m.subPositionId) ?? 0) : 0;
     const chosen: Slot[] = [];
     for (const p of picks) {
       let member: Slot | undefined;
-      let best = Infinity;
+      let best = Infinity, bestR = Infinity;
       for (const m of members) {
         if (capacity.get(m)! <= 0) continue;
-        const n = cnt(p.st, m);
-        if (n < best) { best = n; member = m; }
+        const n = cnt(p.st, m), r = recent(p.st, m);
+        if (n < best || (n === best && r < bestR)) { best = n; bestR = r; member = m; }
       }
       if (!member) break;   // can't happen: |picks| ≤ total capacity
       capacity.set(member, capacity.get(member)! - 1);
