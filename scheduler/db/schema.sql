@@ -294,21 +294,16 @@ create unique index shift_assignments_seat_key
 alter table shift_assignments add constraint no_double_booking
   exclude using gist (soldier_id with =, period with &&) where (blocks_overlap);
 
--- Per-day, per-position shift STRUCTURE override for the חמל tab's per-shift
--- staffing (2026-07-24). Rows exist for (day, position) ⇒ they REPLACE that
--- position's default shift windows for the day; no rows ⇒ defaults (the config
--- row hamal_default_shifts / api/hamal.ts fallback: 14:00-22:00, 22:00-06:00,
--- 06:00-14:00). An empty custom window (nobody assigned) still persists here.
--- end_time <= start_time ⇒ the window crosses midnight (ends the next day). The
--- picks themselves are ordinary shift_assignments rows whose period is the
--- concrete shift window (computed like the day_slots lateral) — see api/hamal.ts.
-create table position_day_shifts (
-  day         date     not null references schedule_days,
-  position_id smallint not null references positions,
-  start_time  time     not null,
-  end_time    time     not null,          -- end <= start ⇒ crosses midnight
-  primary key (day, position_id, start_time)
-);
+-- On-demand shift windows (חמל tab, 2026-07-24; reusable for מגן internal
+-- shifts later) are stored as DAY-SCOPED slot_templates rows (valid_from =
+-- valid_to = the schedule day) — the generic "add a shift on this one day"
+-- mechanism. day_slots materializes them per day; seat_overrides resizes/
+-- cancels them. חמל carries is_scheduled=false and NO permanent template, so a
+-- virgin day emits no חמל slot; the חמל tab writes day-scoped templates only for
+-- the windows shown (empty custom windows persist that way). חמל is manual-only:
+-- the generator never auto-fills it. The picks are ordinary shift_assignments
+-- rows whose period is the concrete shift window (computed like the day_slots
+-- lateral) — see api/hamal.ts.
 
 -- Emails allowed to see the scheduler tabs in the viewer app (SPEC §12),
 -- independent of sheet role. Managed by hand in the Supabase dashboard.

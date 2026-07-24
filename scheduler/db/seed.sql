@@ -47,9 +47,11 @@ insert into positions (id, name, mission_class, is_scheduled, config) values
   -- The pool itself is id-based rows in position_candidates (seed-candidates.sql).
   ( 9, 'קצין מוצב',   'other',     true,  '{"daily":true,"no_rest_floor":true,"candidate_pool":true}'),
   (10, 'כרמל חטיבה',  'readiness', true,  '{}'),
-  -- חמל: standing crew — every present role-חמל soldier staffs it daily,
-  -- full schedule day; readiness class = rest-transparent (internal shifts)
-  (11, 'חמל',         'readiness', true,  '{"staff_all_roles":["חמל"]}'),
+  -- חמל: MANUAL-ONLY (is_scheduled=false) — the generator never auto-fills it;
+  -- the dedicated חמל tab places per-shift picks (day-scoped slot_templates +
+  -- manual/locked shift_assignments). staff_all_roles still drives חמל-tab auth
+  -- (api/admins.ts) and the H6c role whitelist (role חמל → position חמל only).
+  (11, 'חמל',         'readiness', false, '{"staff_all_roles":["חמל"]}'),
   (12, 'מנוחה',       'rest',      true,  '{}'),
   (13, 'בבית',        'rest',      true,  '{}'),  -- fully unavailable (H1) — not on base
   -- מפלג: the רס"פ/סרס"פ/מנהלה staff — they do no shifts (role-restricted to
@@ -113,9 +115,10 @@ values
   (8, '07:00', 420, 1, '2026-07-15'),   -- 07:00–14:00
   (8, '14:00', 480, 1, '2026-07-15');   -- 14:00–22:00
 
--- חמל: full schedule day, up to 5 present role-חמל soldiers
-insert into slot_templates (position_id, start_time, duration_minutes, seats, valid_from)
-values (11, '14:00', 1440, 5, '2026-07-15');
+-- חמל: NO permanent slot_template — manual-only, per-shift. The חמל tab writes
+-- day-scoped slot_templates (valid_from = valid_to = day) for the windows it
+-- shows. Default windows come from the config row below (or the api/hamal.ts
+-- hardcoded fallback).
 
 -- קצין מוצב: 1 seat, full schedule day 14:00–14:00 (blocks day)
 insert into slot_templates (position_id, start_time, duration_minutes, seats, valid_from)
@@ -158,4 +161,8 @@ insert into chain_rules (id, target_position, target_start, source_position, sou
 insert into config (key, value) values
   ('readiness_hour_weight', '0.25'),
   ('daily_cap_hours',       '8'),
-  ('rest_rules',            '{"minimum_hours":4,"ideal_hours":8,"long_task_hours":4,"gashash_effective_hours":1.5}');
+  ('rest_rules',            '{"minimum_hours":4,"ideal_hours":8,"long_task_hours":4,"gashash_effective_hours":1.5}'),
+  -- default חמל shift windows shown by the חמל tab for a virgin day (the tab
+  -- writes day-scoped slot_templates only when a day differs from these or has
+  -- picks). api/hamal.ts has the same hardcoded fallback.
+  ('hamal_default_shifts',  '[{"start":"14:00","end":"22:00"},{"start":"22:00","end":"06:00"},{"start":"06:00","end":"14:00"}]');
