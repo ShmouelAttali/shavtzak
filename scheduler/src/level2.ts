@@ -653,6 +653,13 @@ export function fillLevel2(g: Gen, plan1: Level1Plan): void {
     }
 
     const group = [...state.values()].filter((st) => st.level1 === pid);
+    // Chronological order == shift PRIORITY for a scarce driver (owner
+    // 2026-07-24): the earliest-starting crew is filled first, claims a driver
+    // for its driver seat first, and (with driver preservation below) keeps it
+    // — so on a נהג דוד shortage the noon (14:00) crew keeps its driver
+    // longest, then night (22:00), and the morning (06:00) crew is the first to
+    // go without. This is the Level-2 half of the priority the Level-1 driver
+    // quota reserves for.
     const sorted = [...slots].sort((a, b) => a.period[0] - b.period[0]);
     // H6d hard driver rule (config.driver_qual): every crew must include a
     // qualified driver — the seat right after the commander seat is a driver

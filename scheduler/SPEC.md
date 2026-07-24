@@ -192,9 +192,23 @@ that did cross the boundary — §10).
   soft/fairness assignment: Level 1 fills a driver quota (one qualified driver
   per distinct slot start) right after the commander quota; Level 2 reserves
   the seat right after the commander seat as a dedicated driver seat until the
-  crew has one. Validated (`driver` rule, error; crews that are entirely
-  imported history are excused). The soft P5 driver preferences remain as
+  crew has one. The soft P5 driver preferences remain as
   tie-breakers beyond the one required driver.
+  **Shortage priority** (owner 2026-07-24): when the נהג דוד pool is too small
+  for every סיור crew, the scarce drivers stay with the **earlier-starting**
+  crews — **noon (14:00) keeps a driver longest → then night (22:00) → the
+  morning (06:00) crew goes without first**. Chronological start order **is**
+  this priority (14:00 < 22:00 < 06:00-next): the Level-1 quota reserves as many
+  drivers as crews (all available on a shortage), and the Level-2 fill —
+  processing crews in start order, with driver-preservation holding a driver
+  for the later crews — leaves the last-starting crew(s) driverless.
+  **Validation** (`driver` rule; crews that are entirely imported history are
+  excused): a driverless crew is an **error** when a qualified driver was idle
+  and free to cover it (skipped) or when a **lower**-priority crew kept a driver
+  while a **higher**-priority one went without (priority violated); it is only a
+  **warning** when the pool is genuinely exhausted (no idle driver could have
+  covered the crew) AND the driverless crews are exactly the lowest-priority
+  (latest-starting) ones.
 - **H7 Crew integrity**: no duplicate soldier in a crew/slot.
 - **H8 Rest floor — absolute**: < 4h rest before a task → hard block. **Never
   a "בדוחק" fallback, no exceptions** — the exemptions are the R5
@@ -753,8 +767,12 @@ or **warning** tagged with a rule key:
   non-commander; a commander-first-seat slot with no commander-seat row
   (slots covered only by import rows are excused — imports carry no seat
   metadata).
-- `driver` — H6d: a סיור/התקפי crew with no qualified נהג דוד/נהג טיגריס:
-  error (all-import crews excused).
+- `driver` — H6d: a crew with no qualified נהג דוד/נהג טיגריס. **Error** when a
+  driver was available/skipped or the shift priority was violated (a
+  lower-priority crew kept a driver while a higher-priority one went without);
+  **warning** when the driver pool is genuinely exhausted AND only the
+  lowest-priority (latest-starting) crews lack a driver (H6d shortage
+  priority). All-import crews excused.
 - `consecutive_nights` — R6 over a 7-day lookback: 2 nights in a row =
   warning, 3+ = error (`night_exempt` duties excluded).
 - `static_streak` — T3: a 3rd consecutive static-only day: warning.
