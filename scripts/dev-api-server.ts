@@ -14,6 +14,10 @@ const handlers: Record<string, () => Promise<{ default: Function }>> = {
   '/api/fairness': () => import('../api/fairness.js'),
   '/api/admins': () => import('../api/admins.js'),
   '/api/exit-requests': () => import('../api/exit-requests.js'),
+  '/api/report': () => import('../api/report.js'),
+  '/api/publish': () => import('../api/publish.js'),
+  '/api/unpublish': () => import('../api/unpublish.js'),
+  '/api/hamal': () => import('../api/hamal.js'),
 };
 
 export function createDevApiServer(): http.Server {
