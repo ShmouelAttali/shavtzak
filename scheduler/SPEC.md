@@ -961,8 +961,21 @@ React viewer:
   שבצק tab. Shows per-day status badge, per-assignment violation markers, the day's
   validation panel (errors/warnings), and the מנוחה list. A **צור שבצ"ק** button
   triggers generation for the selected day(s) via the API; regeneration replaces
-  only `source in ('auto','chain')` unlocked rows. Days remain in the draft family
-  (`generated`) — approval/publish and sheet sync-out are explicitly out of scope.
+  only `source in ('auto','chain')` unlocked rows. Each generated day stores its
+  self-contained generation report HTML in `schedule_days.report_html` (built at
+  persist time from the pure `report.ts` builders); the tab opens it in a new tab
+  after generation and offers a **פתח דוח** link per day (`GET /api/report?day=`).
+  **Publish flow**: a `generated` day can be **פרסם**ed → `published`
+  (`schedule_days.approved_by` = the officer's email, `published_at` = now);
+  published days render **read-only** (regeneration is refused with a 409) and
+  stay visible in the draft view with the פורסם marker, with an admin
+  **בטל פרסום** action reverting to `generated`. **Stale-draft cleanup** runs
+  lazily on read: a past day whose 14:00→14:00 cycle has ended, was never
+  published, and has a published successor (a `published` row on that day or a
+  later one) has its regenerable `auto`/`chain` rows dropped (locked/manual rows
+  kept; an emptied day reverts to `draft`) — days with no published successor are
+  kept as a fallback, published days are never touched. Sheet sync-out remains
+  out of scope.
 - **הוגנות** — weekly compliance + fairness dashboard. Date picker selects the
   schedule week (Sunday-anchored — matching the weekly fairness scope, §6.1).
   Top: summary strip (total
@@ -999,9 +1012,12 @@ React viewer:
   request is saved/removed and the UI flags that the affected day's שבצ"ק
   must be regenerated for it to take effect.
 
-Data flows through three Vercel serverless endpoints (`api/draft.ts`,
-`api/fairness.ts`, and `api/exit-requests.ts` — GET list / POST create /
+Data flows through the Vercel serverless endpoints `api/draft.ts`,
+`api/fairness.ts`, `api/exit-requests.ts` (GET list / POST create /
 PATCH edit / DELETE cancel over `exit_requests`; admin mutations are
-parameter-gated, free-form-time variants of the same handlers)
+parameter-gated, free-form-time variants of the same handlers),
+`api/report.ts` (GET the stored generation report), and `api/publish.ts` /
+`api/unpublish.ts` (POST the publish/unpublish transitions),
 reading the scheduler DB via `SCHEDULER_DATABASE_URL`; endpoints are open like the
-existing sheet endpoints (no server-side auth) per current app security model.
+existing sheet endpoints (no server-side auth) per current app security model —
+the publish flow trusts the officer email supplied by the client.

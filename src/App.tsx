@@ -138,7 +138,7 @@ function AppContent({ data }: { data: SheetData }) {
         {activeTab === 'unit' && <UnitSchedule data={data} />}
         {activeTab === 'company' && <CompanySummary data={data} shavtzakAll={shavtzakAll} />}
         {activeTab === 'shavtzak' && <Shavtzak soldiers={data.soldiers} shavtzakAll={shavtzakAll} loading={shavtzakLoading} error={shavtzakError} mySoldierName={mySoldierName} />}
-        {activeTab === 'draft' && <DraftSchedule soldiers={data.soldiers} mySoldierName={mySoldierName} />}
+        {activeTab === 'draft' && <DraftSchedule soldiers={data.soldiers} mySoldierName={mySoldierName} email={myEmail} />}
         {activeTab === 'fairness' && <FairnessView />}
         {activeTab === 'exitreq' && <ExitRequests soldierName={mySoldierName} email={myEmail} />}
         {activeTab === 'exitadmin' && <AdminExits soldiers={data.soldiers} email={myEmail} />}

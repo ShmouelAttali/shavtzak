@@ -25,6 +25,9 @@ export interface DraftDay {
   day: string;                  // YYYY-MM-DD (schedule day, starts 14:00)
   status: string;               // draft | generated | approved | published
   generatedAt: string | null;
+  publishedAt: string | null;   // set when status === 'published'
+  approvedBy: string | null;    // email of the publishing officer
+  hasReport: boolean;           // a stored generation report exists (GET /api/report?day=)
   validation: DraftFinding[];
   groups: StationGroup[];       // same shape the existing Shavtzak layouts render
   /** key = `${soldierName}|${timeLabel}` for ⚠ markers */
@@ -58,11 +61,46 @@ function labelSlot(day: string, pStart: Date, pEnd: Date, posConfig: Record<stri
 /** placeholder soldier name for an empty seat (rendered as a red badge by SoldierName) */
 const UNFILLED = 'לא מאויש';
 
+/** Stale-draft cleanup (Task 7B). A PAST day whose full 14:00→14:00 cycle has
+ *  ended, that was never published, but for which a published schedule exists
+ *  for that day or a fresher one, no longer needs its regenerable draft: its
+ *  auto/chain rows are dropped (locked/manual rows — e.g. a hand-entered חמל —
+ *  are always kept). If nothing human remains, the day drops back to 'draft'
+ *  so the view shows it empty. A published day is NEVER touched, and a day
+ *  with no published successor is kept as a fallback. Idempotent — triggered
+ *  lazily on read (getDrafts). */
+async function cleanupStaleDrafts(from: string, to: string): Promise<void> {
+  const pool = getPool();
+  const stale = await pool.query<{ day: string }>(
+    `select d.day::text from schedule_days d
+     where d.day between $1 and $2
+       and d.status <> 'published'
+       and day_start(d.day) + interval '24 hours' <= timezone('Asia/Jerusalem', now())
+       and exists (select 1 from schedule_days p
+                   where p.status = 'published' and p.day >= d.day)`, [from, to]);
+  if (!stale.rowCount) return;
+  const days = stale.rows.map((r) => r.day);
+  await pool.query(
+    `delete from shift_assignments where day = any($1::date[])
+       and source in ('auto','chain') and not locked`, [days]);
+  await pool.query(
+    `delete from day_assignments where day = any($1::date[])
+       and source in ('auto','chain') and not locked`, [days]);
+  // Days left with nothing human revert to an empty draft.
+  await pool.query(
+    `update schedule_days d set status = 'draft'
+     where d.day = any($1::date[])
+       and not exists (select 1 from shift_assignments sa where sa.day = d.day)
+       and not exists (select 1 from day_assignments da where da.day = d.day)`, [days]);
+}
+
 async function getDrafts(from: string, to: string): Promise<DraftResponse> {
   const pool = getPool();
+  await cleanupStaleDrafts(from, to);
   const [daysRes, rowsRes, dayAssignRes, slotsRes] = await Promise.all([
     pool.query(
-      `select day::text, status, generated_at
+      `select day::text, status, generated_at, published_at, approved_by,
+              (report_html is not null) has_report
        from schedule_days where day between $1 and $2 order by day`, [from, to]),
     pool.query(
       `select sa.day::text, p.name pos_name, p.config pos_config, sp.name sub_name, s.full_name,
@@ -106,6 +144,9 @@ async function getDrafts(from: string, to: string): Promise<DraftResponse> {
     days.set(d.day, {
       day: d.day, status: d.status,
       generatedAt: d.generated_at ? new Date(d.generated_at).toISOString() : null,
+      publishedAt: d.published_at ? new Date(d.published_at).toISOString() : null,
+      approvedBy: d.approved_by ?? null,
+      hasReport: !!d.has_report,
       validation: liveValidation.get(d.day) ?? [], groups: [], meta: {}, dayAssignments: {},
     });
   }
@@ -217,6 +258,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const { day } = (req.body ?? {}) as { day?: string };
       if (!day || !DATE_RE.test(day)) {
         return res.status(400).json({ error: 'day required (YYYY-MM-DD)' });
+      }
+      // Overwrite guard: a published day is frozen — regenerating it would
+      // silently replace an approved schedule. Refuse until it is unpublished.
+      const st = await getPool().query<{ status: string }>(
+        `select status from schedule_days where day = $1`, [day]);
+      if (st.rows[0]?.status === 'published') {
+        return res.status(409).json({ error: 'היום פורסם — יש לבטל פרסום לפני חילול מחדש' });
       }
       // One day per request (Vercel time limit); the UI iterates ranges.
       const { generate, persist } = await import('../scheduler/src/generate.js');
