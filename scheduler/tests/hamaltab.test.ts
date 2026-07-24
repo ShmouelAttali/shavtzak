@@ -33,19 +33,22 @@ test('baseline: role-חמל soldiers are auto-assigned to חמל', async () => {
   assert.deepEqual(await hamalCrew(D), ['חמלניק א', 'חמלניק ב'].sort());
 });
 
-test('manual replaces auto: locked חמל picks are authoritative; auto role fill is skipped', async () => {
-  // pick a regular לוחם manually (mimics api/hamal.ts): a locked/manual חמל
-  // shift row + a locked/manual day_assignments bucket
+test('manual PER-SHIFT rows are authoritative; auto role fill is skipped and the rows survive regen', async () => {
+  // pick a regular לוחם manually across TWO shift windows (mimics api/hamal.ts):
+  // per-shift locked/manual חמל rows + one locked/manual day_assignments bucket
   const picked = await soldierId('חייל 40');
   const hamalId = (await query<{ id: number }>(`select id from positions where name = 'חמל'`))[0].id;
   // the חמל tab resets the day's חמל rows before writing the manual picks
-  // (api/hamal.ts) — remove the baseline auto rows first
   await query(`delete from shift_assignments where day = $1 and position_id = $2`, [D, hamalId]);
   await query(`delete from day_assignments where day = $1 and position_id = $2`, [D, hamalId]);
+  // two shift windows: 14:00-22:00 and 22:00-06:00 (next morning)
   await query(`insert into shift_assignments
                  (day, position_id, soldier_id, period, seat_index, is_commander_seat,
                   source, blocks_overlap, locked)
-               values ($1, $2, $3, day_range($1), 1, false, 'manual', false, true)`,
+               values ($1, $2, $3, tsrange($1::date + interval '14 hours', $1::date + interval '22 hours'),
+                       1, false, 'manual', false, true),
+                      ($1, $2, $3, tsrange($1::date + interval '22 hours', $1::date + interval '30 hours'),
+                       1, false, 'manual', false, true)`,
     [D, hamalId, picked]);
   await query(`insert into day_assignments (day, soldier_id, position_id, source, locked)
                values ($1, $2, $3, 'manual', true)
@@ -56,17 +59,17 @@ test('manual replaces auto: locked חמל picks are authoritative; auto role fil
   await persist(await generate(D));
 
   // the manual pick is the entire חמל crew — the role-חמל soldiers are NOT
-  // auto-added (manual wins)
-  assert.deepEqual(await hamalCrew(D), ['חייל 40']);
+  // auto-added (manual wins). Both shift rows for the same soldier remain.
+  assert.deepEqual(await hamalCrew(D), ['חייל 40', 'חייל 40']);
 
-  // the manual row survived persist with its source/lock intact
+  // both manual rows survived persist with source/lock intact
   const meta = await query<{ source: string; locked: boolean }>(`
     select sa.source, sa.locked from shift_assignments sa
     join positions p on p.id = sa.position_id
     join soldiers s on s.id = sa.soldier_id
     where sa.day = $1 and p.name = 'חמל' and s.full_name = 'חייל 40'`, [D]);
-  assert.equal(meta[0]?.source, 'manual');
-  assert.equal(meta[0]?.locked, true);
+  assert.equal(meta.length, 2);
+  assert.ok(meta.every((m) => m.source === 'manual' && m.locked));
 
   // the picked לוחם holds no OTHER position (pinned to חמל via the day lock)
   const elsewhere = await query(`
