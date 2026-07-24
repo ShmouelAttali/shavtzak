@@ -91,12 +91,15 @@ function DayViolations({ day }: { day: DraftDay }) {
   );
 }
 
-function DaySection({ day, onGenerate, generating }: {
-  day: DraftDay; onGenerate: (d: string) => void; generating: string | null;
+function DaySection({ day, onGenerate, onPublish, onUnpublish, generating, busyDay }: {
+  day: DraftDay; onGenerate: (d: string) => void;
+  onPublish: (d: string) => void; onUnpublish: (d: string) => void;
+  generating: string | null; busyDay: string | null;
 }) {
   const badge = STATUS_BADGE[day.status] ?? STATUS_BADGE.draft;
   const isEmpty = day.groups.length === 0;
-  const busy = generating !== null;
+  const published = day.status === 'published';
+  const busy = generating !== null || busyDay !== null;
   return (
     <section className="space-y-3">
       <div className="flex items-center gap-2 flex-wrap">
@@ -107,13 +110,42 @@ function DaySection({ day, onGenerate, generating }: {
         {day.generatedAt && (
           <span className="text-xs text-gray-400">נוצר {new Date(day.generatedAt).toLocaleString('he-IL')}</span>
         )}
-        <button
-          onClick={() => onGenerate(day.day)}
-          disabled={busy}
-          className="mr-auto rounded-lg bg-blue-600 hover:bg-blue-500 disabled:opacity-50 px-3 py-1.5 text-sm font-semibold text-white"
-        >
-          {generating === day.day ? '⏳ מחולל...' : isEmpty ? 'צור שבצ"ק' : 'חולל מחדש'}
-        </button>
+        {published && day.approvedBy && (
+          <span className="text-xs text-green-700">פורסם ע"י {day.approvedBy}</span>
+        )}
+        <div className="mr-auto flex items-center gap-2">
+          {day.hasReport && (
+            <a href={`/api/report?day=${day.day}`} target="_blank" rel="noreferrer"
+              className="rounded-lg border border-slate-300 hover:bg-slate-50 px-3 py-1.5 text-sm font-semibold text-slate-700">
+              פתח דוח
+            </a>
+          )}
+          {published ? (
+            <button
+              onClick={() => onUnpublish(day.day)} disabled={busy}
+              className="rounded-lg border border-red-300 text-red-700 hover:bg-red-50 disabled:opacity-50 px-3 py-1.5 text-sm font-semibold"
+            >
+              {busyDay === day.day ? '⏳...' : 'בטל פרסום'}
+            </button>
+          ) : (
+            <>
+              {day.status === 'generated' && (
+                <button
+                  onClick={() => onPublish(day.day)} disabled={busy}
+                  className="rounded-lg bg-green-600 hover:bg-green-500 disabled:opacity-50 px-3 py-1.5 text-sm font-semibold text-white"
+                >
+                  {busyDay === day.day ? '⏳...' : 'פרסם'}
+                </button>
+              )}
+              <button
+                onClick={() => onGenerate(day.day)} disabled={busy}
+                className="rounded-lg bg-blue-600 hover:bg-blue-500 disabled:opacity-50 px-3 py-1.5 text-sm font-semibold text-white"
+              >
+                {generating === day.day ? '⏳ מחולל...' : isEmpty ? 'צור שבצ"ק' : 'חולל מחדש'}
+              </button>
+            </>
+          )}
+        </div>
       </div>
       {!isEmpty && <ValidationPanel findings={day.validation} />}
       {!isEmpty && <DayViolations day={day} />}
@@ -134,8 +166,8 @@ function DaySection({ day, onGenerate, generating }: {
 }
 
 // ── Main ────────────────────────────────────────────────────────────────────
-export function DraftSchedule({ soldiers, mySoldierName = '' }: {
-  soldiers: Soldier[]; mySoldierName?: string;
+export function DraftSchedule({ soldiers, mySoldierName = '', email = '' }: {
+  soldiers: Soldier[]; mySoldierName?: string; email?: string;
 }) {
   const [from, setFrom] = useState(todayIso());
   const [multiDay, setMultiDay] = useState(false);
@@ -143,7 +175,7 @@ export function DraftSchedule({ soldiers, mySoldierName = '' }: {
   const [popup, setPopup] = useState<PopupState | null>(null);
   const [rationalePopup, setRationalePopup] = useState<RationalePopupState | null>(null);
   const effectiveTo = multiDay && to >= from ? to : from;
-  const { data, loading, error, generating, generateRange } = useDraft(from, effectiveTo);
+  const { data, loading, error, generating, busyDay, generateRange, publish, unpublish } = useDraft(from, effectiveTo);
 
   const lookup = useMemo(() => {
     const map = new Map<string, SoldierInfo>();
@@ -166,6 +198,14 @@ export function DraftSchedule({ soldiers, mySoldierName = '' }: {
     const d = data?.days.find((x) => x.day === day);
     if (d && d.groups.length > 0 && !window.confirm(`לחולל מחדש את ${heDate(day)}? שיבוצים נעולים/ידניים יישמרו.`)) return;
     void generateRange([day]);
+  };
+  const publishOne = (day: string) => {
+    if (!window.confirm(`לפרסם את ${heDate(day)}? היום יינעל לחילול מחדש עד לביטול הפרסום.`)) return;
+    void publish(day, email);
+  };
+  const unpublishOne = (day: string) => {
+    if (!window.confirm(`לבטל את פרסום ${heDate(day)}?`)) return;
+    void unpublish(day);
   };
 
   return (
@@ -192,8 +232,10 @@ export function DraftSchedule({ soldiers, mySoldierName = '' }: {
             {/* Days */}
             {days.map((day) => {
               const d = data?.days.find((x) => x.day === day)
-                ?? { day, status: 'draft', generatedAt: null, validation: [], groups: [], meta: {}, dayAssignments: {} };
-              return <DaySection key={day} day={d} onGenerate={generateOne} generating={generating} />;
+                ?? { day, status: 'draft', generatedAt: null, publishedAt: null, approvedBy: null, hasReport: false, validation: [], groups: [], meta: {}, dayAssignments: {} };
+              return <DaySection key={day} day={d} onGenerate={generateOne}
+                onPublish={publishOne} onUnpublish={unpublishOne}
+                generating={generating} busyDay={busyDay} />;
             })}
           </div>
           {popup && <SoldierPopup info={popup} onClose={() => setPopup(null)} />}
