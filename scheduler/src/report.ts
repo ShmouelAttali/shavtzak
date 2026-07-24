@@ -1087,7 +1087,9 @@ function buildProcessSection(input: DayReportInput, h: NameHelpers): string {
   // (and is recorded as the pick's decisive_key). Night spread (P2) and
   // sub-position rotation (P4b) moved into the Level-2 slot cascade.
   // NB: item numbers MUST match rank.ts's groupKey/GROUP_DIMS order — the
-  // decisive_key labels cite them (e.g. "5 — עומס שבועי").
+  // decisive_key labels cite them (e.g. "5 — רוטציה מאתמול"). The Level-1
+  // group cascade has NO weekly-load (P3) key — load is a Level-2 slot key
+  // only; positions are not lighter/heavier than each other.
   const CASCADE = [
     'מנוחה מלאה לפני תחילת המשימה — רק בעמדה יומית שדורשת מנוחה לפני הכניסה (בפועל: תורנים); מי שלא ינוח 8 שעות עד 14:00 נדחק לסוף (R1)',
     'תורנות השבוע — רק בעמדת תורנים: מי שכבר עשה תורנות השבוע נדחק (T5)',
