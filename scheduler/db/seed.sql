@@ -58,6 +58,16 @@ insert into positions (id, name, mission_class, is_scheduled, config) values
   -- this position, like חמל) but appear in the שבצק when present on base.
   -- Presence follows the מפלג sheet tab's סטטוס (לא מגיע -> is_schedulable=false).
   (14, 'מפלג',        'other',     true,  '{"daily":true,"staff_all_roles":["רס\"פ","סרס\"פ","מנהלה"]}'),
+  -- משימות שונות: ad-hoc missions the officers add by hand (the sheet writes
+  -- them as 'כח <שם>' / 'תפיסת בית' / 'משימות שונות', all typed משימות שונות).
+  -- MANUAL-ONLY (is_scheduled=false): the generator never invents them, but the
+  -- imported rows still occupy the soldier (rest, double-booking, fairness).
+  -- The individual force is the sub-position.
+  (15, 'משימות שונות', 'other',    false, '{}'),
+  -- חפק2: the second חפק team (appears from 24/07/2026). Same daily
+  -- 14:00-14:00 duty semantics as חפק; manual-only until the owner decides the
+  -- generator should staff it (no seat_rules, no candidate lists).
+  (16, 'חפק2',        'other',     false, '{"daily":true,"no_rest_floor":true}'),
   -- אחר: catch-all for imported history rows whose position no longer exists
   (99, 'אחר',         'other',     false, '{}');
 
@@ -72,7 +82,15 @@ insert into sub_positions (id, position_id, name) values
   ( 7,  6, 'מפקד'),              -- חפק seats (H6b seat_rules on the position config)
   ( 8,  6, 'קשר'),
   ( 9,  6, 'חובש'),
-  (10,  6, 'נהג');
+  (10,  6, 'נהג'),
+  -- משימות שונות: one row per named ad-hoc force, exactly as the sheet spells
+  -- it. New force names are added here (or by a delta) as they appear.
+  (11, 15, 'כח אלישיב'),
+  (12, 15, 'כח אמיתי'),
+  (13, 15, 'כח גלעד'),
+  (14, 15, 'כח שאג'),
+  (15, 15, 'תפיסת בית'),
+  (16, 15, 'משימות שונות');   -- unnamed / generic mission row
 
 -- ── Slot templates (valid from 2026-07-15) ──────────────────────────────────
 -- סיור: 3 shifts × 8h × 4 seats, first seat = commander
