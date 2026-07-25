@@ -25,7 +25,7 @@ const TABS: { id: TabId; label: string; restricted?: 'company' | 'scheduler' | '
   { id: 'company',   label: 'סיכום פלוגתי', restricted: 'company' },
   { id: 'shavtzak',  label: 'שבצק' },
   { id: 'exitreq',   label: 'יציאה קצרה' },
-  { id: 'draft',     label: 'שבצק חדש (טיוטה)', restricted: 'scheduler' },
+  { id: 'draft',     label: 'צור שבצק', restricted: 'scheduler' },
   { id: 'fairness',  label: 'הוגנות', restricted: 'scheduler' },
   { id: 'exitadmin', label: 'ניהול יציאות', restricted: 'scheduler' },
   { id: 'hamal',     label: 'חמל', restricted: 'hamal' },

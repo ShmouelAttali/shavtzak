@@ -957,7 +957,7 @@ Two officer-only tabs (client-side gating via COMPANY_ROLES, consistent with the
 existing סיכום פלוגתי tab) and one soldier-facing tab added to the existing
 React viewer:
 
-- **שבצק חדש (טיוטה)** — daily draft view. Date picker with optional multi-day range;
+- **צור שבצק** — daily draft view. Date picker with optional multi-day range;
   renders drafts from the DB in the same station-group layouts as the sheet-based
   שבצק tab. Shows per-day status badge, per-assignment violation markers, the day's
   validation panel (errors/warnings), and the מנוחה list. A **צור שבצ"ק** button
@@ -966,6 +966,23 @@ React viewer:
   self-contained generation report HTML in `schedule_days.report_html` (built at
   persist time from the pure `report.ts` builders); the tab opens it in a new tab
   after generation and offers a **פתח דוח** link per day (`GET /api/report?day=`).
+  **Manual replacement**: clicking a name here opens a replacement picker (the
+  same searchable single-select body the חמל tab uses, `SoldierPicker`), not
+  the live tab's phone card. The clicked assignment is identified by day +
+  soldier + the slot's time label — the same key the `meta` map uses, and the
+  label is recomputed server-side with the very same `labelSlot()`. A driver
+  or commander seat (rationale `driver_seat`/`driver_quota`,
+  `commander_seat`/`commander_quota`/`chain_commander`/`magen_commander`)
+  defaults the list to qualified candidates only, with a checkbox that reveals
+  the full roster. `PUT /api/draft {day,time,fromSoldierId,toSoldierId}`
+  rewrites those rows to `source='manual', locked=true` with a
+  `manual_replace` rationale, pins the incoming soldier's `day_assignments`
+  bucket (manual+locked) and re-buckets the outgoing one (a position he still
+  holds, else מנוחה unlocked) — so a regeneration re-seats the replacement at
+  the same position/window/seat (Level 1 `ctx.lockedDay`, Level 2
+  `lockedInSlot`) and re-plans the replaced soldier freely. Refused on a
+  published day (409), when the incoming soldier already holds a blocking row
+  over the window (409), or when the label matches no row (404).
   **Publish flow**: a `generated` day can be **פרסם**ed → `published`
   (`schedule_days.approved_by` = the officer's email, `published_at` = now);
   published days render **read-only** (regeneration is refused with a 409) and

@@ -86,6 +86,28 @@ export function useDraft(from: string, to: string) {
     }
   }, [load]);
 
+  /** Swap the soldier sitting in one assignment (day + time label) for
+   *  another. Resolves to an error message on failure, null on success. */
+  const replaceSoldier = useCallback(async (
+    day: string, time: string, fromSoldierId: number, toSoldierId: number,
+  ): Promise<string | null> => {
+    setBusyDay(day);
+    try {
+      const res = await fetch('/api/draft', {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ day, time, fromSoldierId, toSoldierId }),
+      });
+      const body = await res.json();
+      if (!res.ok) return body.error ?? 'שגיאה בהחלפה';
+      return null;
+    } catch (e) {
+      return e instanceof Error ? e.message : 'שגיאה בהחלפה';
+    } finally {
+      setBusyDay(null);
+      await load();
+    }
+  }, [load]);
+
   /** Revert a published day back to generated. */
   const unpublish = useCallback(async (day: string): Promise<boolean> => {
     setBusyDay(day);
@@ -107,5 +129,5 @@ export function useDraft(from: string, to: string) {
     }
   }, [load]);
 
-  return { data, loading, error, generating, busyDay, reload: load, generateRange, publish, unpublish };
+  return { data, loading, error, generating, busyDay, reload: load, generateRange, publish, unpublish, replaceSoldier };
 }

@@ -17,7 +17,10 @@ export interface SoldierInfo {
 }
 
 export const SoldierCtx = createContext<Map<string, SoldierInfo>>(new Map());
-export const NameClickCtx = createContext<(name: string, info: SoldierInfo | undefined) => void>(() => {
+// `time` is the clicked slot's label — the live tab's handler ignores it; the
+// draft tab needs it to know WHICH assignment was clicked (its meta/rows are
+// keyed `${name}|${time}`).
+export const NameClickCtx = createContext<(name: string, info: SoldierInfo | undefined, time?: string) => void>(() => {
 });
 export const MyNameCtx = createContext<string>('');
 
@@ -59,7 +62,7 @@ function SoldierName({name, time}: { name: string; time?: string }) {
     const warn = meta ? meta.violations.length > 0 || meta.rationale.some(isCaveat) : false;
     return (
         <span
-            onClick={() => onCLick(name, info)}
+            onClick={() => onCLick(name, info, time)}
             className={`text-sm whitespace-nowrap leading-snug select-none cursor-pointer active:opacity-70 ${isMe ? `font-bold ${color} bg-yellow-200 ring-1 ring-yellow-400 rounded px-1.5 py-0.5` : `${color} ${bold ? 'font-bold' : 'font-medium'}`}`}
         >
       {name}

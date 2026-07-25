@@ -94,8 +94,10 @@ and live against the shared Supabase project:
   `level2.ts` (slot fill + rationale) → `persist.ts` (write SQL), with shared
   primitives in `rank.ts` / `rest.ts` / `pairs.ts` / `text.ts` / `config.ts`.
   P5 driver-fit + מ"כ spread and R3 גשש effective-rest are implemented.
-- **Viewer app**: two officer-only tabs — שבצק חדש (טיוטה) (date range +
-  צור שבצ"ק button → `api/draft.ts`) and הוגנות (Sunday-anchored week,
+- **Viewer app**: two officer-only tabs — צור שבצק (date range +
+  צור שבצ"ק button → `api/draft.ts`; clicking a name opens the manual
+  replacement picker — `PUT /api/draft` writes a manual+locked row the
+  generator then re-seats verbatim) and הוגנות (Sunday-anchored week,
   compliance dashboard: one exceptions-only card per SPEC rule fed by running
   the validator over the window's days, plus fairness-spread / position-balance
   cards → `api/fairness.ts`). Tab visibility also

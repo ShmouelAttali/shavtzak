@@ -36,13 +36,26 @@ export interface DraftDay {
   dayAssignments: Record<string, string[]>;
 }
 
-export interface DraftResponse { days: DraftDay[] }
+/** Picker roster for the manual-replacement popup: every soldier in the DB
+ *  (identity = id, never a copied name) plus what the popup filters on —
+ *  role (מפקד) and qualifications (נהג דוד / נהג טיגריס). */
+export interface DraftRosterEntry {
+  id: number;
+  name: string;
+  role: string;
+  platoon: string;
+  schedulable: boolean;
+  quals: string[];
+}
+
+export interface DraftResponse { days: DraftDay[]; roster: DraftRosterEntry[] }
 export interface GenerateResponse {
   day: string;
   rows: number;
   issues: string[];
   validation: DraftFinding[];
 }
+export interface ReplaceResponse { day: string; updated: number }
 
 const hm = (d: Date) =>
   `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
@@ -97,7 +110,7 @@ async function cleanupStaleDrafts(from: string, to: string): Promise<void> {
 async function getDrafts(from: string, to: string): Promise<DraftResponse> {
   const pool = getPool();
   await cleanupStaleDrafts(from, to);
-  const [daysRes, rowsRes, dayAssignRes, slotsRes] = await Promise.all([
+  const [daysRes, rowsRes, dayAssignRes, slotsRes, rosterRes] = await Promise.all([
     pool.query(
       `select day::text, status, generated_at, published_at, approved_by,
               (report_html is not null) has_report
@@ -128,6 +141,17 @@ async function getDrafts(from: string, to: string): Promise<DraftResponse> {
        where ds.day between $1 and $2 and p.is_scheduled
          and p.mission_class <> 'rest' and not (p.config ? 'staff_all_roles')
        order by ds.day, p.id, lower(ds.period)`, [from, to]),
+    // full roster for the replacement picker (not date-scoped — a replacement
+    // may come from anywhere, including soldiers the generator skipped)
+    pool.query(
+      `select s.id, s.full_name, coalesce(s.role,'') role, coalesce(s.platoon,'') platoon,
+              s.is_schedulable,
+              coalesce(array_agg(q.qualification) filter (where q.qualification is not null),
+                       '{}') quals
+       from soldiers s
+       left join soldier_qualifications q on q.soldier_id = s.id
+       group by s.id
+       order by s.full_name`),
   ]);
 
   // Live validation (consistent with api/fairness.ts): the stored
@@ -234,12 +258,153 @@ async function getDrafts(from: string, to: string): Promise<DraftResponse> {
     if (!day) continue;
     (day.dayAssignments[r.pos_name] ??= []).push(r.full_name);
   }
-  return { days: [...days.values()] };
+  const roster: DraftRosterEntry[] = rosterRes.rows.map((r: any) => ({
+    id: Number(r.id), name: r.full_name, role: r.role, platoon: r.platoon,
+    schedulable: !!r.is_schedulable, quals: (r.quals ?? []) as string[],
+  }));
+  return { days: [...days.values()], roster };
+}
+
+// ── Manual replacement (PUT) ────────────────────────────────────────────────
+// Officer edit from the צור שבצק tab: swap the soldier sitting in one
+// assignment for another. The clicked assignment is identified the same way
+// the UI identifies it everywhere else — day + soldier + TIME LABEL (draft
+// `meta` is keyed `${name}|${time}` too) — and the label is recomputed here
+// with the very same labelSlot(), so client and server can never disagree
+// about what "18:00-02:00 (למחרת)" means. A soldier holding two rows under one
+// label (a mission row plus a readiness overlay over the same window) is
+// swapped in both: it is the same person in the same window.
+//
+// The swapped rows become source='manual' + locked=true, so a later
+// regeneration of the day keeps them (CLAUDE.md: human edits are never
+// deleted by the generator), and their auto-generated rationale is replaced
+// by a single manual_replace entry — the old "why he was picked" reasoning
+// does not describe the new soldier.
+
+const err = (status: number, message: string) =>
+  Object.assign(new Error(message), { status });
+
+async function replaceSoldier(day: string, time: string, fromId: number, toId: number): Promise<ReplaceResponse> {
+  const pool = getPool();
+  if (fromId === toId) throw err(400, 'אותו חייל — לא בוצע שינוי');
+
+  const st = await pool.query<{ status: string }>(
+    `select status from schedule_days where day = $1`, [day]);
+  if (!st.rows.length) throw err(404, 'אין טיוטה ליום זה');
+  if (st.rows[0].status === 'published') {
+    throw err(409, 'היום פורסם — יש לבטל פרסום לפני עריכה');
+  }
+
+  const people = await pool.query<{ id: string; full_name: string }>(
+    `select id, full_name from soldiers where id = any($1::bigint[])`, [[fromId, toId]]);
+  const nameOf = new Map(people.rows.map((r) => [Number(r.id), r.full_name]));
+  if (!nameOf.has(fromId) || !nameOf.has(toId)) throw err(404, 'חייל לא נמצא');
+
+  // candidate rows of the outgoing soldier on this day, narrowed to the
+  // clicked slot by its rendered time label
+  const rows = await pool.query(
+    `select sa.id, sa.position_id, p.name pos_name, p.config pos_config, sa.blocks_overlap,
+            lower(sa.period) p_start, upper(sa.period) p_end,
+            to_char(lower(sa.period), 'YYYY-MM-DD"T"HH24:MI:SS') lo,
+            to_char(upper(sa.period), 'YYYY-MM-DD"T"HH24:MI:SS') hi
+     from shift_assignments sa
+     join positions p on p.id = sa.position_id
+     where sa.day = $1 and sa.soldier_id = $2
+     order by sa.blocks_overlap desc, lower(sa.period)`, [day, fromId]);
+  const targets = rows.rows.filter((r: any) =>
+    labelSlot(day, new Date(r.p_start), new Date(r.p_end), r.pos_config) === time);
+  if (!targets.length) {
+    throw err(404, 'השיבוץ לא נמצא — ייתכן שהטיוטה השתנתה בינתיים. רענן ונסה שוב');
+  }
+  const ranges = targets.map((r: any) => `[${r.lo},${r.hi})`);
+
+  // already in this very slot?
+  const dup = await pool.query(
+    `select 1 from shift_assignments sa
+     join unnest($3::bigint[], $4::tsrange[]) as t(pid, per)
+       on sa.position_id = t.pid and sa.period = t.per
+     where sa.soldier_id = $1 and sa.day = $2 limit 1`,
+    [toId, day, targets.map((r: any) => r.position_id), ranges]);
+  if (dup.rowCount) throw err(409, `${nameOf.get(toId)} כבר משובץ במשמרת זו`);
+
+  // H3 / no_double_booking: a blocking row of the incoming soldier that
+  // overlaps the window makes the swap impossible (the DB would reject it) —
+  // report WHERE he is instead of surfacing a constraint error
+  const blocking = ranges.filter((_r, i) => targets[i].blocks_overlap);
+  if (blocking.length) {
+    const clash = await pool.query<{ pos_name: string }>(
+      `select distinct p.name pos_name
+       from shift_assignments sa
+       join positions p on p.id = sa.position_id
+       where sa.soldier_id = $1 and sa.blocks_overlap
+         and sa.period && any($2::tsrange[])`, [toId, blocking]);
+    if (clash.rowCount) {
+      throw err(409, `${nameOf.get(toId)} כבר משובץ בשעות אלו (${clash.rows.map((r) => r.pos_name).join(', ')})`);
+    }
+  }
+
+  // the day bucket follows the primary (blocking, else first) swapped row
+  const primaryPid = targets[0].position_id as number;
+  const rationale = JSON.stringify([
+    { code: 'manual_replace', params: { from: nameOf.get(fromId) } },
+  ]);
+
+  const client = await pool.connect();
+  try {
+    await client.query('begin');
+    await client.query(
+      `update shift_assignments
+          set soldier_id = $2, source = 'manual', locked = true,
+              violations = '[]'::jsonb, rationale = $3::jsonb
+        where id = any($1::bigint[])`,
+      [targets.map((r: any) => r.id), toId, rationale]);
+    await client.query(
+      `insert into day_assignments (day, soldier_id, position_id, source, locked)
+       values ($1::date, $2, $3, 'manual', true)
+       on conflict (day, soldier_id)
+       do update set position_id = excluded.position_id, source = 'manual', locked = true`,
+      [day, toId, primaryPid]);
+    // Re-bucket the outgoing soldier: to the position of whatever he still
+    // holds that day, else to the rest bucket (מנוחה) so he stays visible on
+    // the page, else — no rest position configured — drop his bucket row.
+    const keep = await client.query<{ position_id: number }>(
+      `select sa.position_id from shift_assignments sa
+        where sa.day = $1 and sa.soldier_id = $2
+        order by sa.blocks_overlap desc, lower(sa.period) limit 1`, [day, fromId]);
+    const rest = keep.rowCount ? null : await client.query<{ id: number }>(
+      `select id from positions where mission_class = 'rest' order by id limit 1`);
+    const bucket = keep.rows[0]?.position_id ?? rest?.rows[0]?.id ?? null;
+    if (bucket === null) {
+      await client.query(
+        `delete from day_assignments where day = $1 and soldier_id = $2`, [day, fromId]);
+    } else if (keep.rowCount) {
+      await client.query(
+        `update day_assignments set position_id = $3
+          where day = $1 and soldier_id = $2`, [day, fromId, bucket]);
+    } else {
+      // he holds nothing anymore: park him in מנוחה and UNLOCK the bucket, so
+      // a regeneration is free to plan him again (a locked rest bucket would
+      // pin him to מנוחה forever — ctx.lockedDay in scheduler/src/level1.ts)
+      await client.query(
+        `update day_assignments set position_id = $3, source = 'auto', locked = false
+          where day = $1 and soldier_id = $2`, [day, fromId, bucket]);
+    }
+    await client.query('commit');
+  } catch (e) {
+    await client.query('rollback');
+    if ((e as any)?.code === '23P01') {
+      throw err(409, `${nameOf.get(toId)} כבר משובץ בשעות אלו`);
+    }
+    throw e;
+  } finally {
+    client.release();
+  }
+  return { day, updated: targets.length };
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
+  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
   if (req.method === 'OPTIONS') return res.status(200).end();
 
@@ -277,9 +442,26 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(200).json(out);
     }
 
+    if (req.method === 'PUT') {
+      const { day, time, fromSoldierId, toSoldierId } =
+        (req.body ?? {}) as { day?: string; time?: string; fromSoldierId?: number; toSoldierId?: number };
+      if (!day || !DATE_RE.test(day)) {
+        return res.status(400).json({ error: 'day required (YYYY-MM-DD)' });
+      }
+      if (typeof time !== 'string' || !time) {
+        return res.status(400).json({ error: 'time (slot label) required' });
+      }
+      const from = Number(fromSoldierId), to = Number(toSoldierId);
+      if (!Number.isInteger(from) || from <= 0 || !Number.isInteger(to) || to <= 0) {
+        return res.status(400).json({ error: 'fromSoldierId/toSoldierId required' });
+      }
+      return res.status(200).json(await replaceSoldier(day, time, from, to));
+    }
+
     return res.status(405).json({ error: 'method not allowed' });
   } catch (e) {
-    console.error(e);
-    return res.status(500).json({ error: e instanceof Error ? e.message : 'server error' });
+    const status = (e as any)?.status ?? 500;
+    if (status === 500) console.error(e);
+    return res.status(status).json({ error: e instanceof Error ? e.message : 'server error' });
   }
 }

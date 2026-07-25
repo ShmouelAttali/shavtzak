@@ -1,10 +1,10 @@
 import { useMemo, useState } from 'react';
 import type { Soldier } from '../types';
-import type { DraftDay, DraftFinding } from '../../api/draft';
+import type { DraftAssignmentMeta, DraftDay, DraftFinding } from '../../api/draft';
 import type { StationGroup } from '../../api/shavtzak';
 import { useDraft } from '../hooks/useDraft';
 import { GroupsView, buildDisplayGroups, SoldierCtx, NameClickCtx, MyNameCtx, DraftMetaCtx, RationaleClickCtx, SoldierInfo } from './Shavtzak';
-import { SoldierPopup, PopupState } from './SoldierPopup';
+import { ReplaceSoldierPopup, ReplaceState } from './ReplaceSoldierPopup';
 import { RationalePopup, RationalePopupState } from './RationalePopup';
 import { DateRangePicker, todayIso, addDaysIso, heDate } from './DateRangePicker';
 import { orderCrew } from '../../scheduler/src/crewOrder';
@@ -119,11 +119,12 @@ function DayViolations({ day }: { day: DraftDay }) {
   );
 }
 
-function DaySection({ day, onGenerate, onPublish, onUnpublish, generating, busyDay, soldierLookup }: {
+function DaySection({ day, onGenerate, onPublish, onUnpublish, generating, busyDay, soldierLookup, onNameClick }: {
   day: DraftDay; onGenerate: (d: string) => void;
   onPublish: (d: string) => void; onUnpublish: (d: string) => void;
   generating: string | null; busyDay: string | null;
   soldierLookup: Map<string, SoldierInfo>;
+  onNameClick: (day: DraftDay, name: string, time: string, meta?: DraftAssignmentMeta) => void;
 }) {
   const badge = STATUS_BADGE[day.status] ?? STATUS_BADGE.draft;
   const isEmpty = day.groups.length === 0;
@@ -184,8 +185,13 @@ function DaySection({ day, onGenerate, onPublish, onUnpublish, generating, busyD
         </div>
       ) : (
         <>
+          {/* per-day click handler: a click carries the day it happened on
+              plus the clicked slot's meta (rationale ⇒ driver/commander seat) */}
           <DraftMetaCtx.Provider value={day.meta}>
-            <GroupsView groups={buildDisplayGroups(day.day, orderStationGroups(day.groups, soldierLookup), null)} />
+            <NameClickCtx.Provider value={(name, _info, time) =>
+              onNameClick(day, name, time ?? '', day.meta[`${name}|${time ?? ''}`])}>
+              <GroupsView groups={buildDisplayGroups(day.day, orderStationGroups(day.groups, soldierLookup), null)} />
+            </NameClickCtx.Provider>
           </DraftMetaCtx.Provider>
           <RestList day={day} />
         </>
@@ -201,10 +207,11 @@ export function DraftSchedule({ soldiers, mySoldierName = '', email = '' }: {
   const [from, setFrom] = useState(todayIso());
   const [multiDay, setMultiDay] = useState(false);
   const [to, setTo] = useState(todayIso());
-  const [popup, setPopup] = useState<PopupState | null>(null);
+  const [replacing, setReplacing] = useState<ReplaceState | null>(null);
+  const [replaceError, setReplaceError] = useState<string | null>(null);
   const [rationalePopup, setRationalePopup] = useState<RationalePopupState | null>(null);
   const effectiveTo = multiDay && to >= from ? to : from;
-  const { data, loading, error, generating, busyDay, generateRange, publish, unpublish } = useDraft(from, effectiveTo);
+  const { data, loading, error, generating, busyDay, generateRange, publish, unpublish, replaceSoldier } = useDraft(from, effectiveTo);
 
   const lookup = useMemo(() => {
     const map = new Map<string, SoldierInfo>();
@@ -214,8 +221,35 @@ export function DraftSchedule({ soldiers, mySoldierName = '', email = '' }: {
     return map;
   }, [soldiers]);
 
-  const handleNameClick = (name: string, info: SoldierInfo | undefined) =>
-    setPopup({ name, phone: info?.phone ?? '' });
+  const roster = data?.roster ?? [];
+  const idByName = useMemo(
+    () => new Map(roster.map((s) => [s.name, s.id])),
+    [roster],
+  );
+
+  // Clicking a name in the draft opens the REPLACEMENT popup (not the phone
+  // card of the live שבצק tab): this view is the officer's editing surface.
+  const handleNameClick = (day: DraftDay, name: string, time: string, meta?: DraftAssignmentMeta) => {
+    // what everyone else is doing that day — shown next to each candidate
+    const busyNote: Record<string, string> = {};
+    for (const [position, names] of Object.entries(day.dayAssignments)) {
+      for (const n of names) busyNote[n] = position;
+    }
+    setReplaceError(null);
+    setReplacing({
+      day: day.day, name, time, meta,
+      soldierId: idByName.get(name) ?? null,
+      published: day.status === 'published',
+      busyNote,
+    });
+  };
+
+  const doReplace = async (toSoldierId: number) => {
+    if (!replacing?.soldierId) return;
+    const err = await replaceSoldier(replacing.day, replacing.time, replacing.soldierId, toSoldierId);
+    if (err) setReplaceError(err);
+    else setReplacing(null);
+  };
 
   const days = daysBetween(from, effectiveTo);
   const generateAll = () => {
@@ -239,8 +273,7 @@ export function DraftSchedule({ soldiers, mySoldierName = '', email = '' }: {
 
   return (
     <SoldierCtx.Provider value={lookup}>
-      <NameClickCtx.Provider value={handleNameClick}>
-        <MyNameCtx.Provider value={mySoldierName}>
+      <MyNameCtx.Provider value={mySoldierName}>
         <RationaleClickCtx.Provider value={(name, time, meta) => setRationalePopup({ name, time, meta })}>
           <div className="space-y-5">
             {/* Controls */}
@@ -264,14 +297,19 @@ export function DraftSchedule({ soldiers, mySoldierName = '', email = '' }: {
                 ?? { day, status: 'draft', generatedAt: null, publishedAt: null, approvedBy: null, hasReport: false, validation: [], groups: [], meta: {}, dayAssignments: {} };
               return <DaySection key={day} day={d} onGenerate={generateOne}
                 onPublish={publishOne} onUnpublish={unpublishOne}
-                generating={generating} busyDay={busyDay} soldierLookup={lookup} />;
+                generating={generating} busyDay={busyDay} soldierLookup={lookup}
+                onNameClick={handleNameClick} />;
             })}
           </div>
-          {popup && <SoldierPopup info={popup} onClose={() => setPopup(null)} />}
+          {replacing && (
+            <ReplaceSoldierPopup
+              info={replacing} roster={roster}
+              busy={busyDay === replacing.day} error={replaceError}
+              onReplace={doReplace} onClose={() => setReplacing(null)} />
+          )}
           {rationalePopup && <RationalePopup info={rationalePopup} onClose={() => setRationalePopup(null)} />}
         </RationaleClickCtx.Provider>
-        </MyNameCtx.Provider>
-      </NameClickCtx.Provider>
+      </MyNameCtx.Provider>
     </SoldierCtx.Provider>
   );
 }

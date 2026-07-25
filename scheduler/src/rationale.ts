@@ -45,6 +45,7 @@ export type RationaleCode =
   | 'exit_packed'           // H9: shift packed outside the exit window
   | 'exit_sticky_magen'     // H9 מגן stickiness: continuity member keeps the daily row despite the exit
   | 'exit_night_toranut'    // H9 night exit: all windows within 22:00–06:00 — a night_exit_ok duty (תורנים) is also allowed
+  | 'manual_replace'        // officer swap from the צור שבצק tab (api/draft.ts PUT)
   // caveats (⚠)
   | 'caveat_rest_lt4'       // בדוחק: under the 4h hard rest floor
   | 'caveat_rest_lt8_long'  // בדוחק: under 8h rest before a long task
@@ -97,6 +98,7 @@ export const TEMPLATES: Record<RationaleCode, string> = {
   exit_packed: 'משמרת מרוכזת מחוץ לחלון היציאה ({from}–{to})',
   exit_sticky_magen: 'נשאר בצוות המגן למרות יציאה קצרה — היציאה באחריות מפקד המגן',
   exit_night_toranut: 'שובץ ל{position} ביום יציאה קצרה לילית (כל חלונות היציאה בין 22:00–06:00) — ההיעדרות באחריות מפקד ה{position}',
+  manual_replace: 'שובץ ידנית מהמסך במקום {from}',
   caveat_rest_lt4: 'פחות מ-4 שעות מנוחה לפני המשמרת',
   caveat_rest_lt8_long: 'פחות מ-8 שעות מנוחה לפני משימה ארוכה',
   caveat_short_rest: 'מנוחה קצרה: {restH} שעות בלבד',

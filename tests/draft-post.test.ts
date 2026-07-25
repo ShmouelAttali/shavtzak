@@ -71,8 +71,21 @@ test('GET /api/draft without valid from/to → 400', async () => {
 });
 
 test('unsupported method on /api/draft → 405', async () => {
-  const res = await call(draftHandler, { method: 'PUT', query: {}, body: {} });
+  const res = await call(draftHandler, { method: 'DELETE', query: {}, body: {} });
   assert.equal(res.statusCode, 405);
+});
+
+test('PUT /api/draft (replacement) without a valid body → 400', async () => {
+  for (const body of [
+    undefined, {}, { day: 'junk' },
+    { day: D },                                                  // no time
+    { day: D, time: '14:00-22:00' },                             // no soldiers
+    { day: D, time: '14:00-22:00', fromSoldierId: 1 },           // no target
+    { day: D, time: '14:00-22:00', fromSoldierId: 1, toSoldierId: 0 },
+  ]) {
+    const res = await call(draftHandler, { method: 'PUT', body, query: {} });
+    assert.equal(res.statusCode, 400, JSON.stringify(body));
+  }
 });
 
 test('GET /api/fairness without a valid date → 400; non-GET → 405', async () => {
