@@ -1,58 +1,80 @@
 import { FROM_TIMES, TO_TIMES } from '../constants/exitRequests';
-import { addDaysIso, todayIso, heDate } from './DateRangePicker';
+import { todayIso, heDate } from './DateRangePicker';
 
 // date helpers live in DateRangePicker — re-exported for the exit tabs
 export { todayIso, heDate };
 
-// Offsets in hours from the 14:00 schedule-day start.
-const START_OFFSET: Record<string, number> = {
-  '14:00': 0, '18:00': 4, '22:00': 8, '02:00': 12, '06:00': 16,
+// ── Literal datetime math (naive local, minutes since epoch) ────────────────
+// An exit window is a literal From date+time → To date+time; the schedule day
+// is only relevant to the ≥8h-per-cycle rule (cycles start at 14:00).
+const DAY = 24 * 60;
+const toMinutes = (date: string, time: string): number => {
+  const [y, m, d] = date.split('-').map(Number);
+  const [hh, mm] = time.split(':').map(Number);
+  return (Date.UTC(y, m - 1, d) / 86400000) * DAY + hh * 60 + mm;
 };
-export const fromOffset = (t: string) => START_OFFSET[t] ?? 0;
-// As a return time, 14:00 means the end of the schedule day (next day 14:00).
-export const toOffset = (t: string) => (t === '14:00' ? 24 : START_OFFSET[t] ?? 0);
-// Offsets ≥ 12 fall past midnight — on the next calendar day.
-export const timeLabel = (t: string, offset: number) => (offset >= 12 ? `${t} (למחרת)` : t);
+/** Start (14:00) of the schedule day containing minute `m` (mirrors the API). */
+const scheduleDayStart = (m: number): number => {
+  const anchor = 14 * 60;
+  return m - ((((m - anchor) % DAY) + DAY) % DAY);
+};
+/** True when the window leaves under 8h available in some 14:00→14:00 cycle. */
+function leavesUnderEightHours(s: number, e: number): boolean {
+  for (let ds = scheduleDayStart(s); ds < e; ds += DAY) {
+    if (Math.min(e, ds + DAY) - Math.max(s, ds) > 16 * 60) return true;
+  }
+  return false;
+}
 
 export interface WindowInfo {
-  validTos: string[];
-  effectiveTo: string;
   hoursOut: number;
-  hoursLeft: number;
+  /** the return is not strictly after the leave */
+  invalid: boolean;
+  /** leaves under 8h available in some cycle — must be a vacation day instead */
   tooLong: boolean;
 }
-export function windowInfo(from: string, to: string): WindowInfo {
-  const validTos: string[] = TO_TIMES.filter((t: string) => toOffset(t) > fromOffset(from));
-  const effectiveTo = validTos.includes(to) ? to : validTos[0];
-  const hoursOut = toOffset(effectiveTo) - fromOffset(from);
-  return { validTos, effectiveTo, hoursOut, hoursLeft: 24 - hoursOut, tooLong: hoursOut > 16 };
+export function windowInfo(fromDate: string, from: string, toDate: string, to: string): WindowInfo {
+  const s = toMinutes(fromDate, from);
+  const e = toMinutes(toDate, to);
+  const invalid = e <= s;
+  return {
+    hoursOut: invalid ? 0 : (e - s) / 60,
+    invalid,
+    tooLong: !invalid && leavesUnderEightHours(s, e),
+  };
 }
 
-/** 'YYYY-MM-DD HH:MM' start/end of the window (offsets past midnight land on
- *  the next calendar day — mirrors the API's boundary→timestamp mapping). */
-export function windowTimestamps(day: string, from: string, to: string): { start: string; end: string } {
-  const at = (t: string, offset: number) =>
-    `${offset >= 12 ? addDaysIso(day, 1) : day} ${t}`;
-  return { start: at(from, fromOffset(from)), end: at(to, toOffset(to)) };
+/** Literal 'YYYY-MM-DD HH:MM' start/end of the window. */
+export function windowTimestamps(fromDate: string, from: string, toDate: string, to: string): { start: string; end: string } {
+  return { start: `${fromDate} ${from}`, end: `${toDate} ${to}` };
 }
 
 const selectCls = 'rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm font-semibold text-slate-800 shadow-sm focus:border-blue-500 focus:outline-none';
 
-/** Schedule-day + shift-boundary from/to pickers with the hours summary —
- *  the ONE exit-window selector, shared by the soldier and admin tabs. */
-export function ExitWindowPicker({ day, from, to, onDay, onFrom, onTo }: {
-  day: string; from: string; to: string;
-  onDay: (d: string) => void; onFrom: (f: string, correctedTo: string) => void; onTo: (t: string) => void;
+/** From/To date + shift-boundary time pickers — the ONE exit-window selector,
+ *  shared by the soldier and admin tabs. Cross-date requests are expressed via
+ *  distinct From/To dates. */
+export function ExitWindowPicker({ fromDate, from, toDate, to, onFromDate, onFrom, onToDate, onTo }: {
+  fromDate: string; from: string; toDate: string; to: string;
+  onFromDate: (d: string) => void; onFrom: (f: string) => void;
+  onToDate: (d: string) => void; onTo: (t: string) => void;
 }) {
-  const info = windowInfo(from, to);
+  // Changing the From date keeps the To date in sync ONLY while they were equal
+  // (don't clobber a To the user set later); always clamp a To that fell behind.
+  const changeFromDate = (v: string) => {
+    if (!v) return;
+    const wasEqual = toDate === fromDate;
+    onFromDate(v);
+    if (wasEqual || toDate < v) onToDate(v);
+  };
   return (
     <>
       <div className="space-y-1">
-        <label className="block text-sm font-medium text-gray-600">יממת שיבוץ</label>
+        <label className="block text-sm font-medium text-gray-600">תאריך יציאה</label>
         <input
           type="date"
-          value={day}
-          onChange={(e) => e.target.value && onDay(e.target.value)}
+          value={fromDate}
+          onChange={(e) => changeFromDate(e.target.value)}
           className={selectCls}
         />
       </div>
@@ -60,27 +82,33 @@ export function ExitWindowPicker({ day, from, to, onDay, onFrom, onTo }: {
         <label className="block text-sm font-medium text-gray-600">יציאה מ־</label>
         <select
           value={from}
-          onChange={(e) => {
-            const v = e.target.value;
-            const stillValid = windowInfo(v, to);
-            onFrom(v, stillValid.effectiveTo);
-          }}
+          onChange={(e) => onFrom(e.target.value)}
           className={selectCls}
         >
           {FROM_TIMES.map((t: string) => (
-            <option key={t} value={t}>{timeLabel(t, fromOffset(t))}</option>
+            <option key={t} value={t}>{t}</option>
           ))}
         </select>
       </div>
       <div className="space-y-1">
+        <label className="block text-sm font-medium text-gray-600">תאריך חזרה</label>
+        <input
+          type="date"
+          value={toDate}
+          min={fromDate}
+          onChange={(e) => e.target.value && onToDate(e.target.value < fromDate ? fromDate : e.target.value)}
+          className={selectCls}
+        />
+      </div>
+      <div className="space-y-1">
         <label className="block text-sm font-medium text-gray-600">חזרה עד</label>
         <select
-          value={info.effectiveTo}
+          value={to}
           onChange={(e) => onTo(e.target.value)}
           className={selectCls}
         >
-          {info.validTos.map((t: string) => (
-            <option key={t} value={t}>{timeLabel(t, toOffset(t))}</option>
+          {TO_TIMES.map((t: string) => (
+            <option key={t} value={t}>{t}</option>
           ))}
         </select>
       </div>
@@ -88,18 +116,25 @@ export function ExitWindowPicker({ day, from, to, onDay, onFrom, onTo }: {
   );
 }
 
-/** The helper line + hours summary + too-long banner under the picker. */
-export function ExitWindowSummary({ from, to }: { from: string; to: string }) {
-  const { hoursOut, hoursLeft, tooLong } = windowInfo(from, to);
+/** The hours summary + validation banners under the picker. */
+export function ExitWindowSummary({ fromDate, from, toDate, to }: {
+  fromDate: string; from: string; toDate: string; to: string;
+}) {
+  const { hoursOut, invalid, tooLong } = windowInfo(fromDate, from, toDate, to);
   return (
     <>
-      <div className="text-xs text-gray-400">יממת שיבוץ מתחילה ב-14:00 ומסתיימת ב-14:00 למחרת</div>
-      <div className="text-sm text-gray-700">
-        סה"כ {hoursOut} שעות מחוץ לבסיס, נשארות {hoursLeft} שעות זמינות ביממה
-      </div>
+      {invalid ? (
+        <div className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">
+          זמן החזרה חייב להיות אחרי זמן היציאה
+        </div>
+      ) : (
+        <div className="text-sm text-gray-700">
+          סה"כ {hoursOut} שעות מחוץ לבסיס
+        </div>
+      )}
       {tooLong && (
         <div className="rounded-lg bg-yellow-50 px-3 py-2 text-sm text-yellow-700">
-          יציאה ארוכה מ-16 שעות — יש להגיש יום חופש
+          היציאה משאירה פחות מ-8 שעות זמינות ביממת שיבוץ — יש להגיש יום חופש
         </div>
       )}
     </>

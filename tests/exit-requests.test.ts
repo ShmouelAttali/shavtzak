@@ -53,16 +53,16 @@ after(async () => {
 
 test('POST happy path: correct row shape + tsrange in the DB', async () => {
   const res = await post({
-    name: 'חייל 20', day: D1, from: '18:00', to: '06:00',
+    name: 'חייל 20', fromDate: D1, from: '18:00', toDate: '2026-10-02', to: '06:00',
     email: 'x@y.z', note: 'אירוע משפחתי',
   });
   assert.equal(res.statusCode, 200, JSON.stringify(res.body));
   const r = (res.body as { request: ExitRequest }).request;
   assert.equal(typeof r.id, 'number');
   assert.equal(r.soldierName, 'חייל 20');
-  assert.equal(r.day, D1);
+  assert.equal(r.day, D1);                    // literal start date
   assert.equal(r.start, `${D1} 18:00`);
-  assert.equal(r.end, '2026-10-02 06:00');   // 06:00 falls on the next calendar day
+  assert.equal(r.end, '2026-10-02 06:00');   // literal cross-date return
   assert.equal(r.note, 'אירוע משפחתי');
   const db = await query<{ period: string; created_by: string; note: string }>(
     `select period::text, created_by, note from exit_requests where id = $1`, [r.id]);
@@ -71,25 +71,54 @@ test('POST happy path: correct row shape + tsrange in the DB', async () => {
   assert.equal(db[0]?.note, 'אירוע משפחתי');
 });
 
+test('POST 06:00 request stays on its literal calendar day (not +1)', async () => {
+  // choosing 06:00 on a date must store 06:00 on THAT date — no schedule-day roll
+  const res = await post({
+    name: 'חייל 40', fromDate: '2026-10-16', from: '06:00', toDate: '2026-10-16', to: '14:00',
+  });
+  assert.equal(res.statusCode, 200, JSON.stringify(res.body));
+  const r = (res.body as { request: ExitRequest }).request;
+  assert.equal(r.start, '2026-10-16 06:00');   // NOT 2026-10-17 06:00
+  assert.equal(r.end, '2026-10-16 14:00');
+  assert.equal(r.day, '2026-10-16');
+  const db = await query<{ period: string }>(
+    `select period::text from exit_requests where id = $1`, [r.id]);
+  assert.equal(db[0]?.period, '["2026-10-16 06:00:00","2026-10-16 14:00:00")');
+});
+
+test('POST cross-date request 22:00 → next-day 06:00 persists literally', async () => {
+  const res = await post({
+    name: 'חייל 41', fromDate: '2026-10-17', from: '22:00', toDate: '2026-10-18', to: '06:00',
+  });
+  assert.equal(res.statusCode, 200, JSON.stringify(res.body));
+  const r = (res.body as { request: ExitRequest }).request;
+  assert.equal(r.start, '2026-10-17 22:00');
+  assert.equal(r.end, '2026-10-18 06:00');
+  assert.equal(r.day, '2026-10-17');
+  const db = await query<{ period: string }>(
+    `select period::text from exit_requests where id = $1`, [r.id]);
+  assert.equal(db[0]?.period, '["2026-10-17 22:00:00","2026-10-18 06:00:00")');
+});
+
 test('POST resolves quote/whitespace variants of the name (normalizeName)', async () => {
-  const res = await post({ name: '  חייל   19 ', day: D1, from: '14:00', to: '18:00' });
+  const res = await post({ name: '  חייל   19 ', fromDate: D1, from: '14:00', toDate: D1, to: '18:00' });
   assert.equal(res.statusCode, 200, JSON.stringify(res.body));
   assert.equal((res.body as { request: ExitRequest }).request.soldierName, 'חייל 19');
 });
 
 test('POST unknown soldier → 404', async () => {
-  const res = await post({ name: 'לא קיים', day: D2, from: '14:00', to: '18:00' });
+  const res = await post({ name: 'לא קיים', fromDate: D2, from: '14:00', toDate: D2, to: '18:00' });
   assert.equal(res.statusCode, 404);
   assert.equal((res.body as any).error, 'החייל לא נמצא במצבת המשובצים');
 });
 
-test('POST invalid boundary time / bad day → 400', async () => {
+test('POST invalid boundary time / bad date → 400', async () => {
   for (const body of [
-    { name: 'חייל 20', day: D2, from: '15:00', to: '18:00' },  // from not a boundary
-    { name: 'חייל 20', day: D2, from: '14:00', to: '13:00' },  // to not a boundary
-    { name: 'חייל 20', day: D2, from: '06:00', to: '18:00' },  // wait — 18:00(4) <= 06:00(16): inverted, still 400
-    { name: 'חייל 20', day: 'junk', from: '14:00', to: '18:00' },
-    { name: 'חייל 20', from: '14:00', to: '18:00' },           // day missing
+    { name: 'חייל 20', fromDate: D2, from: '15:00', toDate: D2, to: '18:00' },  // from not a boundary
+    { name: 'חייל 20', fromDate: D2, from: '14:00', toDate: D2, to: '13:00' },  // to not a boundary
+    { name: 'חייל 20', fromDate: 'junk', from: '14:00', toDate: D2, to: '18:00' },
+    { name: 'חייל 20', fromDate: D2, from: '14:00', to: '18:00' },              // toDate missing
+    { name: 'חייל 20', from: '14:00', toDate: D2, to: '18:00' },                // fromDate missing
   ]) {
     const res = await post(body);
     assert.equal(res.statusCode, 400, JSON.stringify(body));
@@ -97,16 +126,17 @@ test('POST invalid boundary time / bad day → 400', async () => {
   }
 });
 
-test('POST from/to inverted (to at or before from) → 400', async () => {
-  for (const [from, to] of [['22:00', '18:00'], ['02:00', '02:00'], ['06:00', '22:00']]) {
-    const res = await post({ name: 'חייל 20', day: D2, from, to });
+test('POST same-day return at/before leave → 400 (must use a later To date)', async () => {
+  // no silent next-day roll: a same-date to ≤ from is rejected
+  for (const [from, to] of [['22:00', '18:00'], ['02:00', '02:00'], ['18:00', '06:00']]) {
+    const res = await post({ name: 'חייל 20', fromDate: D2, from, toDate: D2, to });
     assert.equal(res.statusCode, 400, `${from}→${to}`);
-    assert.equal((res.body as any).error, 'טווח שעות לא תקין — יש לבחור שעות גבול משמרת');
+    assert.equal((res.body as any).error, 'זמן החזרה חייב להיות אחרי זמן היציאה');
   }
 });
 
 test('POST full 24h cycle (14:00→14:00) → 400 vacation message', async () => {
-  const res = await post({ name: 'חייל 20', day: D2, from: '14:00', to: '14:00' });
+  const res = await post({ name: 'חייל 20', fromDate: D2, from: '14:00', toDate: '2026-10-03', to: '14:00' });
   assert.equal(res.statusCode, 400);
   assert.equal((res.body as any).error,
     'היציאה משאירה פחות מ-8 שעות זמינות ביממת השיבוץ — ליציאה ארוכה כזו יש להגיש יום חופש');
@@ -121,7 +151,7 @@ test('POST for a day that already has shift_assignments → 409', async () => {
     `insert into shift_assignments (day, position_id, soldier_id, period)
      values ($1, $2, $3, tsrange($1::date + time '14:00', $1::date + time '18:00'))`,
     [D3, pos[0].id, sid]);
-  const res = await post({ name: 'חייל 20', day: D3, from: '18:00', to: '22:00' });
+  const res = await post({ name: 'חייל 20', fromDate: D3, from: '18:00', toDate: D3, to: '22:00' });
   assert.equal(res.statusCode, 409);
   assert.equal((res.body as any).error,
     `השבצ"ק ליום ${D3} כבר נוצר — לא ניתן להגיש בקשת יציאה. יש לפנות לאחראי השבצ"ק.`);
@@ -130,7 +160,7 @@ test('POST for a day that already has shift_assignments → 409', async () => {
 test('POST for a day whose schedule_days.status is not draft → 409', async () => {
   await query(`insert into schedule_days (day, status) values ($1, 'generated')
                on conflict (day) do update set status = 'generated'`, [D4]);
-  const res = await post({ name: 'חייל 20', day: D4, from: '14:00', to: '18:00' });
+  const res = await post({ name: 'חייל 20', fromDate: D4, from: '14:00', toDate: D4, to: '18:00' });
   assert.equal(res.statusCode, 409);
   assert.match((res.body as any).error, new RegExp(D4));
 });
@@ -140,26 +170,26 @@ test('POST overlap with recorded unavailability → 400', async () => {
   await query(
     `insert into unavailability (soldier_id, period, kind)
      values ($1, tsrange($2::date + time '00:00', $2::date + interval '1 day'), 'חופש')`,
-    [sid, '2026-10-06']);   // covers the tail of schedule day D5 (02:00/06:00 next morning)
-  const res = await post({ name: 'חייל 25', day: D5, from: '02:00', to: '06:00' });
+    [sid, '2026-10-06']);
+  const res = await post({ name: 'חייל 25', fromDate: '2026-10-06', from: '02:00', toDate: '2026-10-06', to: '06:00' });
   assert.equal(res.statusCode, 400);
   assert.equal((res.body as any).error, 'קיימת כבר היעדרות רשומה בתאריכים אלה');
 });
 
 test('POST duplicate overlapping request → 409; other soldier same window OK', async () => {
-  const first = await post({ name: 'חייל 22', day: D5, from: '14:00', to: '22:00' });
+  const first = await post({ name: 'חייל 22', fromDate: D5, from: '14:00', toDate: D5, to: '22:00' });
   assert.equal(first.statusCode, 200, JSON.stringify(first.body));
-  const dup = await post({ name: 'חייל 22', day: D5, from: '18:00', to: '02:00' });
+  const dup = await post({ name: 'חייל 22', fromDate: D5, from: '18:00', toDate: '2026-10-06', to: '02:00' });
   assert.equal(dup.statusCode, 409);
   assert.equal((dup.body as any).error, 'כבר קיימת בקשת יציאה חופפת');
-  const other = await post({ name: 'חייל 21', day: D5, from: '18:00', to: '02:00' });
+  const other = await post({ name: 'חייל 21', fromDate: D5, from: '18:00', toDate: '2026-10-06', to: '02:00' });
   assert.equal(other.statusCode, 200, JSON.stringify(other.body));
 });
 
 // ── DELETE ───────────────────────────────────────────────────────────────────
 
 test('DELETE ownership, generated-day block, then happy path', async () => {
-  const created = await post({ name: 'חייל 23', day: D6, from: '22:00', to: '06:00' });
+  const created = await post({ name: 'חייל 23', fromDate: D6, from: '22:00', toDate: D7, to: '06:00' });
   assert.equal(created.statusCode, 200, JSON.stringify(created.body));
   const id = (created.body as { request: ExitRequest }).request.id;
 
@@ -189,9 +219,8 @@ test('DELETE ownership, generated-day block, then happy path', async () => {
 
 // ── GET ──────────────────────────────────────────────────────────────────────
 
-test('GET filters by schedule-day range (02:00 start belongs to the prior day)', async () => {
-  // starts 02:00 on the calendar day AFTER D7 — still schedule day D7
-  const late = await post({ name: 'חייל 26', day: D7, from: '02:00', to: '06:00' });
+test('GET filters by literal start date', async () => {
+  const late = await post({ name: 'חייל 26', fromDate: D7, from: '02:00', toDate: D7, to: '06:00' });
   assert.equal(late.statusCode, 200, JSON.stringify(late.body));
 
   let res = await call({ method: 'GET', query: { from: D7, to: D7 } });
@@ -201,7 +230,7 @@ test('GET filters by schedule-day range (02:00 start belongs to the prior day)',
   assert.equal(body.requests.length, 1);
   assert.equal(body.requests[0].soldierName, 'חייל 26');
   assert.equal(body.requests[0].day, D7);
-  assert.equal(body.requests[0].start, '2026-10-08 02:00');
+  assert.equal(body.requests[0].start, `${D7} 02:00`);
 
   // D1 has two requests (happy path + normalized-name test), ordered by period
   res = await call({ method: 'GET', query: { from: D1, to: D1 } });
@@ -246,7 +275,7 @@ test('admin POST free-form times: correct row + generated:false', async () => {
   assert.equal(body.warning, undefined);
   const r = body.request;
   assert.equal(r.soldierName, 'חייל 30');
-  assert.equal(r.day, '2026-10-09');            // 09:30 belongs to the prior 14:00 cycle
+  assert.equal(r.day, '2026-10-10');            // literal calendar start date
   assert.equal(r.start, '2026-10-10 09:30');
   assert.equal(r.end, '2026-10-10 13:15');
   assert.equal(r.note, 'אישור מיוחד');
