@@ -1,8 +1,9 @@
 import { memo, useMemo, useState } from 'react';
-import type { HamalDay, HamalRosterEntry, HamalShift, HamalWindow } from '../../api/hamal';
+import type { HamalDay, HamalRosterEntry, HamalWindow } from '../../api/hamal';
 import { useHamal, type ShiftPayload } from '../hooks/useHamal';
 import { DateRangePicker, todayIso, addDaysIso, heDate } from './DateRangePicker';
 import { SoldierSelect } from './SoldierSelect';
+import { normalizeTiling, moveBoundary, addShift, removeShift, type HamalTileShift } from '../lib/hamalTiling';
 
 function daysBetween(from: string, to: string): string[] {
   const out: string[] = [];
@@ -16,65 +17,71 @@ const TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
 // / 02:00-10:00), NOT the 14:00 schedule-day anchor. A shift starting before
 // 10:00 belongs to the next calendar day (the tail of the חמל day).
 const HAMAL_DAY_START = '10:00';
-const isNextDay = (start: string) => start < HAMAL_DAY_START;
+const isNextDay = (start: string) => start < HAMAL_DAY_START && start !== HAMAL_DAY_START;
 
-/** One shift = one table row: hours (+ edit/remove) and a single-select combobox.
- *  Legacy shifts with >1 picks show the first pick as selected; changing it
- *  rewrites the whole shift to that single soldier. */
-function ShiftRow({ shift, index, roster, onSelect, onEditTimes, onRemove, disabled }: {
-  shift: HamalShift;
+/** LTR-isolated clock range so times always read start→end inside the RTL card
+ *  (otherwise "10:00–18:00" would visually flip to "18:00–10:00"). */
+function TimeRange({ start, end }: { start: string; end: string }) {
+  return <span dir="ltr" className="font-bold text-slate-700 tabular-nums">{start}–{end}</span>;
+}
+
+/** One shift = one table row. The shift's START is read-only — the first shift is
+ *  fixed at 10:00 and every other start mirrors the previous shift's end. The END
+ *  is the primary boundary control: editing it moves the shared boundary with the
+ *  next shift (except the LAST shift, whose 10:00 end is fixed). A single-select
+ *  combobox picks the one soldier. */
+function ShiftRow({ shift, index, isLast, roster, onSelectSoldier, onChangeEnd, onRemove, disabled }: {
+  shift: HamalTileShift;
   index: number;
+  isLast: boolean;
   roster: HamalRosterEntry[];
-  onSelect: (index: number, soldierId: number | null) => void;
-  onEditTimes: (index: number, start: string, end: string) => void;
+  onSelectSoldier: (index: number, soldierId: number | null) => void;
+  onChangeEnd: (index: number, end: string) => void;
   onRemove: (index: number) => void;
   disabled: boolean;
 }) {
-  const [editing, setEditing] = useState(false);
-  const [start, setStart] = useState(shift.start);
-  const [end, setEnd] = useState(shift.end);
+  const [editingEnd, setEditingEnd] = useState(false);
+  const [endDraft, setEndDraft] = useState(shift.end);
 
-  const selectedId = shift.picks[0]?.soldierId ?? null;
-
-  const saveTimes = () => {
-    if (!TIME_RE.test(start) || !TIME_RE.test(end)) return;
-    setEditing(false);
-    onEditTimes(index, start, end);
+  const saveEnd = () => {
+    if (!TIME_RE.test(endDraft)) return;
+    setEditingEnd(false);
+    onChangeEnd(index, endDraft);
   };
 
   return (
     <tr className="border-t border-gray-100">
       <td className="py-2 pl-2 align-top whitespace-nowrap">
-        {editing ? (
-          <div className="flex items-center gap-1">
-            <input type="time" value={start} onChange={(e) => setStart(e.target.value)}
-              className="rounded border border-gray-300 px-1.5 py-0.5 text-sm" />
-            <span className="text-gray-400">–</span>
-            <input type="time" value={end} onChange={(e) => setEnd(e.target.value)}
-              className="rounded border border-gray-300 px-1.5 py-0.5 text-sm" />
-            <button onClick={saveTimes} disabled={disabled}
-              className="rounded bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white px-2 py-0.5 text-xs">שמור</button>
-            <button onClick={() => { setEditing(false); setStart(shift.start); setEnd(shift.end); }}
-              className="rounded bg-gray-200 hover:bg-gray-300 px-2 py-0.5 text-xs">ביטול</button>
-          </div>
-        ) : (
-          <div className="flex items-center gap-1">
-            <span className="font-bold text-slate-700">{shift.start}–{shift.end}</span>
-            {isNextDay(shift.start) && <span className="text-xs font-normal text-gray-400">(למחרת)</span>}
-            <button onClick={() => { setStart(shift.start); setEnd(shift.end); setEditing(true); }}
-              disabled={disabled} title="ערוך שעות"
-              className="rounded px-1.5 py-0.5 text-sm text-gray-500 hover:bg-gray-200 disabled:opacity-50">✎</button>
-            <button onClick={() => onRemove(index)} disabled={disabled} title="הסר משמרת"
-              className="rounded px-1.5 py-0.5 text-sm text-red-500 hover:bg-red-50 disabled:opacity-50">✕</button>
-          </div>
-        )}
+        <div className="flex items-center gap-1">
+          <TimeRange start={shift.start} end={shift.end} />
+          {isNextDay(shift.start) && <span className="text-xs font-normal text-gray-400">(למחרת)</span>}
+          {editingEnd ? (
+            <span className="flex items-center gap-1">
+              <span className="text-xs text-gray-400">סיום:</span>
+              <input type="time" value={endDraft} onChange={(e) => setEndDraft(e.target.value)}
+                className="rounded border border-gray-300 px-1.5 py-0.5 text-sm" />
+              <button onClick={saveEnd} disabled={disabled}
+                className="rounded bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white px-2 py-0.5 text-xs">שמור</button>
+              <button onClick={() => { setEditingEnd(false); setEndDraft(shift.end); }}
+                className="rounded bg-gray-200 hover:bg-gray-300 px-2 py-0.5 text-xs">ביטול</button>
+            </span>
+          ) : (
+            !isLast && (
+              <button onClick={() => { setEndDraft(shift.end); setEditingEnd(true); }}
+                disabled={disabled} title="שנה שעת סיום (מזיז את הגבול עם המשמרת הבאה)"
+                className="rounded px-1.5 py-0.5 text-sm text-gray-500 hover:bg-gray-200 disabled:opacity-50">✎</button>
+            )
+          )}
+          <button onClick={() => onRemove(index)} disabled={disabled} title="הסר משמרת"
+            className="rounded px-1.5 py-0.5 text-sm text-red-500 hover:bg-red-50 disabled:opacity-50">✕</button>
+        </div>
       </td>
       <td className="py-2 align-top w-full">
         <SoldierSelect
           roster={roster}
-          selectedId={selectedId}
-          onSelect={(id) => onSelect(index, id)}
-          onClear={() => onSelect(index, null)}
+          selectedId={shift.soldierId}
+          onSelect={(id) => onSelectSoldier(index, id)}
+          onClear={() => onSelectSoldier(index, null)}
           disabled={disabled}
         />
       </td>
@@ -82,8 +89,10 @@ function ShiftRow({ shift, index, roster, onSelect, onEditTimes, onRemove, disab
   );
 }
 
-/** One day's per-shift חמל crew. Memoized so editing one day doesn't
- *  re-render every other day's combobox lists. */
+/** One day's per-shift חמל crew. The shifts always tile the 10:00→10:00 day
+ *  exactly (contiguous, no gaps/overlaps); all edits run through the pure
+ *  hamalTiling helper and are persisted as the full contiguous window list.
+ *  Memoized so editing one day doesn't re-render every other day's lists. */
 const DayCard = memo(function DayCard({ day, roster, dayData, defaults, onSave, saving, disabled }: {
   day: string;
   roster: HamalRosterEntry[];
@@ -95,40 +104,43 @@ const DayCard = memo(function DayCard({ day, roster, dayData, defaults, onSave, 
 }) {
   const [addStart, setAddStart] = useState('10:00');
   const [addEnd, setAddEnd] = useState('18:00');
-  const shifts = dayData.shifts;
-  const totalPicks = shifts.reduce((n, s) => n + (s.picks.length ? 1 : 0), 0);
 
-  // build the whole-day payload from current server data (one soldier per shift)
-  const payload = (): ShiftPayload[] =>
-    shifts.map((s) => ({ start: s.start, end: s.end, soldierIds: s.picks.map((p) => p.soldierId) }));
+  // Derive the per-shift tiling from the server data (one soldier per shift) and
+  // normalize it to a contiguous partition — so a legacy/non-contiguous stored
+  // day is shown (and edited) as a clean tiling.
+  const tiling = useMemo<HamalTileShift[]>(
+    () => normalizeTiling(dayData.shifts.map((s) => ({ start: s.start, end: s.end, soldierId: s.picks[0]?.soldierId ?? null }))),
+    [dayData.shifts],
+  );
+  const totalPicks = tiling.filter((s) => s.soldierId != null).length;
 
-  const selectSoldier = (index: number, soldierId: number | null) => {
-    const p = payload();
-    p[index] = { ...p[index], soldierIds: soldierId == null ? [] : [soldierId] };
-    onSave(day, p);
+  // send a contiguous tiling to the server as the whole-day window list
+  const commit = (tiles: HamalTileShift[]) =>
+    onSave(day, tiles.map((t) => ({ start: t.start, end: t.end, soldierIds: t.soldierId == null ? [] : [t.soldierId] })));
+
+  const selectSoldier = (index: number, soldierId: number | null) =>
+    commit(tiling.map((s, i) => (i === index ? { ...s, soldierId } : s)));
+  const changeEnd = (index: number, end: string) => commit(moveBoundary(tiling, index, end));
+  const remove = (index: number) => {
+    if (tiling.length <= 1) return; // never leave a day with no shifts
+    if (tiling[index].soldierId != null && !window.confirm('להסיר משמרת עם חייל משובץ?')) return;
+    commit(removeShift(tiling, index));
   };
-  const editTimes = (index: number, start: string, end: string) => {
-    const p = payload();
-    p[index] = { ...p[index], start, end };
-    onSave(day, p);
-  };
-  const removeShift = (index: number) => {
-    if (shifts[index].picks.length && !window.confirm('להסיר משמרת עם חייל משובץ?')) return;
-    const p = payload().filter((_, i) => i !== index);
-    if (p.length === 0) return; // never leave a day with no shifts
-    onSave(day, p);
-  };
-  const addShift = () => {
+  const add = () => {
     if (!TIME_RE.test(addStart) || !TIME_RE.test(addEnd)) return;
-    onSave(day, [...payload(), { start: addStart, end: addEnd, soldierIds: [] }]);
+    commit(addShift(tiling, addStart, addEnd));
   };
-  // revert to the 3 default windows, carrying over picks from any window whose
-  // times still match a default (the common "added one extra shift" case keeps
-  // its default-shift crews; the extra shift's picks drop away).
+  // revert to the 3 default windows, carrying over the soldier from any window
+  // whose times still match a default (the extra shifts' picks drop away).
   const resetToDefaults = () => {
-    const byKey = new Map(shifts.map((s) => [`${s.start}-${s.end}`, s.picks.map((p) => p.soldierId)]));
-    onSave(day, defaults.map((w) => ({ start: w.start, end: w.end, soldierIds: byKey.get(`${w.start}-${w.end}`) ?? [] })));
+    const byKey = new Map(tiling.map((s) => [`${s.start}-${s.end}`, s.soldierId]));
+    onSave(day, defaults.map((w) => {
+      const sid = byKey.get(`${w.start}-${w.end}`) ?? null;
+      return { start: w.start, end: w.end, soldierIds: sid == null ? [] : [sid] };
+    }));
   };
+
+  const addNextDay = addEnd <= addStart; // "עד" earlier than "מ" ⇒ the window ends next day
 
   return (
     <section className={`rounded-xl border border-gray-200 bg-white p-4 space-y-3 transition-opacity ${saving ? 'opacity-60' : ''}`}>
@@ -153,21 +165,23 @@ const DayCard = memo(function DayCard({ day, roster, dayData, defaults, onSave, 
           </tr>
         </thead>
         <tbody>
-          {shifts.map((sh, i) => (
-            <ShiftRow key={`${sh.start}-${sh.end}-${i}`} shift={sh} index={i} roster={roster}
-              onSelect={selectSoldier} onEditTimes={editTimes} onRemove={removeShift} disabled={disabled} />
+          {tiling.map((sh, i) => (
+            <ShiftRow key={`${sh.start}-${sh.end}-${i}`} shift={sh} index={i} isLast={i === tiling.length - 1}
+              roster={roster} onSelectSoldier={selectSoldier} onChangeEnd={changeEnd} onRemove={remove} disabled={disabled} />
           ))}
         </tbody>
       </table>
 
-      <div className="flex items-center gap-2 flex-wrap border-t border-gray-100 pt-3">
+      <div className="flex items-center gap-2 flex-wrap border-t border-gray-100 pt-3" dir="rtl">
         <span className="text-sm text-gray-500">הוסף משמרת:</span>
+        <span className="text-sm text-gray-500">מ</span>
         <input type="time" value={addStart} onChange={(e) => setAddStart(e.target.value)}
           className="rounded border border-gray-300 px-1.5 py-0.5 text-sm" />
-        <span className="text-gray-400">–</span>
+        <span className="text-sm text-gray-500">עד</span>
         <input type="time" value={addEnd} onChange={(e) => setAddEnd(e.target.value)}
           className="rounded border border-gray-300 px-1.5 py-0.5 text-sm" />
-        <button onClick={addShift} disabled={disabled}
+        {addNextDay && <span className="text-xs text-gray-400">(למחרת)</span>}
+        <button onClick={add} disabled={disabled}
           className="rounded-lg bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white px-3 py-1 text-sm font-medium">
           הוסף
         </button>
@@ -206,12 +220,15 @@ export function HamalSchedule() {
     <div className="space-y-5">
       <div className="rounded-xl bg-blue-50 border border-blue-100 px-4 py-3 text-sm text-blue-800" dir="rtl">
         שיבוץ החמל ידני לחלוטין ולפי משמרות — המחולל אינו משבץ אותו אוטומטית.
-        יום החמל מתחיל ב־10:00 ומחולק לשלוש משמרות ברירת מחדל בנות 8 שעות
-        (10:00–18:00, 18:00–02:00, 02:00–10:00), והמשמרות מתחילות ריקות; ניתן
-        להוסיף, לערוך שעות או להסיר משמרות לכל יום בנפרד. לכל משמרת בוחרים חייל
-        אחד מתוך רשימה נפתחת עם חיפוש. הבחירה נשמרת מיד ומשתקפת בשבצ״ק; חייל
-        שנבחר לחמל שמור ליום שלם ולא ישובץ בעמדה אחרת. לכל משמרת ביום חייבת
-        להיות שעת התחלה שונה.
+        יום החמל מתחיל ב־10:00 ומכסה 24 שעות עד 10:00 למחרת, והמשמרות מְרַצְּפוֹת
+        אותו ברצף מלא — ללא פערים או חפיפות (ברירת מחדל: 10:00–18:00, 18:00–02:00,
+        02:00–10:00). שינוי שעת הסיום של משמרת מזיז את הגבול המשותף עם המשמרת
+        הבאה (מקצר משמרת אחת ומאריך את שכנתה); הוספת משמרת מרצפת את היממה מחדש,
+        והסרת משמרת ממזגת אותה אל שכנתה — כך היממה תמיד מכוסה במלואה. שעת ההתחלה
+        של כל משמרת נגזרת מסיום קודמתה ואינה ניתנת לעריכה, וכך גם ה־10:00 של
+        תחילת וסיום היממה. לכל משמרת בוחרים חייל אחד מתוך רשימה נפתחת עם חיפוש;
+        הבחירה נשמרת מיד ומשתקפת בשבצ״ק, וחייל שנבחר לחמל שמור ליום שלם ולא ישובץ
+        בעמדה אחרת.
       </div>
 
       <DateRangePicker from={from} to={to} setFrom={setFrom} setTo={setTo} multiDay={multiDay} setMultiDay={setMultiDay}>
