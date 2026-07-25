@@ -169,17 +169,23 @@ create table slot_templates (
   valid_to             date                              -- null = still active
 );
 
--- Two template versions of the same (position, sub, start) must never be
--- active on the same day — day_slots would emit the slot twice. day_slots
+-- Two PERMANENT template versions of the same (position, sub, start) must never
+-- be active on the same day — day_slots would emit the slot twice. day_slots
 -- treats valid_to as INCLUSIVE, so validity ranges are closed '[]'
 -- (null valid_to = open-ended). Requires btree_gist (created above).
+-- DAY-SCOPED rows (valid_from = valid_to — the "add/replace a shift on this one
+-- day" mechanism used by the חמל + מבנה יומי tabs) are EXEMPT via the WHERE
+-- predicate, so a day template may share (position, sub, start_time) with the
+-- permanent one it replaces (a duration-only change on a single day). MUST be
+-- `is distinct from`, not `<>` — `<>` would drop valid_to-null rows out of the
+-- constraint entirely.
 alter table slot_templates add constraint slot_templates_no_overlap
   exclude using gist (
     position_id with =,
     (coalesce(sub_position_id, -1)) with =,
     start_time with =,
     daterange(valid_from, valid_to, '[]') with &&
-  );
+  ) where (valid_from is distinct from valid_to);
 
 -- Per-position seat-count changes (seats PER SLOT). Managed by hand —
 -- resolved by the day_slots view. Scoping:
@@ -189,20 +195,29 @@ alter table slot_templates add constraint slot_templates_no_overlap
 --               null = open-ended (the original "onward" behavior).
 --   start_time  optional template start_time match — null applies to every
 --               slot of the position, set targets one shift (e.g. 18:00 סיור).
+--   slot_template_id  optional target of ONE specific template row (FK, day-
+--               scoped delete-cascaded). null = the classic position/start_time
+--               match; set pins exactly one slot — the מבנה יומי tab uses it to
+--               resize/cancel a single shift even when a cancelled permanent
+--               template and its day-scoped replacement share (position,
+--               start_time). The template carries the sub, so sub-level
+--               targeting comes free.
 --   seats = 0   cancels the matched slot(s): day_slots omits them entirely,
 --               so the generator redistributes the crew and the validator
 --               raises no coverage gap.
--- Most specific wins: a start_time match beats a position-wide row, then the
--- latest valid_from, then the newest row.
+-- Most specific wins: a slot_template_id match beats a start_time match, which
+-- beats a position-wide row, then the latest valid_from, then the newest row.
 create table seat_overrides (
   id          smallint generated always as identity primary key,
   position_id smallint not null references positions,
   valid_from  date not null,
   valid_to    timestamp,
   start_time  time,
+  slot_template_id smallint references slot_templates(id) on delete cascade,
   seats       smallint not null check (seats >= 0),
   note        text,
-  unique nulls not distinct (position_id, valid_from, start_time)
+  constraint seat_overrides_uniq
+    unique nulls not distinct (position_id, valid_from, start_time, slot_template_id)
 );
 
 -- T4 chained duties as data.
@@ -360,7 +375,10 @@ select * from (
                      and o.valid_from <= sd.day
                      and (o.valid_to is null or p.start_ts < o.valid_to)
                      and (o.start_time is null or o.start_time = st.start_time)
-                   order by (o.start_time is not null) desc, o.valid_from desc, o.id desc
+                     and (o.slot_template_id is null or o.slot_template_id = st.id)
+                   order by (o.slot_template_id is not null) desc,
+                            (o.start_time is not null) desc,
+                            o.valid_from desc, o.id desc
                    limit 1),
                   st.seats) as seats,
          st.commander_first_seat
