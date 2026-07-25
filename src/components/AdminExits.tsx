@@ -28,8 +28,9 @@ function TimeRange({ r }: { r: ExitRequest }) {
 interface FormState {
   id: number | null; // null = add mode, otherwise the edited request id
   name: string;
-  day: string;      // schedule day (the 14:00→14:00 cycle)
-  from: string;     // shift-boundary times, same options as the soldier tab
+  fromDate: string;  // literal calendar date the exit starts on
+  toDate: string;    // literal calendar date the exit returns on
+  from: string;      // shift-boundary times, same options as the soldier tab
   to: string;
   note: string;
   /** original 'HH:MM → HH:MM' when the edited row's times are not on shift
@@ -38,7 +39,8 @@ interface FormState {
 }
 
 const emptyForm = (): FormState => ({
-  id: null, name: '', day: todayIso(), from: FROM_TIMES[1], to: TO_TIMES[1], note: '',
+  id: null, name: '', fromDate: todayIso(), toDate: todayIso(),
+  from: FROM_TIMES[1], to: TO_TIMES[1], note: '',
   origTimes: null,
 });
 
@@ -71,7 +73,8 @@ export function AdminExits({ soldiers, email }: { soldiers: Soldier[]; email: st
     const onBoundary = (FROM_TIMES as readonly string[]).includes(startHM)
       && (TO_TIMES as readonly string[]).includes(endHM);
     setForm({
-      id: r.id, name: r.soldierName, day: r.day, from, to,
+      id: r.id, name: r.soldierName,
+      fromDate: dateOf(r.start), toDate: dateOf(r.end), from, to,
       note: r.note ?? '',
       origTimes: onBoundary ? null : `${startHM} → ${endHM}`,
     });
@@ -80,12 +83,15 @@ export function AdminExits({ soldiers, email }: { soldiers: Soldier[]; email: st
   };
 
   const submit = async () => {
-    const { start, end } = windowTimestamps(form.day, form.from, windowInfo(form.from, form.to).effectiveTo);
+    const { start, end } = windowTimestamps(form.fromDate, form.from, form.toDate, form.to);
     if (!editing && !form.name) { setFormError('יש לבחור חייל'); return; }
     if (!editing && !names.includes(form.name)) {
       setFormError('החייל לא נמצא במצבת — יש לבחור שם מהרשימה'); return;
     }
-    if (!form.day) { setFormError('יש לבחור יממת שיבוץ'); return; }
+    if (!form.fromDate || !form.toDate) { setFormError('יש לבחור תאריכי יציאה וחזרה'); return; }
+    if (windowInfo(form.fromDate, form.from, form.toDate, form.to).invalid) {
+      setFormError('זמן החזרה חייב להיות אחרי זמן היציאה'); return;
+    }
     setFormError(null);
     setFlash(null);
     setSaving(true);
@@ -133,9 +139,10 @@ export function AdminExits({ soldiers, email }: { soldiers: Soldier[]; email: st
             </datalist>
           </div>
           <ExitWindowPicker
-            day={form.day} from={form.from} to={form.to}
-            onDay={(d) => set({ day: d })}
-            onFrom={(f, correctedTo) => set({ from: f, to: correctedTo })}
+            fromDate={form.fromDate} from={form.from} toDate={form.toDate} to={form.to}
+            onFromDate={(d) => set({ fromDate: d })}
+            onFrom={(f) => set({ from: f })}
+            onToDate={(d) => set({ toDate: d })}
             onTo={(t) => set({ to: t })}
           />
           <div className="flex-1 min-w-[12rem] space-y-1">
@@ -149,7 +156,7 @@ export function AdminExits({ soldiers, email }: { soldiers: Soldier[]; email: st
             />
           </div>
         </div>
-        <ExitWindowSummary from={form.from} to={form.to} />
+        <ExitWindowSummary fromDate={form.fromDate} from={form.from} toDate={form.toDate} to={form.to} />
         {form.origTimes && (
           <div className="rounded-lg bg-yellow-50 px-3 py-2 text-sm text-yellow-700">
             השעות המקוריות של הבקשה ({form.origTimes}) אינן על גבולות משמרת — שמירה תעדכן אותן לשעות שנבחרו
@@ -161,7 +168,7 @@ export function AdminExits({ soldiers, email }: { soldiers: Soldier[]; email: st
         <div className="flex items-center gap-3">
           <button
             onClick={() => void submit()}
-            disabled={saving || windowInfo(form.from, form.to).tooLong}
+            disabled={saving || windowInfo(form.fromDate, form.from, form.toDate, form.to).tooLong || windowInfo(form.fromDate, form.from, form.toDate, form.to).invalid}
             className="rounded-lg bg-blue-600 hover:bg-blue-500 disabled:opacity-50 px-4 py-2 text-sm font-semibold text-white"
           >
             {saving ? '⏳ שומר...' : editing ? 'שמור שינויים' : 'הוסף בקשה'}
