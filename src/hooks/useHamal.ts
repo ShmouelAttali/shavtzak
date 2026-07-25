@@ -10,7 +10,7 @@ export function useHamal(from: string, to: string) {
   const [data, setData] = useState<HamalResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [saving, setSaving] = useState<string | null>(null); // day in progress
+  const [savingDays, setSavingDays] = useState<Set<string>>(new Set()); // days in progress (concurrent)
 
   const load = useCallback(async () => {
     if (!from || !to) return;
@@ -33,7 +33,7 @@ export function useHamal(from: string, to: string) {
   /** Persist a day's full shift list (structure + picks, replaces it) and
    *  refresh from the server's echo. */
   const save = useCallback(async (day: string, shifts: ShiftPayload[]) => {
-    setSaving(day);
+    setSavingDays((prev) => new Set(prev).add(day));
     setError(null);
     try {
       const res = await fetch('/api/hamal', {
@@ -54,11 +54,17 @@ export function useHamal(from: string, to: string) {
       });
     } catch (e) {
       setError(e instanceof Error ? e.message : 'שגיאה בשמירת חמל');
-      await load(); // resync on failure
+      await load(); // resync on failure (whole window, but only this day was in flight)
     } finally {
-      setSaving(null);
+      setSavingDays((prev) => {
+        const next = new Set(prev);
+        next.delete(day);
+        return next;
+      });
     }
   }, [load]);
 
-  return { data, loading, error, saving, reload: load, save };
+  const isSaving = useCallback((day: string) => savingDays.has(day), [savingDays]);
+
+  return { data, loading, error, savingDays, isSaving, reload: load, save };
 }
