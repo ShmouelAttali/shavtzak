@@ -153,10 +153,15 @@ async function getHamal(from: string, to: string): Promise<HamalResponse> {
                 case when start_time < time '14:00' then 1 else 0 end,
                 start_time`,
       [pid, from, to]),
-    // whole roster (all soldiers, NOT just schedulable/present ones)
+    // roster for the picker = ONLY soldiers whose role is a חמל staff role
+    // (the חמל position's config.staff_all_roles) — config-driven, not a
+    // hardcoded 'חמל' literal. Still NOT filtered by presence/schedulable
+    // (the חמל crew is small; pick from all of them regardless of status).
     pool.query(
-      `select id, full_name, coalesce(role,'') role, coalesce(platoon,'') platoon, is_schedulable
-       from soldiers order by full_name`),
+      `select s.id, s.full_name, coalesce(s.role,'') role, coalesce(s.platoon,'') platoon, s.is_schedulable
+       from soldiers s
+       join positions p on p.id = $1 and (p.config -> 'staff_all_roles') ? s.role
+       order by s.full_name`, [pid]),
   ]);
 
   // structure rows by day (day-scoped slot_templates)

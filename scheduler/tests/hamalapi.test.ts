@@ -66,16 +66,24 @@ async function bucketCount(day: string): Promise<number> {
   return r.length;
 }
 
-before(async () => { await freshSchema(); await seedSoldiers(); });
+before(async () => {
+  await freshSchema(); await seedSoldiers();
+  // role-חמל soldiers — the חמל picker shows ONLY these (the 60 seeded soldiers
+  // are מ"כ/סמל/מ"מ/לוחם, none חמל, so the picker roster must come from here).
+  await query(`insert into soldiers (personal_number, full_name, platoon, role, rifle_level)
+               values ('H001','חמל אחד','1','חמל',3), ('H002','חמל שתיים','2','חמל',3)`);
+});
 after(async () => { await getPool().end().catch(() => {}); await closePool(); });
 
-test('GET materializes the 3 default shifts for a virgin day + full roster', async () => {
+test('GET materializes the 3 default shifts for a virgin day + role-חמל roster only', async () => {
   const D = '2026-08-05';
   const out = await call({ method: 'GET', query: { from: D, to: D } });
   assert.equal(out.status, 200);
   const body = out.body as HamalResponse;
   assert.deepEqual(body.defaults, DEFAULTS);
-  assert.equal(body.roster.length, 60);
+  // picker roster = ONLY role-חמל soldiers (the 2 seeded), NOT the 60-strong roster
+  assert.equal(body.roster.length, 2);
+  assert.ok(body.roster.every((r) => r.role === 'חמל'));
   assert.equal(body.days.length, 1);
   const day = body.days[0];
   assert.equal(day.custom, false);
