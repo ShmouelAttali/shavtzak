@@ -12,8 +12,11 @@ function daysBetween(from: string, to: string): string[] {
 
 const TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
 
-/** Shift windows starting before 14:00 belong to the next calendar day. */
-const isNextDay = (start: string) => start < '14:00';
+// The חמל runs on its OWN 10:00→10:00 cycle (defaults 10:00-18:00 / 18:00-02:00
+// / 02:00-10:00), NOT the 14:00 schedule-day anchor. A shift starting before
+// 10:00 belongs to the next calendar day (the tail of the חמל day).
+const HAMAL_DAY_START = '10:00';
+const isNextDay = (start: string) => start < HAMAL_DAY_START;
 
 /** One shift = one table row: hours (+ edit/remove) and a single-select combobox.
  *  Legacy shifts with >1 picks show the first pick as selected; changing it
@@ -90,8 +93,8 @@ const DayCard = memo(function DayCard({ day, roster, dayData, defaults, onSave, 
   saving: boolean;
   disabled: boolean;
 }) {
-  const [addStart, setAddStart] = useState('14:00');
-  const [addEnd, setAddEnd] = useState('22:00');
+  const [addStart, setAddStart] = useState('10:00');
+  const [addEnd, setAddEnd] = useState('18:00');
   const shifts = dayData.shifts;
   const totalPicks = shifts.reduce((n, s) => n + (s.picks.length ? 1 : 0), 0);
 
@@ -203,11 +206,12 @@ export function HamalSchedule() {
     <div className="space-y-5">
       <div className="rounded-xl bg-blue-50 border border-blue-100 px-4 py-3 text-sm text-blue-800" dir="rtl">
         שיבוץ החמל ידני לחלוטין ולפי משמרות — המחולל אינו משבץ אותו אוטומטית.
-        כל יום מחולק לשלוש משמרות ברירת מחדל (14:00–22:00, 22:00–06:00,
-        06:00–14:00) והמשמרות מתחילות ריקות; ניתן להוסיף, לערוך שעות או להסיר
-        משמרות לכל יום בנפרד. לכל משמרת בוחרים חייל אחד מתוך רשימה נפתחת עם חיפוש.
-        הבחירה נשמרת מיד ומשתקפת בשבצ״ק; חייל שנבחר לחמל שמור ליום שלם ולא ישובץ
-        בעמדה אחרת. לכל משמרת ביום חייבת להיות שעת התחלה שונה.
+        יום החמל מתחיל ב־10:00 ומחולק לשלוש משמרות ברירת מחדל בנות 8 שעות
+        (10:00–18:00, 18:00–02:00, 02:00–10:00), והמשמרות מתחילות ריקות; ניתן
+        להוסיף, לערוך שעות או להסיר משמרות לכל יום בנפרד. לכל משמרת בוחרים חייל
+        אחד מתוך רשימה נפתחת עם חיפוש. הבחירה נשמרת מיד ומשתקפת בשבצ״ק; חייל
+        שנבחר לחמל שמור ליום שלם ולא ישובץ בעמדה אחרת. לכל משמרת ביום חייבת
+        להיות שעת התחלה שונה.
       </div>
 
       <DateRangePicker from={from} to={to} setFrom={setFrom} setTo={setTo} multiDay={multiDay} setMultiDay={setMultiDay}>
@@ -219,7 +223,7 @@ export function HamalSchedule() {
       {days.map((day) => (
         <DayCard key={day} day={day} roster={roster}
           dayData={dayByDate.get(day) ?? fallback(day)} defaults={defaults}
-          onSave={save} saving={isSaving(day)} disabled={isSaving(day)} />
+          onSave={save} saving={isSaving(day)} disabled={false} />
       ))}
     </div>
   );

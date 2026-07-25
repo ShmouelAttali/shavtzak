@@ -48,18 +48,25 @@ const TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
 /** Hardcoded fallback default windows (owner D1). Overridable per-deployment by
  *  the config row `hamal_default_shifts` (a JSON array of {start,end}). */
 const FALLBACK_DEFAULTS: HamalWindow[] = [
-  { start: '14:00', end: '22:00' },
-  { start: '22:00', end: '06:00' },
-  { start: '06:00', end: '14:00' },
+  { start: '10:00', end: '18:00' },
+  { start: '18:00', end: '02:00' },
+  { start: '02:00', end: '10:00' },
 ];
+
+// The חמל runs on its own 10:00→10:00 cycle (NOT the 14:00 schedule day): a shift
+// whose clock start is before 10:00 belongs to the next calendar day (the tail of
+// the חמל day). Used to anchor concrete shift windows + order them.
+const HAMAL_DAY_START = '10:00';
 
 /** Resolve the חמל position id. Detected via the staff_all_roles config marker
  *  (the role that names this crew) rather than a hardcoded position name/id. */
+let cachedHamalPid: number | null = null;
 async function hamalPositionId(): Promise<number> {
+  if (cachedHamalPid != null) return cachedHamalPid;   // position id is immutable per deployment
   const { rows } = await getPool().query(
     `select id from positions where config->'staff_all_roles' ? 'חמל' limit 1`);
   if (!rows.length) throw new Error('חמל position not found');
-  return rows[0].id as number;
+  return (cachedHamalPid = rows[0].id as number);
 }
 
 /** The default windows, from config `hamal_default_shifts` if valid, else the
@@ -100,12 +107,12 @@ function windowMinutes(start: string, end: string): number {
   return e > s ? e - s : e + 1440 - s;
 }
 
-/** Concrete [start,end) window of a shift on schedule day D, as naive-local
- *  'YYYY-MM-DDTHH:MM' timestamp strings. Matches the day_slots lateral:
- *  start rolls to D+1 when its clock time is before 14:00; end rolls a further
- *  day when end_time <= start_time (crosses midnight). */
+/** Concrete [start,end) window of a חמל shift on חמל day D, as naive-local
+ *  'YYYY-MM-DDTHH:MM' timestamp strings. חמל anchors on HAMAL_DAY_START (10:00),
+ *  NOT the 14:00 schedule day: start rolls to D+1 when its clock time is before
+ *  10:00; end rolls a further day when end_time <= start_time (crosses midnight). */
 function shiftWindow(day: string, start: string, end: string): { startTs: string; endTs: string } {
-  const startOff = start < '14:00' ? 1 : 0;
+  const startOff = start < HAMAL_DAY_START ? 1 : 0;
   const endOff = startOff + (end <= start ? 1 : 0);
   return {
     startTs: `${addDaysIso(day, startOff)}T${start}`,
@@ -150,7 +157,7 @@ async function getHamal(from: string, to: string): Promise<HamalResponse> {
        where position_id = $1 and valid_from = valid_to
          and valid_from between $2 and $3
        order by valid_from,
-                case when start_time < time '14:00' then 1 else 0 end,
+                case when start_time < time '10:00' then 1 else 0 end,
                 start_time`,
       [pid, from, to]),
     // roster for the picker = ONLY soldiers whose role is a חמל staff role
@@ -325,8 +332,24 @@ async function setHamal(day: string, shiftsIn: ShiftInput[]): Promise<HamalWrite
   } finally {
     client.release();
   }
-  const { days } = await getHamal(day, day);
-  return days[0];
+  // Build the echo from what we just wrote instead of re-running the full GET
+  // (which would re-query picks + structure + the whole roster — ~4 extra
+  // round-trips over the WAN pooler). After a full replace the day's state IS
+  // exactly `windows` + `perShift`; only soldier NAMES need one lookup.
+  const allIds = [...new Set(perShift.flat())];
+  const nameById = new Map<number, string>();
+  if (allIds.length) {
+    const { rows } = await pool.query(`select id, full_name from soldiers where id = any($1)`, [allIds]);
+    for (const r of rows) nameById.set(Number(r.id), r.full_name as string);
+  }
+  return {
+    day,
+    custom: !sameWindows(windows, defaults),
+    shifts: windows.map((w, i) => ({
+      start: w.start, end: w.end,
+      picks: perShift[i].map((sid, seat) => ({ soldierId: sid, name: nameById.get(sid) ?? '', seatIndex: seat + 1 })),
+    })),
+  };
 }
 
 /** Virgin reset: clear picks AND the day-scoped structure for the day. */

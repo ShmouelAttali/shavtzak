@@ -1,16 +1,49 @@
 import { useCallback, useEffect, useState } from 'react';
-import type { HamalResponse, HamalWriteResponse } from '../../api/hamal';
+import type { HamalDay, HamalResponse, HamalWriteResponse, HamalWindow } from '../../api/hamal';
 
 /** One shift's picks as sent to the server (whole-day atomic write). */
 export interface ShiftPayload { start: string; end: string; soldierIds: number[] }
 
-/** חמל per-shift picks for a date range + the full DB roster for the picker,
- *  with an immediate (no-draft) save. Reflected in the main שבצק on next load. */
+/** Order-insensitive equality of two window lists (mirror api/hamal.ts). */
+function sameWindows(a: HamalWindow[], b: HamalWindow[]): boolean {
+  if (a.length !== b.length) return false;
+  const key = (w: HamalWindow) => `${w.start}-${w.end}`;
+  const sa = a.map(key).sort();
+  const sb = b.map(key).sort();
+  return sa.every((k, i) => k === sb[i]);
+}
+
+/** Build the HamalDay the server WILL persist, from the payload + local roster —
+ *  so the UI reflects a change instantly instead of waiting for the round-trip. */
+function optimisticDay(day: string, shifts: ShiftPayload[], roster: HamalResponse['roster'], defaults: HamalWindow[]): HamalDay {
+  const nameOf = (id: number) => roster.find((r) => r.id === id)?.name ?? '';
+  const windows = shifts.map((s) => ({ start: s.start, end: s.end }));
+  return {
+    day,
+    custom: !sameWindows(windows, defaults),
+    shifts: shifts.map((s) => ({
+      start: s.start,
+      end: s.end,
+      picks: s.soldierIds.map((id, i) => ({ soldierId: id, name: nameOf(id), seatIndex: i + 1 })),
+    })),
+  };
+}
+
+const replaceDay = (data: HamalResponse, day: HamalDay): HamalResponse => ({
+  ...data,
+  days: data.days.filter((d) => d.day !== day.day).concat(day).sort((a, b) => a.day.localeCompare(b.day)),
+});
+
+/** חמל per-shift picks for a date range + the role-חמל roster for the picker.
+ *  Saves are OPTIMISTIC: the local state updates immediately and the PUT runs in
+ *  the background, so a pick feels instant regardless of server latency. Only the
+ *  day being saved shows a "saving" flag — it is NOT disabled, so the page never
+ *  blocks and other days stay fully interactive. */
 export function useHamal(from: string, to: string) {
   const [data, setData] = useState<HamalResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [savingDays, setSavingDays] = useState<Set<string>>(new Set()); // days in progress (concurrent)
+  const [savingDays, setSavingDays] = useState<Set<string>>(new Set()); // days with a write in flight
 
   const load = useCallback(async () => {
     if (!from || !to) return;
@@ -30,11 +63,14 @@ export function useHamal(from: string, to: string) {
 
   useEffect(() => { void load(); }, [load]);
 
-  /** Persist a day's full shift list (structure + picks, replaces it) and
-   *  refresh from the server's echo. */
+  /** Persist a day's full shift list. Applies the change locally FIRST (instant),
+   *  then PUTs in the background; reconciles from the server echo on success and
+   *  resyncs from the server on failure. */
   const save = useCallback(async (day: string, shifts: ShiftPayload[]) => {
-    setSavingDays((prev) => new Set(prev).add(day));
     setError(null);
+    // 1. optimistic: reflect the change immediately from local roster/defaults
+    setData((prev) => (prev ? replaceDay(prev, optimisticDay(day, shifts, prev.roster, prev.defaults)) : prev));
+    setSavingDays((prev) => new Set(prev).add(day));
     try {
       const res = await fetch('/api/hamal', {
         method: 'PUT',
@@ -43,24 +79,13 @@ export function useHamal(from: string, to: string) {
       });
       const body = await res.json();
       if (!res.ok) throw new Error(body.error ?? 'שגיאה');
-      // optimistic local update from the server's echo (a materialized HamalDay)
-      setData((prev) => {
-        if (!prev) return prev;
-        const w = body as HamalWriteResponse;
-        const days = prev.days.filter((d) => d.day !== day);
-        days.push(w);
-        days.sort((a, b) => a.day.localeCompare(b.day));
-        return { ...prev, days };
-      });
+      // 2. reconcile with the authoritative server echo (materialized HamalDay)
+      setData((prev) => (prev ? replaceDay(prev, body as HamalWriteResponse) : prev));
     } catch (e) {
       setError(e instanceof Error ? e.message : 'שגיאה בשמירת חמל');
-      await load(); // resync on failure (whole window, but only this day was in flight)
+      await load(); // roll back to server truth
     } finally {
-      setSavingDays((prev) => {
-        const next = new Set(prev);
-        next.delete(day);
-        return next;
-      });
+      setSavingDays((prev) => { const next = new Set(prev); next.delete(day); return next; });
     }
   }, [load]);
 

@@ -13,9 +13,9 @@ import { getPool } from '../../api/_db.js';
 import type { HamalResponse, HamalWriteResponse } from '../../api/hamal.js';
 
 const DEFAULTS = [
-  { start: '14:00', end: '22:00' },
-  { start: '22:00', end: '06:00' },
-  { start: '06:00', end: '14:00' },
+  { start: '10:00', end: '18:00' },
+  { start: '18:00', end: '02:00' },
+  { start: '02:00', end: '10:00' },
 ];
 
 function mockRes() {
@@ -96,9 +96,9 @@ test('PUT with picks in two default shifts: right periods, per-shift seats, buck
   const D = '2026-08-06';
   const a = await soldierId('חייל 40'), b = await soldierId('חייל 41'), c = await soldierId('חייל 42');
   const out = await call({ method: 'PUT', query: {}, body: { day: D, shifts: [
-    { start: '14:00', end: '22:00', soldierIds: [a, b] },
-    { start: '22:00', end: '06:00', soldierIds: [c] },
-    { start: '06:00', end: '14:00', soldierIds: [] },
+    { start: '10:00', end: '18:00', soldierIds: [a, b] },
+    { start: '18:00', end: '02:00', soldierIds: [c] },
+    { start: '02:00', end: '10:00', soldierIds: [] },
   ] } });
   assert.equal(out.status, 200);
   const echo = out.body as HamalWriteResponse;
@@ -108,19 +108,19 @@ test('PUT with picks in two default shifts: right periods, per-shift seats, buck
   const rows = await shiftRows(D);
   assert.equal(rows.length, 3);
   assert.ok(rows.every((r) => r.source === 'manual' && r.locked && !r.blocks_overlap));
-  // 14:00-22:00 same day; 22:00-06:00 crosses midnight
-  const s1 = rows.filter((r) => r.p_start === `${D} 14:00`);
-  assert.deepEqual(s1.map((r) => r.p_end), [`${D} 22:00`, `${D} 22:00`]);
+  // 10:00-18:00 same day; 18:00-02:00 crosses midnight (10:00 חמל anchor)
+  const s1 = rows.filter((r) => r.p_start === `${D} 10:00`);
+  assert.deepEqual(s1.map((r) => r.p_end), [`${D} 18:00`, `${D} 18:00`]);
   assert.deepEqual(s1.map((r) => r.seat_index).sort(), [1, 2]); // per-shift seats
-  const s2 = rows.find((r) => r.p_start === `${D} 22:00`)!;
-  assert.equal(s2.p_end, '2026-08-07 06:00');
+  const s2 = rows.find((r) => r.p_start === `${D} 18:00`)!;
+  assert.equal(s2.p_end, '2026-08-07 02:00');
   assert.equal(s2.seat_index, 1); // restarts per shift
 
   assert.equal(await bucketCount(D), 3);          // one locked bucket per soldier
   // a day with picks stores day-scoped slot_templates for every shown window
   // (so the picks have their slots), even when the windows equal the defaults
   assert.deepEqual((await structRows(D)).map((r) => [r.start_t, r.end_t]),
-    [['06:00', '14:00'], ['14:00', '22:00'], ['22:00', '06:00']]);
+    [['02:00', '10:00'], ['10:00', '18:00'], ['18:00', '02:00']]);
 });
 
 test('a virgin default day (no picks) writes NO slot_templates', async () => {
@@ -133,22 +133,22 @@ test('a virgin default day (no picks) writes NO slot_templates', async () => {
   assert.deepEqual(await shiftRows(D), []);
 });
 
-test('period computation: 22-06 crosses midnight, 06-14 and 09-14 land on D+1', async () => {
+test('period computation: 18-02 crosses midnight, 02-10 and 05-08 land on D+1 (10:00 anchor)', async () => {
   const D = '2026-08-08', next = '2026-08-09';
   const a = await soldierId('חייל 40'), b = await soldierId('חייל 41'),
         c = await soldierId('חייל 42'), d = await soldierId('חייל 43');
   await call({ method: 'PUT', query: {}, body: { day: D, shifts: [
-    { start: '14:00', end: '22:00', soldierIds: [a] },
-    { start: '22:00', end: '06:00', soldierIds: [b] },
-    { start: '06:00', end: '14:00', soldierIds: [c] },
-    { start: '09:00', end: '14:00', soldierIds: [d] },
+    { start: '10:00', end: '18:00', soldierIds: [a] },
+    { start: '18:00', end: '02:00', soldierIds: [b] },
+    { start: '02:00', end: '10:00', soldierIds: [c] },
+    { start: '05:00', end: '08:00', soldierIds: [d] },
   ] } });
   const rows = await shiftRows(D);
   const byStart = new Map(rows.map((r) => [r.p_start, r.p_end]));
-  assert.equal(byStart.get(`${D} 14:00`), `${D} 22:00`);
-  assert.equal(byStart.get(`${D} 22:00`), `${next} 06:00`);
-  assert.equal(byStart.get(`${next} 06:00`), `${next} 14:00`);
-  assert.equal(byStart.get(`${next} 09:00`), `${next} 14:00`);
+  assert.equal(byStart.get(`${D} 10:00`), `${D} 18:00`);
+  assert.equal(byStart.get(`${D} 18:00`), `${next} 02:00`);
+  assert.equal(byStart.get(`${next} 02:00`), `${next} 10:00`);
+  assert.equal(byStart.get(`${next} 05:00`), `${next} 08:00`);
   // this day IS custom (4 windows != 3 defaults)
   assert.equal((await structRows(D)).length, 4);
 });
@@ -159,13 +159,13 @@ test('adding an empty 09:00-14:00 persists override rows and GET returns the emp
   await call({ method: 'PUT', query: {}, body: { day: D, shifts: [
     ...DEFAULTS.map((w) => ({ ...w, soldierIds: [] as number[] })),
     { start: '09:00', end: '14:00', soldierIds: [a] as number[] },
-    { start: '10:00', end: '12:00', soldierIds: [] as number[] },   // empty custom window
+    { start: '12:00', end: '15:00', soldierIds: [] as number[] },   // empty custom window
   ] } });
   assert.deepEqual((await structRows(D)).map((r) => r.start_t).sort(),
-    ['06:00', '09:00', '10:00', '14:00', '22:00']);
+    ['02:00', '09:00', '10:00', '12:00', '18:00']);
   const day = ((await call({ method: 'GET', query: { from: D, to: D } })).body as HamalResponse).days[0];
   assert.equal(day.custom, true);
-  const empty = day.shifts.find((s) => s.start === '10:00');
+  const empty = day.shifts.find((s) => s.start === '12:00');
   assert.ok(empty && empty.picks.length === 0, 'empty custom shift survives reload');
 });
 

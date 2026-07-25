@@ -37,7 +37,7 @@ delete from slot_templates
 -- 4. Seed the default חמל shift windows (idempotent).
 insert into config (key, value) values
   ('hamal_default_shifts',
-   '[{"start":"14:00","end":"22:00"},{"start":"22:00","end":"06:00"},{"start":"06:00","end":"14:00"}]')
+   '[{"start":"10:00","end":"18:00"},{"start":"18:00","end":"02:00"},{"start":"02:00","end":"10:00"}]')
 on conflict (key) do nothing;
 
 commit;

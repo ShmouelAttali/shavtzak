@@ -165,4 +165,4 @@ insert into config (key, value) values
   -- default חמל shift windows shown by the חמל tab for a virgin day (the tab
   -- writes day-scoped slot_templates only when a day differs from these or has
   -- picks). api/hamal.ts has the same hardcoded fallback.
-  ('hamal_default_shifts',  '[{"start":"14:00","end":"22:00"},{"start":"22:00","end":"06:00"},{"start":"06:00","end":"14:00"}]');
+  ('hamal_default_shifts',  '[{"start":"10:00","end":"18:00"},{"start":"18:00","end":"02:00"},{"start":"02:00","end":"10:00"}]');
