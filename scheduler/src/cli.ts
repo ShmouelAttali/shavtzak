@@ -1,7 +1,7 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { generate, persist } from './generate.js';
+import { generate, persist, loadStatic } from './generate.js';
 import { validateAndStore, Finding } from './validate.js';
 import { pool, query } from './db.js';
 import { fmtHM, addDays } from './time.js';
@@ -16,8 +16,9 @@ function usage(): never {
   tsx src/cli.ts validate <YYYY-MM-DD> [<to YYYY-MM-DD>]
 
   generate writes an HTML report per day (+ a weekly index for ranges) to
-  scheduler/reports/ by default; --no-report skips it, --report-dir overrides
-  the output directory. Reports are written on --dry-run too.`);
+  scheduler/reports/ by default; --no-report skips it (both the files AND the
+  copy stored on schedule_days.report_html), --report-dir overrides the output
+  directory. Reports are written on --dry-run too.`);
   process.exit(1);
 }
 
@@ -116,14 +117,22 @@ async function main() {
   if (!noReport) mkdirSync(reportDir, { recursive: true });
   const daySummaries: WeekDaySummary[] = [];
 
+  // The roster / positions / closed lists / chain rules are the same for every
+  // day of the range — load them ONCE and hand the bundle to each generate().
+  // Local to this run on purpose: never a module-level cache (load.ts).
+  const staticCtx = await loadStatic();
+
   for (let day = from; day <= to; day = addDays(day, 1)) {
-    const res = await generate(day);
+    const res = await generate(day, staticCtx);
     console.log(`\n═══ שבצ"ק ${day} (14:00 → 14:00) ═══`);
 
     // Level-1 summary
     const byPos = new Map<number, number>();
     for (const pid of res.level1.values()) byPos.set(pid, (byPos.get(pid) ?? 0) + 1);
-    const posNames = new Map((await query(`select id, name from positions`)).map((p) => [p.id, p.name]));
+    // Position names come from the result's report bag — generate() always
+    // fills it (generate.ts buildReportMeta), so this console summary costs no
+    // extra round trip per day of the range.
+    const posNames = new Map((res.report?.positions ?? []).map((p) => [p.id, p.name]));
     console.log('שיבוץ יומי (Level 1):');
     for (const [pid, n] of [...byPos].sort((a, b) => b[1] - a[1])) {
       console.log(`  ${posNames.get(pid)}: ${n}`);
@@ -163,7 +172,7 @@ async function main() {
 
     let findings: Finding[] = [];
     if (!dry) {
-      findings = await persist(res);
+      findings = await persist(res, { storeReport: !noReport });
       console.log(`נשמר (status=generated).`);
       printFindings(findings);
     } else {

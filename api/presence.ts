@@ -56,8 +56,13 @@ const err = (message: string, status: number) =>
 
 // ── read ─────────────────────────────────────────────────────────────────────
 
-/** The kinds the unavailability CHECK constraint still accepts. */
+/** The kinds the unavailability CHECK constraint still accepts.
+ *  Cached for the lifetime of the process: the constraint is DDL, so it can
+ *  only change with a deploy/migration, and this ran on every GET *and* every
+ *  PUT (validate() calls it too) purely to read a catalog table. */
+let cachedKinds: string[] | null = null;
 async function constraintKinds(): Promise<string[]> {
+  if (cachedKinds) return cachedKinds;
   const pool = getPool();
   const { rows } = await pool.query(
     `select pg_get_constraintdef(oid) def from pg_constraint
@@ -66,8 +71,12 @@ async function constraintKinds(): Promise<string[]> {
   const out = new Set<string>();
   for (const r of rows as any[])
     for (const m of String(r.def).matchAll(/'([^']*)'/g)) if (m[1]) out.add(m[1]);
-  return [...out];
+  return (cachedKinds = [...out]);
 }
+
+/** Tests rebuild the schema between suites, so the cached DDL must be
+ *  droppable. Not used by the handler. */
+export function _resetKindsCache(): void { cachedKinds = null; }
 
 /** Every non-archived soldier's rows overlapping [from 00:00, to+1 00:00). */
 async function rowsInWindow(from: string, to: string): Promise<Map<number, UnavailRow[]>> {
@@ -182,11 +191,15 @@ async function savePresence(input: PresenceInput) {
     if (plan.deleteIds.length)
       await client.query(`delete from unavailability where id = any($1::bigint[])`,
         [plan.deleteIds]);
-    for (const ins of plan.insert)
+    // one multi-row insert instead of a round trip per emitted run (soldier_id
+    // is constant, so the three parallel arrays carry the whole plan)
+    if (plan.insert.length)
       await client.query(
         `insert into unavailability (soldier_id, period, kind)
-         values ($1, tsrange($2::timestamp, $3::timestamp), $4)`,
-        [input.soldier_id, ins.start, ins.end, ins.kind]);
+         select $1, tsrange(s, e), k
+           from unnest($2::timestamp[], $3::timestamp[], $4::text[]) as t(s, e, k)`,
+        [input.soldier_id, plan.insert.map((i) => i.start),
+         plan.insert.map((i) => i.end), plan.insert.map((i) => i.kind)]);
 
     await client.query('commit');
   } catch (e) {

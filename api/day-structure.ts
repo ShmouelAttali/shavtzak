@@ -1,5 +1,6 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { getPool, DATE_RE } from './_db.js';
+import { ensureScheduleDay, positionScope, POSITION_SCOPE, type Queryable } from './_sql.js';
 
 // ── מבנה יומי tab API (per-DAY shift-structure editor, admin-only) ────────────
 // Overrides the SHIFT STRUCTURE of ONE specific schedule day: add/remove/rename
@@ -77,8 +78,27 @@ function windowMinutes(start: string, end: string): number {
  *  EXCLUSIVE valid_to that scopes a seat_override to exactly the schedule day. */
 const dayEndTs = (day: string) => `${addDaysIso(day, 1)} 14:00`;
 
-/** The scope filter used everywhere: never touches חמל / מפלג / rest. */
-const SCOPE = `is_scheduled and mission_class <> 'rest' and not (config ? 'staff_all_roles')`;
+/** The scope filter used everywhere: never touches חמל / מפלג / rest.
+ *  Shared with api/draft.ts's coverage markers (api/_sql.ts). */
+const SCOPE = POSITION_SCOPE;
+
+/** Wipe this tab's prior writes for the day — the single-day template-targeted
+ *  seat_overrides and the day-scoped slot_templates — both restricted to
+ *  in-scope positions so a stray row of חמל / מפלג / rest is never collateral.
+ *  Shared by the PUT (before re-diffing) and the DELETE (reset to default). */
+async function wipeDayWrites(client: Queryable, day: string, dayEnd: string): Promise<void> {
+  await client.query(
+    `delete from seat_overrides o
+      where o.valid_from = $1 and o.valid_to = $2::timestamp
+        and o.slot_template_id is not null
+        and o.position_id in (select id from positions where ${SCOPE})`,
+    [day, dayEnd]);
+  await client.query(
+    `delete from slot_templates
+      where valid_from = $1 and valid_to = $1
+        and position_id in (select id from positions where ${SCOPE})`,
+    [day]);
+}
 
 /** Diff key of a concrete slot within the day. */
 const slotKey = (positionId: number, subId: number | null, startTime: string, dur: number) =>
@@ -88,7 +108,7 @@ const slotKey = (positionId: number, subId: number | null, startTime: string, du
 
 async function getDayStructure(day: string): Promise<DsResponse> {
   const pool = getPool();
-  await pool.query(`insert into schedule_days (day) values ($1) on conflict do nothing`, [day]);
+  await ensureScheduleDay(pool, day);
   const dayEnd = dayEndTs(day);
   const { rows } = await pool.query(
     `select ds.slot_template_id as template_id,
@@ -96,7 +116,6 @@ async function getDayStructure(day: string): Promise<DsResponse> {
             st.sub_position_id as sub_id, sp.name as sub_name,
             to_char(lower(ds.period), 'HH24:MI') as start_t,
             to_char(upper(ds.period), 'HH24:MI') as end_t,
-            to_char(lower(ds.period), 'YYYY-MM-DD"T"HH24:MI') as lo,
             ds.seats,
             (st.valid_from = st.valid_to) as is_day_scoped,
             exists(select 1 from seat_overrides o
@@ -106,7 +125,7 @@ async function getDayStructure(day: string): Promise<DsResponse> {
      join slot_templates st on st.id = ds.slot_template_id
      join positions p on p.id = ds.position_id
      left join sub_positions sp on sp.id = ds.sub_position_id
-     where ds.day = $1 and p.${SCOPE}
+     where ds.day = $1 and ${positionScope('p')}
      order by p.id, sp.id nulls first, lower(ds.period)`,
     [day, dayEnd]);
 
@@ -163,24 +182,18 @@ async function setDayStructure(day: string, groupsIn: unknown): Promise<DsRespon
   const client = await pool.connect();
   try {
     await client.query('begin');
-    await client.query(`insert into schedule_days (day) values ($1) on conflict do nothing`, [day]);
-
-    // in-scope position ids (for the day-scoped-template wipe)
-    const inScope = (await client.query<{ id: number }>(`select id from positions where ${SCOPE}`))
-      .rows.map((r) => Number(r.id));
+    await ensureScheduleDay(client, day);
 
     // 1. WIPE this tab's prior writes for the day
-    await client.query(
-      `delete from seat_overrides where valid_from = $1 and valid_to = $2::timestamp and slot_template_id is not null`,
-      [day, dayEnd]);
-    await client.query(
-      `delete from slot_templates where valid_from = $1 and valid_to = $1 and position_id = any($2)`,
-      [day, inScope]);
+    await wipeDayWrites(client, day, dayEnd);
 
     // 2. Create new positions / subs (id = max+1 inline; single-admin tool).
     //    Resolve each payload group/position to a concrete position/sub id.
-    let nextPid = Number((await client.query<{ n: number }>(`select coalesce(max(id),0)+1 n from positions`)).rows[0].n);
-    let nextSid = Number((await client.query<{ n: number }>(`select coalesce(max(id),0)+1 n from sub_positions`)).rows[0].n);
+    const nextIds = (await client.query<{ pid: number; sid: number }>(
+      `select (select coalesce(max(id),0)+1 from positions) pid,
+              (select coalesce(max(id),0)+1 from sub_positions) sid`)).rows[0];
+    let nextPid = Number(nextIds.pid);
+    let nextSid = Number(nextIds.sid);
 
     for (const g of groups) {
       if (g.positionId == null) {
@@ -240,7 +253,7 @@ async function setDayStructure(day: string, groupsIn: unknown): Promise<DsRespon
                         limit 1), st.seats) as seats
        from slot_templates st
        join positions p on p.id = st.position_id
-       where p.${SCOPE}
+       where ${positionScope('p')}
          and (st.valid_to is null or st.valid_from <> st.valid_to)   -- permanent only
          and st.valid_from <= $1 and (st.valid_to is null or $1 <= st.valid_to)`,
       [day])).rows;
@@ -289,7 +302,9 @@ async function setDayStructure(day: string, groupsIn: unknown): Promise<DsRespon
     }
     await client.query('commit');
   } catch (e) {
-    await client.query('rollback');
+    // .catch: a rollback on a dead connection throws and would mask the real
+    // error (the one that got us into this catch block).
+    await client.query('rollback').catch(() => {});
     throw e;
   } finally {
     client.release();
@@ -305,18 +320,11 @@ async function resetDayStructure(day: string): Promise<DsResponse> {
   const client = await pool.connect();
   try {
     await client.query('begin');
-    await client.query(`insert into schedule_days (day) values ($1) on conflict do nothing`, [day]);
-    const inScope = (await client.query<{ id: number }>(`select id from positions where ${SCOPE}`))
-      .rows.map((r) => Number(r.id));
-    await client.query(
-      `delete from seat_overrides where valid_from = $1 and valid_to = $2::timestamp and slot_template_id is not null`,
-      [day, dayEnd]);
-    await client.query(
-      `delete from slot_templates where valid_from = $1 and valid_to = $1 and position_id = any($2)`,
-      [day, inScope]);
+    await ensureScheduleDay(client, day);
+    await wipeDayWrites(client, day, dayEnd);
     await client.query('commit');
   } catch (e) {
-    await client.query('rollback');
+    await client.query('rollback').catch(() => {});
     throw e;
   } finally {
     client.release();

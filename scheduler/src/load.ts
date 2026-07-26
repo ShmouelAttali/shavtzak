@@ -1,4 +1,4 @@
-import { multiQuery } from './db.js';
+import { multiQuery, litDate } from './db.js';
 import { Context, Soldier, Position, Slot, Fairness, ChainRule } from './model.js';
 import { parseRange, dayStart, dayEnd, addDays, overlaps, nightRange, weekStart, isSunday, Minutes } from './time.js';
 import { normalizeName } from './text.js';
@@ -14,19 +14,59 @@ export function roleFlags(role: string) {
   return { isCommander: isSenior || isStaticCmd, isSeniorCommander: isSenior };
 }
 
-export async function loadContext(day: string): Promise<Context> {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) throw new Error(`bad day: ${day}`);
-  const winFrom = addDays(day, -8);
-  const yesterday = addDays(day, -1);
-  const tomorrow = addDays(day, 1);
+/**
+ * The DAY-INDEPENDENT half of a Context: the positions catalog with its closed
+ * lists, the roster, the chain rules and the resolved tunables. Six statements
+ * that return the very same rows for every day of a range — `cli generate
+ * 2026-07-20 2026-07-26` used to re-read them seven times.
+ *
+ * Load it ONCE per CLI run / API request and hand it to `generate(day, static)`
+ * (or `loadDay`). It must live in a LOCAL for the length of that one run — do
+ * NOT hoist it to module scope or any cross-request cache: the API lambda is
+ * long-lived, and a stale bundle would keep scheduling soldiers who have since
+ * been archived, made non-schedulable, or dropped from a closed list.
+ *
+ * The Position / Soldier objects inside are SHARED by every day built from the
+ * bundle. Nothing in the generator mutates them (flex sizing mutates
+ * `Slot.seats`, and slots are day-scoped — rebuilt by loadDay). Keep it that
+ * way, or a day of a range will inherit the previous day's edit.
+ */
+export interface StaticContext {
+  positions: Map<number, Position>;
+  positionByName: Map<string, number>;
+  soldiers: Map<number, Soldier>;
+  chainRules: ChainRule[];
+  tunables: Context['tunables'];
+  /** raw rows re-used by validateDay(day, preloaded) — see ValidateRefs */
+  refs: ValidateRefs;
+}
 
-  // ONE round trip for everything — per-query round trips (and per-connection
-  // TLS handshakes) dominate wall-clock over the WAN pooler. Day literals are
-  // regex-validated above; no user input reaches this SQL.
-  const [, posRows, candRows, soldierRows, allowedRows, magenRows, fairRows, slotRows, existRows, ydayRows,
-    blockRows, exitRows, lockShiftRows, lockDayRows, chainRows, configRows, nextMagenRows] = await multiQuery([
-    `insert into schedule_days (day) values ('${day}') on conflict do nothing`,
-    `select id, name, mission_class, is_scheduled, config from positions`,
+/**
+ * Raw result rows that `validate.ts` fetches with the IDENTICAL query load.ts
+ * already ran, so `validateDay(day, refs)` can drop them from its own batch.
+ * Deliberately raw (snake_case pg rows, not the mapped domain objects): the
+ * validator consumes rows, and re-deriving them from the mapped Maps would be
+ * a second source of truth that could silently drift.
+ *
+ * Only genuinely identical queries live here. validate's roster / candidates /
+ * qualifications reads have different row sets (it needs non-schedulable
+ * soldiers for `unknown_soldier`, and its candidate list is unfiltered) and
+ * stay in its own batch.
+ */
+export interface ValidateRefs {
+  /** select id, name, is_scheduled, mission_class, config from positions */
+  positions: any[];
+  /** select sap.soldier_id, array_agg(p.name) names ... group by sap.soldier_id */
+  allowedPositions: any[];
+  /** select cr.*, tp.name target_name, sp2.name source_name from chain_rules … */
+  chainRules: any[];
+  /** select key, value from config */
+  config: any[];
+}
+
+export async function loadStatic(): Promise<StaticContext> {
+  const [posRows, candRows, soldierRows, allowedRows, chainRows, configRows] = await multiQuery([
+    `select id, name, is_scheduled, mission_class, config from positions`,
     // id-based closed lists (position_candidates); the name is joined for
     // display only — it rides along even for non-schedulable members
     `select pc.position_id, pc.sub_position_id, pc.soldier_id, pc.priority, s.full_name
@@ -41,7 +81,7 @@ export async function loadContext(day: string): Promise<Context> {
     // the generated schedule. Every decision downstream now also carries its
     // own explicit tie-break (rank/rankGroup end in tieJitter; see level1.ts's
     // platoon anchor and group anchors) — this ORDER BY is the belt to that
-    // pair of braces. Do not remove it.
+    // pair of braces. Do not remove it. (SPEC §H2b.)
     `select s.id, s.full_name, s.platoon, coalesce(s.role,'') role,
             coalesce(s.rifle_level,0) rifle,
             coalesce(array_agg(q.qualification) filter (where q.qualification is not null), '{}') quals
@@ -55,40 +95,14 @@ export async function loadContext(day: string): Promise<Context> {
     `select sap.soldier_id, array_agg(p.name) as names
      from soldier_allowed_positions sap join positions p on p.id = sap.position_id
      group by sap.soldier_id`,
-    // the מגן-commander decision effective for this day (weekly history)
-    `select h.soldier_id, s.full_name
-     from magen_commander_history h join soldiers s on s.id = h.soldier_id
-     where h.valid_from <= '${day}'
-     order by h.valid_from desc limit 1`,
-    `select * from soldier_fairness('${day}')`,
-    `select ds.position_id, ds.sub_position_id, sp.name sub_name, ds.period::text, ds.seats, ds.commander_first_seat
-     from day_slots ds left join sub_positions sp on sp.id = ds.sub_position_id
-     where ds.day = '${day}'`,
-    // NB: the day's own auto/chain unlocked rows are EXCLUDED — regeneration
-    // replaces them; including them makes every soldier look already-assigned.
-    `select sa.soldier_id, sa.position_id, sa.sub_position_id, sa.period::text, p.mission_class
-     from shift_assignments sa join positions p on p.id = sa.position_id
-     where sa.period && tsrange(day_start('${winFrom}'), day_start('${tomorrow}'))
-       and not (sa.day = '${day}' and sa.source in ('auto','chain') and not sa.locked)`,
-    `select soldier_id, position_id from day_assignments where day = '${yesterday}'`,
-    `select soldier_id, period::text from unavailability
-     where period && tsrange(day_start('${day}'), day_start('${day}') + interval '1 day')`,
-    `select soldier_id, period::text from exit_requests
-     where period && tsrange(day_start('${day}'), day_start('${day}') + interval '1 day')`,
-    `select soldier_id, position_id, sub_position_id, seat_index, period::text from shift_assignments
-     where day = '${day}' and (locked or source in ('manual','import'))`,
-    `select soldier_id, position_id from day_assignments
-     where day = '${day}' and (locked or source = 'manual')`,
-    `select * from chain_rules order by id`,
+    // the two position names are joined for validate.ts's chain findings (both
+    // columns are FK-backed, so the inner joins can never drop a rule); the
+    // generator itself reads only the cr.* columns
+    `select cr.*, tp.name target_name, sp2.name source_name from chain_rules cr
+     join positions tp on tp.id = cr.target_position
+     join positions sp2 on sp2.id = cr.source_position
+     order by cr.id`,
     `select key, value from config`,
-    // the INCOMING week's מגן-commander decision (effective for tomorrow) —
-    // used only when tomorrow is a Sunday: the Sunday-08:00 crew changeover
-    // falls inside today's (Saturday's) schedule day, and the arriving crew
-    // halves follow the incoming week's commander + מחלקה
-    `select h.soldier_id, s.full_name
-     from magen_commander_history h join soldiers s on s.id = h.soldier_id
-     where h.valid_from <= '${tomorrow}'
-     order by h.valid_from desc limit 1`,
   ]);
 
   const positions = new Map<number, Position>();
@@ -126,6 +140,86 @@ export async function loadContext(day: string): Promise<Context> {
       allowedPositions: allowedBySoldier.get(r.id) ?? null,
     });
   }
+
+  const chainRules: ChainRule[] = chainRows.map((c) => ({
+    targetPosition: c.target_position, targetStart: String(c.target_start).slice(0, 5),
+    sourcePosition: c.source_position, sourceStart: String(c.source_start).slice(0, 5),
+    sourceDayOffset: c.source_day_offset, pick: c.pick,
+  }));
+
+  const config: Record<string, any> = {};
+  for (const c of configRows) config[c.key] = c.value;
+  // NB: `config` stays local — Context carries only the resolved tunables.
+
+  return {
+    positions, positionByName, soldiers, chainRules,
+    tunables: loadTunables(config),
+    refs: {
+      positions: posRows, allowedPositions: allowedRows,
+      chainRules: chainRows, config: configRows,
+    },
+  };
+}
+
+/** The DAY-dependent half: everything keyed on `day` (or on the days around
+ *  it), on top of an already-loaded StaticContext. */
+export async function loadDay(day: string, base: StaticContext): Promise<Context> {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) throw new Error(`bad day: ${day}`);
+  const { positions, positionByName, soldiers, chainRules } = base;
+  const winFrom = addDays(day, -8);
+  const yesterday = addDays(day, -1);
+  const tomorrow = addDays(day, 1);
+
+  // The INCOMING week's מגן-commander decision is CONSUMED only when tomorrow
+  // is a Sunday (the Sunday-08:00 crew changeover falls inside today's —
+  // Saturday's — schedule day, and the arriving crew halves follow the incoming
+  // week's commander + מחלקה). Six days out of seven the statement was issued
+  // and thrown away, so it is appended conditionally and indexed off the end.
+  const wantNextMagen = isSunday(tomorrow);
+
+  // ONE round trip for the day — per-query round trips (and per-connection TLS
+  // handshakes) dominate wall-clock over the WAN pooler. The simple query
+  // protocol takes no bind parameters, so every day boundary goes through
+  // litDate() (db.ts), which re-asserts the YYYY-MM-DD shape at the point of
+  // use; the entry-point regex above is the outer guard.
+  const [, magenRows, fairRows, slotRows, existRows, ydayRows,
+    blockRows, exitRows, lockShiftRows, lockDayRows, nextMagenRows = []] = await multiQuery([
+    // ORDERING CONSTRAINT: this insert MUST stay ahead of the `day_slots` read
+    // below — day_slots is a VIEW over schedule_days, and multiQuery sends the
+    // whole batch as one simple-protocol string (= one implicit transaction),
+    // so a day with no schedule_days row yet would read zero slots. Keep the
+    // two in this batch, in this order.
+    `insert into schedule_days (day) values (${litDate(day)}) on conflict do nothing`,
+    // the מגן-commander decision effective for this day (weekly history)
+    `select h.soldier_id, s.full_name
+     from magen_commander_history h join soldiers s on s.id = h.soldier_id
+     where h.valid_from <= ${litDate(day)}
+     order by h.valid_from desc limit 1`,
+    `select * from soldier_fairness(${litDate(day)})`,
+    `select ds.position_id, ds.sub_position_id, sp.name sub_name, ds.period::text, ds.seats, ds.commander_first_seat
+     from day_slots ds left join sub_positions sp on sp.id = ds.sub_position_id
+     where ds.day = ${litDate(day)}`,
+    // NB: the day's own auto/chain unlocked rows are EXCLUDED — regeneration
+    // replaces them; including them makes every soldier look already-assigned.
+    `select sa.soldier_id, sa.position_id, sa.sub_position_id, sa.period::text, p.mission_class
+     from shift_assignments sa join positions p on p.id = sa.position_id
+     where sa.period && tsrange(day_start(${litDate(winFrom)}), day_start(${litDate(tomorrow)}))
+       and not (sa.day = ${litDate(day)} and sa.source in ('auto','chain') and not sa.locked)`,
+    `select soldier_id, position_id from day_assignments where day = ${litDate(yesterday)}`,
+    `select soldier_id, period::text from unavailability
+     where period && tsrange(day_start(${litDate(day)}), day_start(${litDate(day)}) + interval '1 day')`,
+    `select soldier_id, period::text from exit_requests
+     where period && tsrange(day_start(${litDate(day)}), day_start(${litDate(day)}) + interval '1 day')`,
+    `select soldier_id, position_id, sub_position_id, seat_index, period::text from shift_assignments
+     where day = ${litDate(day)} and (locked or source in ('manual','import'))`,
+    `select soldier_id, position_id from day_assignments
+     where day = ${litDate(day)} and (locked or source = 'manual')`,
+    // ...and LAST, only on a Saturday: the incoming week's מגן commander
+    ...(wantNextMagen ? [`select h.soldier_id, s.full_name
+     from magen_commander_history h join soldiers s on s.id = h.soldier_id
+     where h.valid_from <= ${litDate(tomorrow)}
+     order by h.valid_from desc limit 1`] : []),
+  ]);
 
   const fairness = new Map<number, Fairness>();
   for (const f of fairRows) {
@@ -290,15 +384,6 @@ export async function loadContext(day: string): Promise<Context> {
     lockedDay.set(r.soldier_id, r.position_id);
   }
 
-  const chainRules: ChainRule[] = chainRows.map((c) => ({
-    targetPosition: c.target_position, targetStart: String(c.target_start).slice(0, 5),
-    sourcePosition: c.source_position, sourceStart: String(c.source_start).slice(0, 5),
-    sourceDayOffset: c.source_day_offset, pick: c.pick,
-  }));
-
-  const config: Record<string, any> = {};
-  for (const c of configRows) config[c.key] = c.value;
-
   return {
     day, soldiers, positions, positionByName, slots, fairness, existing, recentSubCount,
     yesterdayPosition, staticStreak, onCallStreak, nightStreak, toranutCount7d, blocked, exits,
@@ -306,10 +391,17 @@ export async function loadContext(day: string): Promise<Context> {
     magenCommander: magenRows[0]
       ? { soldierId: magenRows[0].soldier_id, name: magenRows[0].full_name }
       : undefined,
-    // incoming-week מגן commander (used only when tomorrow is a Sunday)
-    nextMagenCommander: isSunday(tomorrow) && nextMagenRows[0]
+    // incoming-week מגן commander (queried only when tomorrow is a Sunday)
+    nextMagenCommander: wantNextMagen && nextMagenRows[0]
       ? { soldierId: nextMagenRows[0].soldier_id, name: nextMagenRows[0].full_name }
       : undefined,
-    config, tunables: loadTunables(config),
+    tunables: base.tunables,
   };
+}
+
+/** One day, loading its own static bundle. Convenience wrapper for callers
+ *  that build a single day (tests, api/draft.ts's single-day path); a RANGE
+ *  should hoist `loadStatic()` out of its loop instead. */
+export async function loadContext(day: string): Promise<Context> {
+  return loadDay(day, await loadStatic());
 }

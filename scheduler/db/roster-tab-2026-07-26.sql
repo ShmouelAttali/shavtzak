@@ -19,6 +19,22 @@
 --
 -- The two function bodies below are copied VERBATIM from db/schema.sql (only
 -- the `where s.archived_at is null` line is new) — keep them in sync.
+--
+-- ORDERING — DELTAS ARE ONE-SHOT AND ORDERED, THIS FILE IS ALREADY APPLIED.
+-- Both function definitions below are SUPERSEDED by later deltas, and replaying
+-- this file after them would silently regress the live DB:
+--   * soldier_fairness — fairness-draft-scope-2026-07-26.sql replaced it with
+--     the 2-arg (as_of, include_drafts boolean default true) signature and
+--     DROPPED the 1-arg one. `create or replace` cannot replace a function with
+--     a different argument list, so re-running the 1-arg body below would CREATE
+--     a second overload, and every existing 1-arg call site (load.ts, the tests)
+--     would then fail with "function soldier_fairness(date) is not unique".
+--     query-review-2026-07-26.sql rewrote that 2-arg body again.
+--   * presence — DROPPED by query-review-2026-07-26.sql (no callers; it buckets
+--     by the 14:00 schedule day, which is the wrong semantics for the נוכחות
+--     tab). Replaying this file would resurrect it.
+-- Need archived_at on a fresh database? Build from db/schema.sql, which already
+-- carries the column and the current version of everything else.
 -- ============================================================================
 
 alter table soldiers add column if not exists archived_at timestamp;

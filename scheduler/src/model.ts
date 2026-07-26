@@ -174,6 +174,14 @@ export interface GenerateResult {
   /** report-support data (filled by generate(); optional so tests may build
    *  bare results) */
   report?: ReportMeta;
+  /** day-independent rows the load already fetched, forwarded to
+   *  validateDay() by persist() so the post-write validation can skip them
+   *  (load.ts's ValidateRefs). Optional: a hand-built result just omits it and
+   *  the validator reads everything itself. Structural type so model.ts keeps
+   *  no import of the load module. */
+  validateRefs?: {
+    positions: any[]; allowedPositions: any[]; chainRules: any[]; config: any[];
+  };
 }
 
 export interface ChainRule {
@@ -231,7 +239,8 @@ export interface Context {
   /** the INCOMING week's מגן commander — set only when tomorrow is a Sunday;
    *  anchors the arriving crew halves at the Sunday-08:00 changeover */
   nextMagenCommander?: { soldierId: number; name: string };
-  config: Record<string, any>;
-  /** resolved numeric tunables from `config` (see src/config.ts) */
+  /** resolved numeric tunables from the `config` table (see src/config.ts).
+   *  The raw rows are deliberately NOT carried on Context — loadTunables() is
+   *  their only consumer, so a raw bag would just be dead weight nobody reads. */
   tunables: Tunables;
 }

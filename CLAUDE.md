@@ -271,9 +271,10 @@ and live against the shared Supabase project:
   with a click-a-cell popup), the מצבת חיילים filter bar reused verbatim
   (extracted to `src/components/RosterFilters.tsx`), explicit save + leave guard.
   **CALENDAR-day semantics**: the read direction is `presenceMatrix()` in the
-  same pure module, NOT the `presence()` DB function — that one buckets by
+  same pure module, NOT the `presence()` DB function — that one bucketed by
   `day_range()` (the 14:00→14:00 SCHEDULE day), so a one-day block would light
-  up two cells. `presence()` has no other caller.
+  up two cells. `presence()` had no other caller and was **dropped**
+  (query-review 2026-07-26); `day_range()` stays (still used directly).
 - **Level-1 load-order independence** (2026-07-26, found via the tab above):
   adding `and archived_at is null` to `load.ts`'s roster query — a predicate
   removing ZERO rows — changed generated schedules, because the query had no
