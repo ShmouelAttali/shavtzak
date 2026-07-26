@@ -15,6 +15,7 @@ import { AdminExits } from './components/AdminExits';
 import { HamalSchedule } from './components/HamalSchedule';
 import { DayStructure } from './components/DayStructure';
 import { Roster } from './components/Roster';
+import { TAB_STORAGE_KEY, resolveInitialTab, withTabParam } from './lib/tabParam';
 
 const COMPANY_ROLES = new Set(['מ"פ', 'סמ"פ', 'מ"מ', 'סמל', 'מ"כ']);
 
@@ -36,6 +37,26 @@ const TABS: { id: TabId; label: string; restricted?: 'company' | 'scheduler' | '
 ];
 
 const APP_VERSION = '1.0.1';
+
+// ── Selected tab ↔ URL (?tab=) + localStorage ──────────────────────────────
+// The URL is the shareable source of truth; localStorage remembers the last
+// tab so opening the bare site lands where the user left off (and rewrites
+// the URL to match). Pure helpers in src/lib/tabParam.ts.
+const TAB_IDS = TABS.map(t => t.id);
+
+function initialTab(): TabId {
+  let stored: string | null = null;
+  try { stored = localStorage.getItem(TAB_STORAGE_KEY); } catch { /* private mode */ }
+  return resolveInitialTab(window.location.search, stored, TAB_IDS, 'personal');
+}
+
+// replaceState (not push): the tab is a view, not a navigation step — this keeps
+// the back button pointing outside the app instead of unwinding tab clicks.
+function persistTab(id: TabId) {
+  try { localStorage.setItem(TAB_STORAGE_KEY, id); } catch { /* private mode */ }
+  const href = withTabParam(window.location.href, id);
+  if (href) window.history.replaceState(window.history.state, '', href);
+}
 
 function AboutPopup({ onClose }: { onClose: () => void }) {
   return (
@@ -78,7 +99,7 @@ function LeaveGuardPopup({ onSave, onDiscard, onCancel, saving }: {
 }
 
 function AppContent({ data }: { data: SheetData }) {
-  const [activeTab, setActiveTab] = useState<TabId>('personal');
+  const [activeTab, setActiveTab] = useState<TabId>(initialTab);
   const [showAbout, setShowAbout] = useState(false);
   // Leave guard: a tab may register {isDirty, save}; switching away while dirty
   // opens a save/discard/cancel popup (used by מבנה יומי).
@@ -92,16 +113,29 @@ function AppContent({ data }: { data: SheetData }) {
   const myRole = mySoldier?.role ?? '';
   const mySoldierName = mySoldier?.fullName ?? '';
   const canSeeCompany = COMPANY_ROLES.has(myRole);
-  const { isShavtzakAdmin, isHamalMember } = useShavtzakAccess(myEmail);
+  const { isShavtzakAdmin, isHamalMember, loaded: accessLoaded } = useShavtzakAccess(myEmail);
   const canSeeScheduler = isShavtzakAdmin;
   const canSeeHamal = isShavtzakAdmin || isHamalMember;
 
-  // If a restricted tab becomes inaccessible, fall back to personal
+  const tabAllowed = (id: TabId): boolean => {
+    const tab = TABS.find(t => t.id === id);
+    if (!tab?.restricted) return true;
+    if (tab.restricted === 'company') return canSeeCompany;
+    if (tab.restricted === 'scheduler') return canSeeScheduler;
+    return canSeeHamal;
+  };
+
+  // If a restricted tab becomes inaccessible, fall back to personal. Waits for
+  // the access lookup — until it answers everything reads as forbidden, which
+  // would bounce a legitimate ?tab=roster deep link.
   useEffect(() => {
-    if (activeTab === 'company' && !canSeeCompany) setActiveTab('personal');
-    if (['draft', 'fairness', 'daystructure', 'exitadmin', 'roster'].includes(activeTab) && !canSeeScheduler) setActiveTab('personal');
-    if (activeTab === 'hamal' && !canSeeHamal) setActiveTab('personal');
-  }, [activeTab, canSeeCompany, canSeeScheduler, canSeeHamal]);
+    if (!accessLoaded) return;
+    if (!tabAllowed(activeTab)) setActiveTab('personal');
+  }, [activeTab, accessLoaded, canSeeCompany, canSeeScheduler, canSeeHamal]);
+
+  // Keep ?tab= and the remembered tab in sync with the selection (also on first
+  // render, so a bare URL gets the query param written for sharing).
+  useEffect(() => { persistTab(activeTab); }, [activeTab]);
   const { data: shavtzakAll, loading: shavtzakLoading, error: shavtzakError, reload: reloadShavtzak } = useShavtzak();
 
   // Switch tabs, but if the current tab has unsaved edits open the leave guard.
@@ -158,10 +192,7 @@ function AppContent({ data }: { data: SheetData }) {
       <div className="sticky top-0 z-20 bg-white shadow-sm">
         <div className="mx-auto max-w-6xl">
           <nav className="flex overflow-x-auto" aria-label="Tabs">
-            {TABS.filter(tab => !tab.restricted
-              || (tab.restricted === 'company' && canSeeCompany)
-              || (tab.restricted === 'scheduler' && canSeeScheduler)
-              || (tab.restricted === 'hamal' && canSeeHamal)).map((tab) => (
+            {TABS.filter(tab => tabAllowed(tab.id)).map((tab) => (
               <button
                 key={tab.id}
                 onClick={() => requestTab(tab.id)}
@@ -186,17 +217,25 @@ function AppContent({ data }: { data: SheetData }) {
 
       {/* Content */}
       <main className="mx-auto max-w-6xl px-4 py-6">
-        {activeTab === 'personal' && <PersonalSchedule data={data} shavtzakAll={shavtzakAll} />}
-        {activeTab === 'unit' && <UnitSchedule data={data} />}
-        {activeTab === 'company' && <CompanySummary data={data} shavtzakAll={shavtzakAll} />}
-        {activeTab === 'shavtzak' && <Shavtzak soldiers={data.soldiers} shavtzakAll={shavtzakAll} loading={shavtzakLoading} error={shavtzakError} mySoldierName={mySoldierName} />}
-        {activeTab === 'draft' && <DraftSchedule soldiers={data.soldiers} mySoldierName={mySoldierName} email={myEmail} />}
-        {activeTab === 'fairness' && <FairnessView />}
-        {activeTab === 'daystructure' && <DayStructure guardRef={tabLeaveGuardRef} />}
-        {activeTab === 'exitreq' && <ExitRequests soldierName={mySoldierName} email={myEmail} />}
-        {activeTab === 'exitadmin' && <AdminExits soldiers={data.soldiers} email={myEmail} />}
-        {activeTab === 'roster' && <Roster guardRef={tabLeaveGuardRef} />}
-        {activeTab === 'hamal' && <HamalSchedule />}
+        {/* A deep link to a restricted tab waits for the access lookup rather
+            than rendering it — the effect above bounces it if not permitted. */}
+        {!tabAllowed(activeTab) ? (
+          <div className="flex items-center justify-center py-24">
+            <div className="h-8 w-8 animate-spin rounded-full border-4 border-blue-500 border-t-transparent" />
+          </div>
+        ) : (<>
+          {activeTab === 'personal' && <PersonalSchedule data={data} shavtzakAll={shavtzakAll} />}
+          {activeTab === 'unit' && <UnitSchedule data={data} />}
+          {activeTab === 'company' && <CompanySummary data={data} shavtzakAll={shavtzakAll} />}
+          {activeTab === 'shavtzak' && <Shavtzak soldiers={data.soldiers} shavtzakAll={shavtzakAll} loading={shavtzakLoading} error={shavtzakError} mySoldierName={mySoldierName} />}
+          {activeTab === 'draft' && <DraftSchedule soldiers={data.soldiers} mySoldierName={mySoldierName} email={myEmail} />}
+          {activeTab === 'fairness' && <FairnessView />}
+          {activeTab === 'daystructure' && <DayStructure guardRef={tabLeaveGuardRef} />}
+          {activeTab === 'exitreq' && <ExitRequests soldierName={mySoldierName} email={myEmail} />}
+          {activeTab === 'exitadmin' && <AdminExits soldiers={data.soldiers} email={myEmail} />}
+          {activeTab === 'roster' && <Roster guardRef={tabLeaveGuardRef} />}
+          {activeTab === 'hamal' && <HamalSchedule />}
+        </>)}
       </main>
     </div>
   );

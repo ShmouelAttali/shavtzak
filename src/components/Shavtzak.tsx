@@ -537,14 +537,17 @@ function getColors(name: string): Colors {
 function YomiGrid({subTypes, bg, groupName = ''}: { subTypes: DisplaySubType[]; bg: string; groupName?: string }) {
     if (subTypes.length > 1) {
         return (
-            <div className={`${bg} flex`} dir="rtl">
+            // overflow-x-auto + per-column min-w-max: columns never squeeze a
+            // name past its width — the card scrolls instead of clipping it
+            // (the card itself is overflow-hidden).
+            <div className={`${bg} flex overflow-x-auto`} dir="rtl">
                 {subTypes.map((sub, si) => {
                     const soldiers = sub.times[0]?.soldiers ?? [];
                     const innerCols = soldiers.length > 5 ? 2 : 1;
                     return (
                         <div
                             key={sub.sug}
-                            className={`flex-1 p-3 ${si < subTypes.length - 1 ? 'border-l border-gray-100' : ''}`}
+                            className={`flex-1 min-w-max p-3 ${si < subTypes.length - 1 ? 'border-l border-gray-100' : ''}`}
                         >
                             {sub.sug && (
                                 <div
@@ -569,13 +572,13 @@ function YomiGrid({subTypes, bg, groupName = ''}: { subTypes: DisplaySubType[]; 
     const showSug = sug && sug !== groupName;
     const cols = soldiers.length <= 6 ? 2 : soldiers.length <= 12 ? 3 : 4;
     return (
-        <div className={`p-3 ${bg}`}>
+        <div className={`p-3 overflow-x-auto ${bg}`}>
             {showSug && (
                 <div className="text-xs font-semibold text-gray-500 mb-1.5 pb-1 border-b border-gray-200 text-center">
                     {sug}
                 </div>
             )}
-            <div className="grid gap-x-6 gap-y-0.5" style={{gridTemplateColumns: `repeat(${cols}, auto)`}}>
+            <div className="grid w-max min-w-full gap-x-6 gap-y-0.5" style={{gridTemplateColumns: `repeat(${cols}, auto)`}}>
                 {soldiers.map((name, i) => (
                     <SoldierName key={i} name={name} time={first?.times[0]?.time}/>
                 ))}
@@ -700,7 +703,7 @@ function MissionCards({subTypes, colHeader}: {
         .filter(m => m.entries.length > 0);
 
     return (
-        <div className="flex flex-wrap gap-3 p-3">
+        <div className="flex flex-wrap gap-3 p-3 overflow-x-auto">
             {missions.map(mission => (
                 <div key={mission.sug}
                      className="flex-1 min-w-[170px] rounded-lg border border-gray-200 overflow-hidden">
