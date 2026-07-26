@@ -8,8 +8,18 @@ import { GenerateResult } from './model.js';
 import { minToIso } from './time.js';
 import { buildDayInput, buildDayReportHtml } from './report.js';
 
-export async function persist(res: GenerateResult): Promise<Finding[]> {
+export interface PersistOptions {
+  /** Build + store schedule_days.report_html (the דוח חילול the draft tab
+   *  re-opens via GET /api/report). Defaults to TRUE — api/draft.ts and the
+   *  tests rely on the report being there. `cli generate --no-report` passes
+   *  false: the flag means "no report at all", and the old `if (res.report)`
+   *  gate never honored it (generate() always fills res.report). */
+  storeReport?: boolean;
+}
+
+export async function persist(res: GenerateResult, opts: PersistOptions = {}): Promise<Finding[]> {
   const { day } = res;
+  const storeReport = opts.storeReport ?? true;
   // Batched: 2 multi-row inserts inside one transaction — row-by-row inserts
   // over the WAN pooler take ~12s/day, past Vercel's 10s function limit.
   const dayRows = [...res.level1].map(([sid, pid]) => ({ sid, pid }));
@@ -82,7 +92,7 @@ export async function persist(res: GenerateResult): Promise<Finding[]> {
   // Persist the self-contained generation report so the draft UI can re-open
   // it (GET /api/report). report.ts builders are pure (no fs); best-effort —
   // a report-build hiccup must never fail the generation itself.
-  if (res.report) {
+  if (storeReport && res.report) {
     try {
       const html = buildDayReportHtml(buildDayInput(res, findings, false));
       await pool.query(`update schedule_days set report_html = $2 where day = $1`, [day, html]);

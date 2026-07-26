@@ -16,8 +16,9 @@ function usage(): never {
   tsx src/cli.ts validate <YYYY-MM-DD> [<to YYYY-MM-DD>]
 
   generate writes an HTML report per day (+ a weekly index for ranges) to
-  scheduler/reports/ by default; --no-report skips it, --report-dir overrides
-  the output directory. Reports are written on --dry-run too.`);
+  scheduler/reports/ by default; --no-report skips it (both the files AND the
+  copy stored on schedule_days.report_html), --report-dir overrides the output
+  directory. Reports are written on --dry-run too.`);
   process.exit(1);
 }
 
@@ -166,7 +167,7 @@ async function main() {
 
     let findings: Finding[] = [];
     if (!dry) {
-      findings = await persist(res);
+      findings = await persist(res, { storeReport: !noReport });
       console.log(`נשמר (status=generated).`);
       printFindings(findings);
     } else {
