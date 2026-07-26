@@ -7,6 +7,7 @@ import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { freshSchema, seedSoldiers, closePool, query } from './helpers.js';
 import { generate, persist } from '../src/generate.js';
+import { chunked, MAX_ROWS_PER_INSERT, PARAMS_PER_SHIFT_ROW } from '../src/persist.js';
 
 const D1 = '2026-08-04', D2 = '2026-08-05';
 
@@ -42,4 +43,18 @@ test('generated_at is Asia/Jerusalem wall-clock (schema-wide convention), not UT
   // the test container runs on UTC, so a bare now() would land ~3h off
   assert.ok(Math.abs(row.drift) < 300,
     `generated_at drifts ${row.drift}s from Asia/Jerusalem wall-clock`);
+});
+
+test('the insert chunk stays inside the 65535 bind-parameter wire limit', () => {
+  assert.ok(MAX_ROWS_PER_INSERT * PARAMS_PER_SHIFT_ROW + 1 <= 65535,
+    'a full chunk must fit in one extended-protocol bind message');
+});
+
+test('chunked() splits only past the limit and preserves order + every row', () => {
+  assert.deepEqual(chunked([]), [], 'no rows = no statement at all');
+  assert.deepEqual(chunked([1, 2, 3]), [[1, 2, 3]], 'a small batch stays one statement');
+  const rows = Array.from({ length: 2500 }, (_, i) => i);
+  const parts = chunked(rows, 1000);
+  assert.deepEqual(parts.map((p) => p.length), [1000, 1000, 500]);
+  assert.deepEqual(parts.flat(), rows, 'chunking must not drop or reorder rows');
 });
