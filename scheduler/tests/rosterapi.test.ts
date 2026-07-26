@@ -254,6 +254,28 @@ test('mergeRoleCatalog: observed spelling wins, declared roles are added', () =>
   assert.deepEqual(mergeRoleCatalog(['', '  '], []), [], 'blanks are dropped');
 });
 
+test('mergeRoleCatalog: a qualification is never offered as a תפקיד', () => {
+  // The sheet's תפקיד column mixes role and qualification, so soldiers.role
+  // carried נהג דוד / חובש / מט"ב etc. Those are הסמכות — they must not appear
+  // in the role dropdown just because a soldier's row holds one.
+  const merged = mergeRoleCatalog(
+    ['לוחם', 'נהג דוד', 'חובש', 'מט"ב', 'מ"כ'], ['לוחם', 'חמל']);
+  assert.deepEqual(merged, ['חמל', 'לוחם', 'מ"כ']);
+
+  // gershayim spelling is irrelevant — matching is by normalizeName
+  assert.deepEqual(mergeRoleCatalog(['מטב'], []), []);
+  assert.deepEqual(mergeRoleCatalog(['נהג טיגריס'], []), []);
+
+  // a DECLARED role is authoritative and survives even if it collides with a
+  // qualification name: only the observed side is filtered
+  assert.deepEqual(mergeRoleCatalog(['חובש'], ['חובש']), ['חובש']);
+
+  // an explicit qualification list overrides the QUAL_CATALOG default
+  assert.deepEqual(mergeRoleCatalog(['לוחם', 'צלף'], [], ['צלף']), ['לוחם']);
+  assert.deepEqual(mergeRoleCatalog(['לוחם', 'נהג דוד'], [], []),
+    ['לוחם', 'נהג דוד'], 'empty qual list filters nothing');
+});
+
 test('PUT rejects a תפקיד / מחלקה outside the closed lists', async () => {
   const s = soldier((await get()).body as RosterResponse, 'חייל 33');
 

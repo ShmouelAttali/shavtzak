@@ -221,6 +221,20 @@ and live against the shared Supabase project:
   **setting תפקיד is the only way into חמל / מפלג**, so an observed-only list
   would make them unassignable whenever nobody holds the role. `platoons` has no
   catalog — a genuinely NEW מחלקה needs SQL (stated in the popup).
+  **A qualification is NOT a role** (owner 2026-07-26): the sheet's תפקיד column
+  mixes the two and `import_history.py` copies it verbatim, so `soldiers.role`
+  held נהג דוד / נהג טיגריס / חובש / נגב / קלע / מט"ב for 15 soldiers who ALL
+  also carried the matching `soldier_qualifications` row — duplication that
+  surfaced in the closed dropdown as if those were roles. `mergeRoleCatalog`
+  now subtracts the qualification catalog (`qualifications` = `QUAL_CATALOG` ∪
+  in use) from the OBSERVED side only; `declared`/`ROLE_CATALOG` are
+  authoritative and never filtered — note חפק's חובש / נהג דוד seats are
+  declared as `qual`, never as a role, so nothing legitimately declares one.
+  The 15 became לוחם (`db/role-not-qualification-2026-07-26.sql`, applied,
+  guarded on the qual row already existing). Leaves exactly 11 roles: מ"פ,
+  סמ"פ, מ"מ, סמל, מ"כ, מ"ח, לוחם, חמל, רס"פ, סרס"פ, מנהלה. A fresh sheet import
+  of a NEW soldier can still land a qual in תפקיד — they'd 400 in the editor,
+  which surfaces the bad data rather than blessing it.
   Filters: active/removed, free text (name/מס' אישי/mail), תפקיד (+ מפקדים
   pseudo-option), הסמכה (+ closed-list and מוגבלי-עמדות pseudo-options) —
   the qualification filter reuses `hasQualification()` so a qual spelled only

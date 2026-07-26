@@ -115,10 +115,30 @@ export const UNKNOWN_PLATOON = 'לא ידוע';   // soldiers.platoon is NOT NUL
  *  catalog ones that normalize the same (רס"פ vs רספ): the observed string is
  *  what soldiers actually carry and what the exact-match SQL paths
  *  (api/admins.ts, api/hamal.ts) compare against, and it guarantees every
- *  soldier's current role is selectable. Sorted Hebrew. */
-export function mergeRoleCatalog(observed: string[], declared: string[]): string[] {
+ *  soldier's current role is selectable. Sorted Hebrew.
+ *
+ *  **A QUALIFICATION IS NOT A ROLE** (owner 2026-07-26). The sheet's תפקיד
+ *  column mixes the two, and the importer copies it verbatim, so
+ *  soldiers.role held נהג דוד / נהג טיגריס / חובש / נגב / קלע / מט"ב for 15
+ *  soldiers who all ALSO carried the matching soldier_qualifications row — pure
+ *  duplication that leaked into the dropdown as if those were roles. Observed
+ *  values that normalize to a known qualification are therefore dropped;
+ *  `declared`/ROLE_CATALOG entries never are (they are authoritative, and חפק's
+ *  חובש / נהג דוד seats are declared as `qual`, never as a role). A soldier who
+ *  regains such a role via a fresh import becomes unsavable in the editor with
+ *  an explicit 400 — which surfaces the bad data instead of blessing it. */
+export function mergeRoleCatalog(
+  observed: string[], declared: string[], qualifications: string[] = QUAL_CATALOG,
+): string[] {
+  const qualKeys = new Set(qualifications.map(normalizeName).filter(Boolean));
   const byKey = new Map<string, string>();
-  for (const r of [...observed, ...declared]) {
+  for (const r of observed) {                 // observed first — its spelling wins
+    if (!r) continue;
+    const k = normalizeName(r);
+    if (!k || byKey.has(k) || qualKeys.has(k)) continue;
+    byKey.set(k, r);
+  }
+  for (const r of declared) {
     if (!r) continue;
     const k = normalizeName(r);
     if (!k || byKey.has(k)) continue;
@@ -226,6 +246,9 @@ export async function getRoster(): Promise<RosterResponse> {
     return { positionId, subPositionId, label, ordered };
   }).sort((a, b) => a.label.localeCompare(b.label, 'he'));
 
+  const qualifications = uniqSorted(
+    [...QUAL_CATALOG, ...quals.rows.map((r: any) => r.qualification)]);
+
   return {
     soldiers: out,
     positions: positions.rows.map((r: any) => ({
@@ -236,8 +259,12 @@ export async function getRoster(): Promise<RosterResponse> {
       positionId: Number(r.position_id), id: Number(r.id), name: r.name,
     })),
     closedLists,
-    qualifications: uniqSorted([...QUAL_CATALOG, ...quals.rows.map((r: any) => r.qualification)]),
-    roles: mergeRoleCatalog(out.map((s) => s.role), [...ROLE_CATALOG, ...declaredRoles]),
+    qualifications,
+    // a qualification is not a role — `qualifications` (catalog ∪ in use) is
+    // what gets subtracted from the observed side, so a historical qual value
+    // that predates QUAL_CATALOG is filtered too
+    roles: mergeRoleCatalog(out.map((s) => s.role),
+                            [...ROLE_CATALOG, ...declaredRoles], qualifications),
     platoons: uniqSorted([...out.map((s) => s.platoon), UNKNOWN_PLATOON]),
   };
 }
