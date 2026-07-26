@@ -17,6 +17,11 @@ export interface DraftFinding {
 export interface DraftAssignmentMeta {
   source: string;               // auto | chain | manual | import
   locked: boolean;
+  /** false only when EVERY row under this label is a readiness overlay
+   *  (blocks_overlap=false, H3 exception) — such a row may legitimately share
+   *  its hours with another. The replacement popup uses it to tell a real
+   *  double-booking (no_double_booking would reject it) from a legal overlap. */
+  blocksOverlap: boolean;
   violations: string[];
   /** structured "why picked" entries (rendered via scheduler/src/rationale.ts) */
   rationale: RationaleEntry[];
@@ -57,7 +62,10 @@ export interface GenerateResponse {
   issues: string[];
   validation: DraftFinding[];
 }
-export interface ReplaceResponse { day: string; updated: number }
+/** A row the swap had to vacate so the incoming soldier could take the seat
+ *  (only with `force`) — its seat is now empty. */
+export interface EvictedRow { day: string; position: string; time: string }
+export interface ReplaceResponse { day: string; updated: number; evicted: EvictedRow[] }
 
 const hm = (d: Date) =>
   `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
@@ -120,7 +128,8 @@ async function getDrafts(from: string, to: string): Promise<DraftResponse> {
     pool.query(
       `select sa.day::text, p.name pos_name, p.config pos_config, sp.name sub_name, s.full_name,
               lower(sa.period) p_start, upper(sa.period) p_end,
-              sa.source, sa.locked, sa.violations, sa.rationale, sa.seat_index
+              sa.source, sa.locked, sa.violations, sa.rationale, sa.seat_index,
+              sa.blocks_overlap
        from shift_assignments sa
        join positions p on p.id = sa.position_id
        left join sub_positions sp on sp.id = sa.sub_position_id
@@ -203,9 +212,13 @@ async function getDrafts(from: string, to: string): Promise<DraftResponse> {
     const prev = day.meta[key];
     day.meta[key] = prev ? {
       source: prev.source, locked: prev.locked || r.locked,
+      blocksOverlap: prev.blocksOverlap || r.blocks_overlap,
       violations: [...new Set([...prev.violations, ...violations])],
       rationale: [...prev.rationale, ...rationale],
-    } : { source: r.source, locked: r.locked, violations, rationale };
+    } : {
+      source: r.source, locked: r.locked, blocksOverlap: r.blocks_overlap,
+      violations, rationale,
+    };
   }
   // Merge the day's slot catalog in: an under-filled slot shows explicit
   // "לא מאויש" markers so empty positions are visible on the page itself,
@@ -282,20 +295,55 @@ async function getDrafts(from: string, to: string): Promise<DraftResponse> {
 // deleted by the generator), and their auto-generated rationale is replaced
 // by a single manual_replace entry — the old "why he was picked" reasoning
 // does not describe the new soldier.
+//
+// A PUBLISHED day is editable (owner 2026-07-26): fixing one seat in a
+// published schedule must not require unpublishing the whole day. Only the
+// wholesale operations stay frozen — regenerate (POST) and מחק טיוטה (DELETE).
+//
+// `force` (the officer approved the popup the client raises when it sees the
+// incoming soldier already booked in these hours) evicts his overlapping
+// BLOCKING rows first, in the same transaction, so no_double_booking can never
+// fire: remove, then assign. The vacated seats come back as לא מאויש.
 
 const err = (status: number, message: string) =>
   Object.assign(new Error(message), { status });
 
-async function replaceSoldier(day: string, time: string, fromId: number, toId: number): Promise<ReplaceResponse> {
+/** Point a soldier's Level-1 bucket at whatever he still holds that day; if he
+ *  holds nothing, park him in the rest bucket (מנוחה) so he stays visible on
+ *  the page — UNLOCKED, so a regeneration is free to plan him again (a locked
+ *  rest bucket would pin him to מנוחה forever, ctx.lockedDay in level1.ts).
+ *  With no rest position configured, his bucket row is dropped. */
+async function rebucket(client: { query: (q: string, p?: unknown[]) => Promise<any> },
+                        day: string, soldierId: number): Promise<void> {
+  const keep = await client.query(
+    `select sa.position_id from shift_assignments sa
+      where sa.day = $1 and sa.soldier_id = $2
+      order by sa.blocks_overlap desc, lower(sa.period) limit 1`, [day, soldierId]);
+  const rest = keep.rowCount ? null : await client.query(
+    `select id from positions where mission_class = 'rest' order by id limit 1`);
+  const bucket = keep.rows[0]?.position_id ?? rest?.rows[0]?.id ?? null;
+  if (bucket === null) {
+    await client.query(
+      `delete from day_assignments where day = $1 and soldier_id = $2`, [day, soldierId]);
+  } else if (keep.rowCount) {
+    await client.query(
+      `update day_assignments set position_id = $3
+        where day = $1 and soldier_id = $2`, [day, soldierId, bucket]);
+  } else {
+    await client.query(
+      `update day_assignments set position_id = $3, source = 'auto', locked = false
+        where day = $1 and soldier_id = $2`, [day, soldierId, bucket]);
+  }
+}
+
+async function replaceSoldier(day: string, time: string, fromId: number, toId: number,
+                              force = false): Promise<ReplaceResponse> {
   const pool = getPool();
   if (fromId === toId) throw err(400, 'אותו חייל — לא בוצע שינוי');
 
   const st = await pool.query<{ status: string }>(
     `select status from schedule_days where day = $1`, [day]);
   if (!st.rows.length) throw err(404, 'אין טיוטה ליום זה');
-  if (st.rows[0].status === 'published') {
-    throw err(409, 'היום פורסם — יש לבטל פרסום לפני עריכה');
-  }
 
   const people = await pool.query<{ id: string; full_name: string }>(
     `select id, full_name from soldiers where id = any($1::bigint[])`, [[fromId, toId]]);
@@ -330,18 +378,29 @@ async function replaceSoldier(day: string, time: string, fromId: number, toId: n
   if (dup.rowCount) throw err(409, `${nameOf.get(toId)} כבר משובץ במשמרת זו`);
 
   // H3 / no_double_booking: a blocking row of the incoming soldier that
-  // overlaps the window makes the swap impossible (the DB would reject it) —
-  // report WHERE he is instead of surfacing a constraint error
+  // overlaps the window makes the swap impossible for the DB. Without `force`
+  // that is a 409 naming WHERE he is (never a raw constraint error); with it,
+  // those rows are the ones the officer agreed to vacate.
   const blocking = ranges.filter((_r, i) => targets[i].blocks_overlap);
+  const evict: { id: number; day: string; position: string; time: string }[] = [];
   if (blocking.length) {
-    const clash = await pool.query<{ pos_name: string }>(
-      `select distinct p.name pos_name
+    const clash = await pool.query(
+      `select sa.id, sa.day::text, p.name pos_name, p.config pos_config,
+              lower(sa.period) p_start, upper(sa.period) p_end
        from shift_assignments sa
        join positions p on p.id = sa.position_id
        where sa.soldier_id = $1 and sa.blocks_overlap
-         and sa.period && any($2::tsrange[])`, [toId, blocking]);
-    if (clash.rowCount) {
-      throw err(409, `${nameOf.get(toId)} כבר משובץ בשעות אלו (${clash.rows.map((r) => r.pos_name).join(', ')})`);
+         and sa.period && any($2::tsrange[])
+       order by sa.day, p.id, lower(sa.period)`, [toId, blocking]);
+    if (clash.rowCount && !force) {
+      const where = [...new Set(clash.rows.map((r: any) => r.pos_name as string))].join(', ');
+      throw err(409, `${nameOf.get(toId)} כבר משובץ בשעות אלו (${where})`);
+    }
+    for (const r of clash.rows as any[]) {
+      evict.push({
+        id: Number(r.id), day: r.day, position: r.pos_name,
+        time: labelSlot(r.day, new Date(r.p_start), new Date(r.p_end), r.pos_config),
+      });
     }
   }
 
@@ -354,6 +413,13 @@ async function replaceSoldier(day: string, time: string, fromId: number, toId: n
   const client = await pool.connect();
   try {
     await client.query('begin');
+    // REMOVE first, then assign — the reverse order would trip
+    // no_double_booking mid-transaction. The seats are left empty (they render
+    // as לא מאויש); the officer fills them next.
+    if (evict.length) {
+      await client.query(`delete from shift_assignments where id = any($1::bigint[])`,
+        [evict.map((e) => e.id)]);
+    }
     await client.query(
       `update shift_assignments
           set soldier_id = $2, source = 'manual', locked = true,
@@ -366,30 +432,12 @@ async function replaceSoldier(day: string, time: string, fromId: number, toId: n
        on conflict (day, soldier_id)
        do update set position_id = excluded.position_id, source = 'manual', locked = true`,
       [day, toId, primaryPid]);
-    // Re-bucket the outgoing soldier: to the position of whatever he still
-    // holds that day, else to the rest bucket (מנוחה) so he stays visible on
-    // the page, else — no rest position configured — drop his bucket row.
-    const keep = await client.query<{ position_id: number }>(
-      `select sa.position_id from shift_assignments sa
-        where sa.day = $1 and sa.soldier_id = $2
-        order by sa.blocks_overlap desc, lower(sa.period) limit 1`, [day, fromId]);
-    const rest = keep.rowCount ? null : await client.query<{ id: number }>(
-      `select id from positions where mission_class = 'rest' order by id limit 1`);
-    const bucket = keep.rows[0]?.position_id ?? rest?.rows[0]?.id ?? null;
-    if (bucket === null) {
-      await client.query(
-        `delete from day_assignments where day = $1 and soldier_id = $2`, [day, fromId]);
-    } else if (keep.rowCount) {
-      await client.query(
-        `update day_assignments set position_id = $3
-          where day = $1 and soldier_id = $2`, [day, fromId, bucket]);
-    } else {
-      // he holds nothing anymore: park him in מנוחה and UNLOCK the bucket, so
-      // a regeneration is free to plan him again (a locked rest bucket would
-      // pin him to מנוחה forever — ctx.lockedDay in scheduler/src/level1.ts)
-      await client.query(
-        `update day_assignments set position_id = $3, source = 'auto', locked = false
-          where day = $1 and soldier_id = $2`, [day, fromId, bucket]);
+    // Re-bucket the outgoing soldier — and, on any OTHER day an evicted row
+    // belonged to, the incoming one (his bucket there may now name a position
+    // he no longer holds). His bucket on `day` is the upsert above.
+    await rebucket(client, day, fromId);
+    for (const d of new Set(evict.map((e) => e.day))) {
+      if (d !== day) await rebucket(client, d, toId);
     }
     await client.query('commit');
   } catch (e) {
@@ -401,7 +449,10 @@ async function replaceSoldier(day: string, time: string, fromId: number, toId: n
   } finally {
     client.release();
   }
-  return { day, updated: targets.length };
+  return {
+    day, updated: targets.length,
+    evicted: evict.map(({ day: d, position, time: t }) => ({ day: d, position, time: t })),
+  };
 }
 
 // ── Draft delete (DELETE) ───────────────────────────────────────────────────
@@ -501,8 +552,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     if (req.method === 'PUT') {
-      const { day, time, fromSoldierId, toSoldierId } =
-        (req.body ?? {}) as { day?: string; time?: string; fromSoldierId?: number; toSoldierId?: number };
+      const { day, time, fromSoldierId, toSoldierId, force } =
+        (req.body ?? {}) as { day?: string; time?: string; fromSoldierId?: number; toSoldierId?: number; force?: boolean };
       if (!day || !DATE_RE.test(day)) {
         return res.status(400).json({ error: 'day required (YYYY-MM-DD)' });
       }
@@ -513,7 +564,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (!Number.isInteger(from) || from <= 0 || !Number.isInteger(to) || to <= 0) {
         return res.status(400).json({ error: 'fromSoldierId/toSoldierId required' });
       }
-      return res.status(200).json(await replaceSoldier(day, time, from, to));
+      return res.status(200).json(await replaceSoldier(day, time, from, to, force === true));
     }
 
     if (req.method === 'DELETE') {

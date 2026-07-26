@@ -14,6 +14,9 @@ export interface ReplaceState {
   published: boolean;
   /** soldier name -> what he is doing that day (day_assignments bucket) */
   busyNote: Record<string, string>;
+  /** soldier name -> the overlapping BLOCKING seat he already holds; picking
+   *  him asks whether to vacate it (src/lib/draftConflicts.ts) */
+  conflictNote?: Record<string, string>;
 }
 
 /** Commander rationale codes: the seat this soldier holds is a commander seat
@@ -48,16 +51,18 @@ export function replacementOptions(
     qual?: string | null;          // require this qualification
     commanderOnly?: boolean;       // require a commander role
     busyNote?: Record<string, string>;
+    conflictNote?: Record<string, string>;
   } = {},
 ): SoldierOption[] {
-  const { excludeId = null, qual = null, commanderOnly = false, busyNote = {} } = opts;
+  const { excludeId = null, qual = null, commanderOnly = false,
+          busyNote = {}, conflictNote = {} } = opts;
   return roster
     .filter((s) => s.id !== excludeId)
     .filter((s) => !qual || s.quals.some((q) => q.includes(qual)))
     .filter((s) => !commanderOnly || isCommanderRole(s.role))
     .map((s) => ({
       id: s.id, name: s.name, role: s.role, platoon: s.platoon,
-      schedulable: s.schedulable, note: busyNote[s.name],
+      schedulable: s.schedulable, note: busyNote[s.name], warn: conflictNote[s.name],
     }));
 }
 
@@ -82,7 +87,8 @@ export function ReplaceSoldierPopup({ info, roster, busy, error, onReplace, onCl
     qual: qual && onlyDrivers ? qual : null,
     commanderOnly: commander && onlyCommanders,
     busyNote: info.busyNote,
-  }), [roster, info.soldierId, info.busyNote, qual, onlyDrivers, commander, onlyCommanders]);
+    conflictNote: info.conflictNote,
+  }), [roster, info.soldierId, info.busyNote, info.conflictNote, qual, onlyDrivers, commander, onlyCommanders]);
 
   const filters: PickerFilter[] = [];
   if (qual) {
@@ -115,11 +121,15 @@ export function ReplaceSoldierPopup({ info, roster, busy, error, onReplace, onCl
           </p>
         </div>
 
-        {info.published ? (
-          <p className="px-4 pb-4 text-center text-sm text-orange-700 bg-orange-50 py-3">
-            היום פורסם — יש לבטל פרסום לפני עריכה
+        {/* A published day IS editable (owner 2026-07-26) — one seat can be
+            fixed without unpublishing; only regenerate / מחק טיוטה stay frozen.
+            The note is a reminder that this change is live. */}
+        {info.published && (
+          <p className="px-4 pb-2 text-center text-xs text-orange-700 bg-orange-50 py-2">
+            היום פורסם — השינוי ייכנס לשבצ"ק שפורסם
           </p>
-        ) : info.soldierId === null || !info.time ? (
+        )}
+        {info.soldierId === null || !info.time ? (
           <p className="px-4 pb-4 text-center text-sm text-red-700 bg-red-50 py-3">
             {info.soldierId === null
               ? 'החייל אינו מזוהה במסד הנתונים — לא ניתן להחליף'

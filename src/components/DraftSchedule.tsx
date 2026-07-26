@@ -8,6 +8,7 @@ import { ReplaceSoldierPopup, ReplaceState } from './ReplaceSoldierPopup';
 import { RationalePopup, RationalePopupState } from './RationalePopup';
 import { DateRangePicker, todayIso, addDaysIso, heDate } from './DateRangePicker';
 import { orderCrew } from '../../scheduler/src/crewOrder';
+import { conflictLabel, conflictNotes, findSlotConflicts } from '../lib/draftConflicts';
 
 // Draft-only display ordering (owner request): commander(s) first, then the
 // remaining soldiers grouped by מחלקה (platoon) — reuses the SAME generic
@@ -270,12 +271,35 @@ export function DraftSchedule({ soldiers, mySoldierName = '', email = '' }: {
       soldierId: idByName.get(name) ?? null,
       published: day.status === 'published',
       busyNote,
+      // ⚠ hint per candidate: he already holds a blocking seat in these hours
+      conflictNote: conflictNotes(day, {
+        time, outgoing: name, blocks: meta?.blocksOverlap ?? true,
+      }),
     });
   };
 
+  // Picking a candidate who is already booked in the target hours would hit the
+  // DB's no_double_booking — so ask first, naming the seat that gets vacated,
+  // and let the server do remove-then-assign in one transaction (`force`).
   const doReplace = async (toSoldierId: number) => {
     if (!replacing?.soldierId) return;
-    const err = await replaceSoldier(replacing.day, replacing.time, replacing.soldierId, toSoldierId);
+    const day = data?.days.find((d) => d.day === replacing.day);
+    const candidate = roster.find((s) => s.id === toSoldierId);
+    const conflicts = day && candidate
+      ? findSlotConflicts(day, candidate.name, {
+          time: replacing.time, outgoing: replacing.name,
+          blocks: replacing.meta?.blocksOverlap ?? true,
+        })
+      : [];
+    if (conflicts.length) {
+      const where = conflicts.map(conflictLabel).join('\n• ');
+      const ok = window.confirm(
+        `${candidate!.name} משובץ באותן שעות ב:\n• ${where}\n\n` +
+        `להסיר אותו משם ולשבץ אותו כאן?\n(המקום שיתפנה יסומן "לא מאויש".)`);
+      if (!ok) return;
+    }
+    const err = await replaceSoldier(
+      replacing.day, replacing.time, replacing.soldierId, toSoldierId, conflicts.length > 0);
     if (err) setReplaceError(err);
     else setReplacing(null);
   };

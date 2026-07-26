@@ -11,6 +11,9 @@ export interface SoldierOption {
   platoon: string;
   schedulable: boolean;
   note?: string;
+  /** blocking clash hint, shown in orange (draft tab: he already sits in an
+   *  overlapping seat — picking him offers to vacate it) */
+  warn?: string;
 }
 
 /** A toggle rendered above the list (e.g. "הצג רק נהג דוד"). The PARENT owns
@@ -78,7 +81,9 @@ export function SoldierPicker({ options, selectedId, onPick, filters = [], autoF
             {s.role && <span className="text-xs text-gray-400">{s.role}</span>}
             {s.platoon && <span className="text-xs text-gray-300">מחלקה {s.platoon}</span>}
             {!s.schedulable && <span className="text-xs text-orange-400">(לא זמין)</span>}
-            {s.note && <span className="text-xs text-gray-400 mr-auto">{s.note}</span>}
+            {s.warn
+              ? <span className="text-xs text-orange-600 mr-auto whitespace-nowrap">⚠ {s.warn}</span>
+              : s.note && <span className="text-xs text-gray-400 mr-auto">{s.note}</span>}
           </button>
         ))}
         {filtered.length === 0 && (

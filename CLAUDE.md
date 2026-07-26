@@ -97,7 +97,16 @@ and live against the shared Supabase project:
 - **Viewer app**: two officer-only tabs — צור שבצק (date range +
   צור שבצ"ק button → `api/draft.ts`; clicking a name opens the manual
   replacement picker — `PUT /api/draft` writes a manual+locked row the
-  generator then re-seats verbatim; **מחק טיוטה** = `DELETE /api/draft?day=`,
+  generator then re-seats verbatim. A **published day is editable** (owner
+  2026-07-26): only the wholesale ops (regenerate, מחק טיוטה) stay frozen at
+  409. **Double-booking is resolved, not refused**: the client finds the
+  overlap itself (`src/lib/draftConflicts.ts` — 14:00-anchored label spans,
+  `יומי` = whole day, `meta.blocksOverlap=false` readiness overlays never
+  clash), shows it as a ⚠ per candidate in the picker, and confirms naming the
+  seat to vacate; approving sends `force:true` and the server deletes those
+  rows BEFORE seating him in one transaction (order matters —
+  `no_double_booking`), returning the evicted seats (now לא מאויש).
+  **מחק טיוטה** = `DELETE /api/draft?day=`,
   the manual twin of the stale-draft cleanup — drops the day's whole draft incl.
   manual/locked edits, keeps `source='import'` history and manual-only positions
   (`is_scheduled=false` → חמל), reverts the day to `status='draft'` and clears

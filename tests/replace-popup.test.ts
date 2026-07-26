@@ -8,7 +8,7 @@ import { driverQual, isCommanderSlot, replacementOptions } from '../src/componen
 import type { DraftAssignmentMeta, DraftRosterEntry } from '../api/draft';
 
 const meta = (...rationale: DraftAssignmentMeta['rationale']): DraftAssignmentMeta =>
-  ({ source: 'auto', locked: false, violations: [], rationale });
+  ({ source: 'auto', locked: false, blocksOverlap: true, violations: [], rationale });
 
 const soldier = (id: number, name: string, role: string, quals: string[] = []): DraftRosterEntry =>
   ({ id, name, role, platoon: '1', schedulable: true, quals });
@@ -60,4 +60,15 @@ test('filters off → the whole roster, minus the soldier being replaced', () =>
 test('the day bucket rides along as a per-candidate note', () => {
   const [first] = replacementOptions(ROSTER, { busyNote: { 'דוד לוי': 'מנוחה' } });
   assert.equal(first.note, 'מנוחה');
+});
+
+test('an overlapping seat rides along as the candidate\'s ⚠ warning', () => {
+  const opts = replacementOptions(ROSTER, {
+    busyNote: { 'דוד לוי': 'סיור' },
+    conflictNote: { 'דוד לוי': 'סיור (18:00-02:00)' },
+  });
+  const clashing = opts.find((s) => s.name === 'דוד לוי')!;
+  assert.equal(clashing.warn, 'סיור (18:00-02:00)');
+  assert.equal(clashing.note, 'סיור');                  // the note is kept, warn wins in the UI
+  assert.equal(opts.find((s) => s.name === 'מפקד כיתה')!.warn, undefined);
 });

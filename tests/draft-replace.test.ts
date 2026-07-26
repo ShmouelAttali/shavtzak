@@ -185,13 +185,75 @@ test('PUT refuses a soldier already booked in the window, and an unknown slot', 
   assert.equal(bogus.statusCode, 404, JSON.stringify(bogus.body));
 });
 
-test('PUT on a published day → 409', async () => {
-  await query(`update schedule_days set status = 'published' where day = $1`, [D]);
-  const target = (await rowsOf())[0];
+// force = the officer approved the popup the client raises when it sees the
+// incoming soldier already booked in these hours: vacate there, seat him here,
+// one transaction — no_double_booking must never surface.
+test('PUT with force evicts the incoming soldier\'s overlapping rows, then seats him', async () => {
+  const { time, row: target } = await pickTarget({ needFree: false });
+  const clash = await query<{ id: string; soldier_id: string; pos_name: string; lo: string; hi: string }>(`
+    select sa.id, sa.soldier_id, p.name pos_name,
+           to_char(lower(sa.period),'YYYY-MM-DD HH24:MI') lo,
+           to_char(upper(sa.period),'YYYY-MM-DD HH24:MI') hi
+    from shift_assignments sa join positions p on p.id = sa.position_id
+    where sa.day = $1 and sa.blocks_overlap and sa.soldier_id <> $2
+      and sa.period && tsrange($3::timestamp, $4::timestamp)
+      -- a row in the very same seat is the "already in this shift" 409, not an
+      -- evictable overlap
+      and not (sa.position_id = $5 and sa.period = tsrange($3::timestamp, $4::timestamp))
+    limit 1`,
+    [D, target.soldier_id, target.lo, target.hi, target.position_id]);
+  assert.ok(clash.length, 'someone else is on shift during that window');
+  const [other] = clash;
+
   const res = await call({
     method: 'PUT', query: {},
-    body: { day: D, time: 'יומי', fromSoldierId: Number(target.soldier_id), toSoldierId: Number(target.soldier_id) + 1 },
+    body: {
+      day: D, time, force: true,
+      fromSoldierId: Number(target.soldier_id), toSoldierId: Number(other.soldier_id),
+    },
   });
-  assert.equal(res.statusCode, 409, JSON.stringify(res.body));
-  await query(`update schedule_days set status = 'generated' where day = $1`, [D]);
+  assert.equal(res.statusCode, 200, JSON.stringify(res.body));
+  const body = res.body as ReplaceResponse;
+  assert.ok(body.evicted.length >= 1, 'the vacated seat is reported back');
+  assert.ok(body.evicted.some((e) => e.position === other.pos_name),
+    `evicted names the other position (${JSON.stringify(body.evicted)})`);
+
+  // the other row is gone (its seat is now empty) and he holds the target row
+  const gone = await query(`select 1 from shift_assignments where id = $1`, [other.id]);
+  assert.equal(gone.length, 0, 'the overlapping row was removed');
+  const now = await query<{ id: string }>(
+    `select id from shift_assignments where id = $1 and soldier_id = $2`,
+    [target.id, other.soldier_id]);
+  assert.equal(now.length, 1, 'the incoming soldier sits in the clicked slot');
+
+  // and the DB invariant holds: he is booked once in those hours
+  const overlaps = await query(`
+    select 1 from shift_assignments
+    where soldier_id = $1 and blocks_overlap
+      and period && tsrange($2::timestamp, $3::timestamp)`,
+    [other.soldier_id, target.lo, target.hi]);
+  assert.equal(overlaps.length, 1, 'exactly one blocking row in the window');
+});
+
+test('a published day is editable — one seat can be fixed without unpublishing', async () => {
+  await query(`update schedule_days set status = 'published' where day = $1`, [D]);
+  try {
+    const { time, row: target, free } = await pickTarget();
+    const res = await call({
+      method: 'PUT', query: {},
+      body: { day: D, time, fromSoldierId: Number(target.soldier_id), toSoldierId: Number(free.id) },
+    });
+    assert.equal(res.statusCode, 200, JSON.stringify(res.body));
+    const moved = await query<{ soldier_id: string; source: string; locked: boolean }>(
+      `select soldier_id, source, locked from shift_assignments where id = $1`, [target.id]);
+    assert.equal(Number(moved[0].soldier_id), Number(free.id));
+    assert.equal(moved[0].source, 'manual');
+    assert.equal(moved[0].locked, true);
+    // the day is still published — editing a seat is not unpublishing
+    const st = await query<{ status: string }>(
+      `select status from schedule_days where day = $1`, [D]);
+    assert.equal(st[0].status, 'published');
+  } finally {
+    await query(`update schedule_days set status = 'generated' where day = $1`, [D]);
+  }
 });

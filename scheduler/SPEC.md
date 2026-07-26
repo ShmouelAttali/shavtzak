@@ -1029,19 +1029,36 @@ React viewer:
   bucket (manual+locked) and re-buckets the outgoing one (a position he still
   holds, else מנוחה unlocked) — so a regeneration re-seats the replacement at
   the same position/window/seat (Level 1 `ctx.lockedDay`, Level 2
-  `lockedInSlot`) and re-plans the replaced soldier freely. Refused on a
-  published day (409), when the incoming soldier already holds a blocking row
-  over the window (409), or when the label matches no row (404).
+  `lockedInSlot`) and re-plans the replaced soldier freely. Refused when the
+  label matches no row (404) or the incoming soldier already sits in that very
+  seat (409). A **published day is editable** — one seat may be fixed without
+  unpublishing (only the wholesale operations, regenerate and מחק טיוטה, stay
+  frozen). **Double-booking resolution**: the incoming soldier already holding a
+  BLOCKING row over the window is a 409 naming where he is; the tab detects it
+  first, client-side, from the day's groups + `meta.blocksOverlap` (overlap in
+  14:00-anchored minutes; `יומי` spans the day; readiness overlays never
+  clash — `src/lib/draftConflicts.ts`) and asks the officer to vacate the named
+  seat. Approving sends `force:true`, and the swap deletes those rows **before**
+  seating him, in one transaction (`no_double_booking` can never fire); the
+  vacated seats come back as לא מאויש, the response lists them, and his
+  Level-1 bucket on any other day an evicted row belonged to is re-pointed.
   **Publish flow**: a `generated` day can be **פרסם**ed → `published`
   (`schedule_days.approved_by` = the officer's email, `published_at` = now);
-  published days render **read-only** (regeneration is refused with a 409) and
-  stay visible in the draft view with the פורסם marker, with an admin
+  published days keep their rows and stay visible in the draft view with the
+  פורסם marker — regeneration and draft deletion are refused with a 409, a
+  single manual replacement is allowed — with an admin
   **בטל פרסום** action reverting to `generated`. **Stale-draft cleanup** runs
   lazily on read: a past day whose 14:00→14:00 cycle has ended, was never
   published, and has a published successor (a `published` row on that day or a
   later one) has its regenerable `auto`/`chain` rows dropped (locked/manual rows
   kept; an emptied day reverts to `draft`) — days with no published successor are
-  kept as a fallback, published days are never touched. Sheet sync-out remains
+  kept as a fallback, published days are never touched. **מחק טיוטה**
+  (`DELETE /api/draft?day=`) is its manual, unconditional twin: the day's whole
+  draft goes — `auto`/`chain` **and** the officer's manual/locked rows — keeping
+  `import` history and manual-only positions (`is_scheduled=false`: חמל, חפק2,
+  משימות שונות); the day reverts to `draft` with `generated_at`, the stored
+  report and the validation snapshot cleared, unless imported history remains.
+  Refused on a published day (409). Sheet sync-out remains
   out of scope.
 - **הוגנות** — weekly compliance + fairness dashboard. Date picker selects the
   schedule week (Sunday-anchored — matching the weekly fairness scope, §6.1).
