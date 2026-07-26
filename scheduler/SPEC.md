@@ -848,13 +848,18 @@ Principles:
   `valid_to = day_start(D+1)`; null = open-ended, the legacy "onward"
   behavior); `start_time` (nullable — null applies to every slot of the
   position, set matches only the slot whose template starts at that time,
-  e.g. just the 18:00 סיור shift). **`seats = 0` cancels the matched
-  slot(s)**: `day_slots` omits them entirely, so the generator redistributes
-  the crew and the validator raises no coverage gap. When several rows match
-  a slot, the most specific wins: a `start_time` match beats a position-wide
-  row, then the latest `valid_from`, then the newest row. Primary use:
-  manually removing or resizing a specific shift on a specific day *before*
-  generating, instead of hand-editing assignment rows.
+  e.g. just the 18:00 סיור shift); `slot_template_id` (nullable FK, on delete
+  cascade — targets **one specific template row**, so a `(position, start_time)`
+  pair that a cancelled permanent template and its day-scoped replacement share
+  can still be resized/cancelled independently; the מבנה יומי tab writes these).
+  **`seats = 0` cancels the matched slot(s)**: `day_slots` omits them entirely,
+  so the generator redistributes the crew and the validator raises no coverage
+  gap. When several rows match a slot, the most specific wins: a
+  `slot_template_id` match beats a `start_time` match beats a position-wide
+  row, then the latest `valid_from`, then the newest row (unique key
+  `(position_id, valid_from, start_time, slot_template_id)`, nulls not
+  distinct). Primary use: manually removing or resizing a specific shift on a
+  specific day *before* generating, instead of hand-editing assignment rows.
 - **Position behavior flags live in `positions.config` jsonb**: `daily`
   (sleeping 14:00–14:00 day duty — implies `night_exempt` + `full_rest_after`
   + `yomi_display`, each overridable by an explicit key; e.g. תורנים sets
@@ -1068,3 +1073,35 @@ day's shifts / DELETE virgin-reset),
 reading the scheduler DB via `SCHEDULER_DATABASE_URL`; endpoints are open like the
 existing sheet endpoints (no server-side auth) per current app security model —
 the publish flow trusts the officer email supplied by the client.
+
+- **מבנה יומי tab** (`api/day-structure.ts`, admin-only) — overrides the SHIFT
+  STRUCTURE of **one specific schedule day** without hand-written SQL: add /
+  remove / rename a position group (= `positions` row) and its positions
+  (= `sub_positions`), and change a shift's start/end/seats — **no cross-shift
+  validation** (unlike חמל tiling), **no soldier lists**. It reads/writes the
+  existing slot infrastructure, so the generator picks up the edited structure
+  straight from `day_slots` (no `scheduler/src` change). **Scope filter**
+  `is_scheduled AND mission_class <> 'rest' AND NOT (config ? 'staff_all_roles')`
+  — it never touches חמל / מפלג / rest positions. Storage, per change:
+  a **seat change** → a template-targeted single-day `seat_override`
+  (`slot_template_id` = the permanent template, `valid_from = day`,
+  `valid_to = day_start(day+1)`, `note 'מבנה יומי'`); a **removed** shift → the
+  same with `seats = 0`; an **added / moved / duration-changed** shift → a
+  **day-scoped `slot_templates`** row (`valid_from = valid_to = day`) — which may
+  share `(position, sub, start_time)` with a `seats=0`-cancelled permanent
+  template (the day-scoped **exemption** on `slot_templates_no_overlap`,
+  `WHERE valid_from IS DISTINCT FROM valid_to`), so `day_slots` emits exactly one
+  slot for a duration-only change; a **new group** → a `positions` row
+  (`mission_class='static'`, `is_scheduled=true`, `id = max+1`) whose shifts are
+  day-scoped templates only. **Rename = day-scoped delete + create** (no global
+  renames): the renamed item is sent with a null id + the new name (a fresh
+  row); the old id, absent from the payload, has all its slots cancelled for the
+  day; a new name colliding with an existing position/sub → **409**. The **PUT is
+  a declarative whole-day replace** — it first WIPES this tab's prior writes for
+  the day (single-day template-targeted overrides + in-scope day-scoped
+  templates) then re-diffs the desired structure against the permanent baseline
+  keyed by `(subId, start_time, durationMinutes)`; it is idempotent, and saving
+  the default structure back leaves **zero** rows. `DELETE ?day=` resets a day to
+  the default (wipe only). The tab has NO autosave: an explicit Save (top +
+  bottom) PUTs; leaving the tab / reloading / changing the date while there are
+  unsaved edits prompts save/discard/cancel (an `App`-level leave guard).

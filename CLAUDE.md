@@ -69,7 +69,7 @@ the numbered steps of the day page's ניתוח התהליך (process) section. 
 
 ## Current state (2026-07-17)
 
-Everything below is implemented, tested (143 tests: `scheduler/` 128 + root 15),
+Everything below is implemented, tested (371 tests: `scheduler/` 267 + root 104),
 and live against the shared Supabase project:
 
 - **Scheduler DB** on Supabase (schema in `scheduler/db/schema.sql`, template
@@ -101,7 +101,23 @@ and live against the shared Supabase project:
   compliance dashboard: one exceptions-only card per SPEC rule fed by running
   the validator over the window's days, plus fairness-spread / position-balance
   cards → `api/fairness.ts`). Tab visibility also
-  granted by the `shavtzak_admins` DB table (`api/admins.ts`).
+  granted by the `shavtzak_admins` DB table (`api/admins.ts`). Plus a חמל tab
+  (per-shift manual staffing, 10:00-cycle tiling) and a **מבנה יומי** tab (admin,
+  per-DAY shift-structure editor — see below). All restricted tabs carry a 🔒.
+- **מבנה יומי tab** (2026-07-26, `api/day-structure.ts` +
+  `src/components/DayStructure.tsx` + `useDayStructure`): admin-only editor for
+  ONE schedule day's shift structure (add/remove/rename position group =
+  `positions` row + its positions = `sub_positions`; change shift start/end/seats;
+  NO cross-shift validation, NO soldier lists). Declarative whole-day-replace PUT
+  over the EXISTING slot infra (generator reads `day_slots` unchanged): seat
+  change → template-targeted single-day `seat_override`; removed → `seats=0`;
+  added/moved/duration-changed → day-scoped `slot_templates`; new group →
+  `positions` row (static, is_scheduled); rename = day-scoped delete+create
+  (collision → 409). Scope excludes חמל / מפלג / rest. Explicit save (no
+  autosave) + leave guard. Schema delta `db/day-structure-2026-07-26.sql`
+  (seat_overrides.slot_template_id + day-scoped exemption on
+  slot_templates_no_overlap) — mirrored in schema.sql; **NOT yet applied to
+  Supabase** (apply before deploying, or the new column 500s the API).
 - **Local dev**: `npm run dev:api` (port 3001) + `npm run dev` (vite 5173);
   env in `.env`/`.env.local` (git-ignored). Vercel prod needs
   `SCHEDULER_DATABASE_URL` set in project env — NOT done yet; nothing pushed
