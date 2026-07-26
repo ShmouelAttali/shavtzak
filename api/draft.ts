@@ -376,6 +376,10 @@ async function restPositionId(client: Queryable): Promise<number | null> {
   return (cachedRestPid = r.rows[0]?.id ?? null);
 }
 
+/** Tests that rebuild the schema mid-file must be able to drop the cached id
+ *  (position ids are stable in a real deployment). Not used by the handler. */
+export function _resetRestPidCache(): void { cachedRestPid = undefined; }
+
 async function rebucket(client: Queryable, day: string, soldierId: number): Promise<void> {
   const keep = await client.query(
     `select sa.position_id from shift_assignments sa
