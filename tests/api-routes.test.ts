@@ -65,7 +65,18 @@ test('routeKey normalizes the shapes Vercel and the dev server produce', () => {
   assert.equal(routeKey(['draft']), 'draft');            // Vercel: segment array
   assert.equal(routeKey('/api/exit-requests'), 'exit-requests');  // dev server: pathname
   assert.equal(routeKey('/api/roster/'), 'roster');
+  assert.equal(routeKey('/api/draft?day=2026-07-26&from=x'), 'draft');  // req.url: query stripped
   assert.equal(routeKey(undefined), '');
+});
+
+test('catch-all routes off req.url, not just the route param', async () => {
+  // The production outage: the [...route] param arrived empty and every
+  // endpoint 404'd. req.url is the path as received, so it must be enough
+  // on its own — with no query.route at all.
+  const { res, out } = mockRes();
+  await catchAll({ method: 'GET', url: '/api/admins?email=', query: {} } as any, res);
+  assert.equal(out.code, 400);
+  assert.deepEqual(out.body, { error: 'email required' });
 });
 
 test('catch-all dispatches to the handler named by the route param', async () => {
@@ -80,7 +91,24 @@ test('catch-all dispatches to the handler named by the route param', async () =>
 
 test('catch-all 404s an unknown endpoint', async () => {
   const { res, out } = mockRes();
-  await catchAll({ method: 'GET', query: { route: 'nope' } } as any, res);
+  await catchAll({ method: 'GET', url: '/api/nope', query: {} } as any, res);
   assert.equal(out.code, 404);
   assert.deepEqual(out.body, { error: 'unknown endpoint: /api/nope' });
+});
+
+test('vercel.json: nothing rewrites /api, and the functions pattern names a real file', () => {
+  const cfg = JSON.parse(readFileSync(dir('../vercel.json'), 'utf8')) as {
+    rewrites?: { source: string; destination: string }[];
+    functions?: Record<string, unknown>;
+  };
+  // The outage in one line: an /api/(.*) -> /api/$1 rewrite ($1 is a literal in
+  // path-to-regexp, not a backreference) hid behind per-endpoint files for as
+  // long as the filesystem matched them first, then broke every endpoint the
+  // moment the catch-all needed the path intact.
+  for (const r of cfg.rewrites ?? []) {
+    assert.ok(!r.source.startsWith('/api'), `vercel.json rewrites /api (${r.source} -> ${r.destination}) — it will shadow the catch-all`);
+  }
+  for (const pattern of Object.keys(cfg.functions ?? {})) {
+    assert.ok(readFileSync(dir(`../${pattern}`), 'utf8'), `functions pattern ${pattern} names no file`);
+  }
 });
