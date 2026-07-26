@@ -115,7 +115,7 @@ that did cross the boundary — §10).
   present מפלג staff), which ARE scheduled — into their own position only.
 - **H2b Removed from the מצבת**: a soldier with `archived_at` set (someone who
   left the unit — set from the מצבת חיילים tab, reversible) is out of every
-  roster read: generator, validator, `presence()`, `soldier_fairness()`, the
+  roster read: generator, validator, `soldier_fairness()`, the
   pickers, the closed candidate lists and the חמל email grant. Their history
   rows, name and personal number are kept, so a sheet re-import cannot
   resurrect them as a duplicate.
@@ -798,8 +798,12 @@ or **warning** tagged with a rule key:
   a seat covered by an H1 replacement pair (two rows splitting at the
   handover) is fully staffed while a partially-covered one is flagged; flex
   positions (`flex_seats` — מגן, סיור) are judged against the flex
-  **minimum**, not the template seat count; `staff_all_roles` positions are
-  skipped (variable crew — seats is a cap, not demand).
+  **minimum**, not the template seat count. The validator judges only the
+  slots the tabs render — `is_scheduled ∧ mission_class ≠ 'rest' ∧
+  ¬staff_all_roles` (the same scope predicate as צור שבצק / מבנה יומי;
+  2026-07-26) — so `staff_all_roles` positions (variable crew — seats is a
+  cap, not demand) and unscheduled positions are outside every slot-based
+  check here, incl. `role_gate`'s commander-first-seat rule.
 - `allowed_positions` — H6c whitelist (explicit or staff_all_roles-derived)
   violated: error.
 - `role_gate` — H6/H6-pool errors: a candidate-pool position manned outside

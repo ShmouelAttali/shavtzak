@@ -7,16 +7,14 @@ import assert from 'node:assert/strict';
 import { freshSchema, closePool, query } from './helpers.js';
 import { pool } from '../src/db.js';
 import { normalizeName } from '../src/text.js';
+// The ONE source of the SQL mirror of normalizeName(). The index DDL in
+// db/schema.sql + db/query-review-2026-07-26.sql carries its rendered output
+// verbatim — the equality-lookup test below proves the two still parse to the
+// same tree (an EXPLAIN that stops using the index means they diverged).
+import { NORMALIZE_SQL } from '../../api/exit-requests.js';
 
-/** The name-normalization expression indexed by soldiers_name_normalized —
- *  must stay a character-for-character mirror of normalizeName(). Anything
- *  that reads it (api/exit-requests.ts) uses this exact text. */
-const NORM_SQL = `btrim(regexp_replace(
-  translate(full_name, chr(160) || chr(65279) || '״"׳''\`', '  '),
-  '\\s+', ' ', 'g'))`;
-
-/** Same expression over an arbitrary column/alias. */
-const normOf = (col: string) => NORM_SQL.replace(/full_name/g, col);
+const NORM_SQL = NORMALIZE_SQL('full_name');
+const normOf = NORMALIZE_SQL;
 
 before(async () => { await freshSchema(); });
 after(closePool);
@@ -64,11 +62,13 @@ test('presence() is gone, day_range() stays', async () => {
 
 test('the indexed name expression mirrors normalizeName() exactly', async () => {
   // Every character class normalizeName() touches, plus the whitespace
-  // characters JS's \s matches and Postgres's does not (NBSP U+00A0, BOM
-  // U+FEFF) — those are why the expression TRANSLATES them to a space instead
-  // of merely deleting the quote characters.
-  // escapes, never literals — these four are invisible in an editor
+  // characters JS's \s matches and Postgres's \s ([[:space:]]) does NOT —
+  // NBSP U+00A0, FIGURE SPACE U+2007, NARROW NBSP U+202F, BOM U+FEFF. Those
+  // are why NORMALIZE_SQL enumerates the JS \s class instead of writing
+  // '\s+' and hoping.
+  // escapes, never literals — these are invisible in an editor
   const NBSP = '\u00a0', BOM = '\ufeff', THIN = '\u2009', IDEO = '\u3000';
+  const FIG = '\u2007', NNBSP = '\u202f';
   const cases = [
     'אבי כהן',        // plain Hebrew name
     '  אבי   כהן  ',  // padding + doubled spaces
@@ -85,6 +85,8 @@ test('the indexed name expression mirrors normalizeName() exactly', async () => 
     'new\nline',
     `thin${THIN}space`,
     `ideographic${IDEO}space`,
+    `figure${FIG}space`,
+    `narrow${NNBSP}nbsp`,
     '',
   ];
   const rows = await query<{ got: string; want: string }>(

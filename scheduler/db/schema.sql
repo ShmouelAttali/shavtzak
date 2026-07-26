@@ -362,16 +362,15 @@ create index soldiers_email_lower_idx on soldiers (lower(email));
 -- name typed with different quote marks or doubled spaces must still resolve).
 -- MUST STAY IN LOCKSTEP WITH normalizeName() in scheduler/src/text.ts:
 --     (s ?? '').replace(/[״"׳'`]/g, '').replace(/\s+/g, ' ').trim()
--- Exact mirror: translate's `from` list is NBSP U+00A0, BOM U+FEFF, ״ " ׳ ' `
--- and its `to` is two spaces — NBSP/BOM (matched by JS \s but NOT by Postgres
--- \s) become plain spaces, the five quote characters have no counterpart and
--- are deleted; the \s+ collapse and btrim then mirror the last two JS steps.
--- All three functions are IMMUTABLE. NOT unique — two rows may normalize
--- alike (only full_name itself is unique); the caller takes the first match.
+-- and with NORMALIZE_SQL in api/exit-requests.ts, which generates this exact
+-- text — the query's LHS must parse to the same tree or the index goes unused.
+-- The whitespace class ENUMERATES every codepoint JS \s matches, because
+-- Postgres \s ([[:space:]]) misses the non-breaking ones (NBSP U+00A0, figure
+-- space U+2007, narrow NBSP U+202F, BOM U+FEFF). Both functions are IMMUTABLE.
+-- NOT unique — two rows may normalize alike (only full_name itself is
+-- unique); the caller takes the first match.
 create index soldiers_name_normalized on soldiers (
-  (btrim(regexp_replace(
-     translate(full_name, chr(160) || chr(65279) || '״"׳''`', '  '),
-     '\s+', ' ', 'g')))
+  (btrim(regexp_replace(regexp_replace(full_name, '[״"׳''`]', '', 'g'), '[\f\n\r\t\v \u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000\ufeff]+', ' ', 'g'), ' '))
 );
 
 create table sheet_sync_log (
