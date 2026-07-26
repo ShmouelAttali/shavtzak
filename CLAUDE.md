@@ -120,12 +120,14 @@ and live against the shared Supabase project:
   autosave) + leave guard. Schema delta `db/day-structure-2026-07-26.sql`
   (seat_overrides.slot_template_id + day-scoped exemption on
   slot_templates_no_overlap) — mirrored in schema.sql and applied to Supabase.
-  **Known live drift (2026-07-26, NOT yet fixed)**: Supabase still carries an
-  old `seat_overrides_seats_check CHECK (seats > 0)` alongside the baseline's
-  `seats >= 0`, so this tab's "remove a shift" path (which writes a `seats=0`
-  override) is rejected in production. Fix =
-  `alter table seat_overrides drop constraint seat_overrides_seats_check,
-   add constraint seat_overrides_seats_check check (seats >= 0);`
+  Its "remove a shift" path (a `seats=0` override) was **rejected in
+  production** until 2026-07-26: `seat-overrides-hourly-2026-07-19.sql` added
+  `seats_nonneg (>= 0)` but never dropped `seats_check (> 0)` from
+  `fk-migration-2026-07-19.sql`, so the stricter check kept winning on the live
+  DB while every schema.sql-built database accepted `seats=0`. Dropped by
+  `db/seat-overrides-drop-stale-check-2026-07-26.sql` (applied). Lesson: a
+  delta that RELAXES a constraint must drop the old one — and only a live-vs-
+  `schema.sql` diff catches it, since tests rebuild from the baseline.
 - **Report ↔ צור שבצק tab alignment** (2026-07-26): both surfaces derive
   every warning/error from the same code — the tab re-runs `validateDay` live
   on GET (same findings as the report's חריגות card), and shared pure helpers

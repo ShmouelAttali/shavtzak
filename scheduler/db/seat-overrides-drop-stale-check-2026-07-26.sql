@@ -1,0 +1,31 @@
+-- ============================================================================
+-- seat_overrides: drop the stale `seats > 0` check (2026-07-26)
+--
+-- Standalone LIVE-DB delta — NOT a migration to replay. Applied ONCE to
+-- Supabase 2026-07-26. The consolidated baseline (db/schema.sql) was already
+-- correct (`seats smallint not null check (seats >= 0)`), so a schema.sql-built
+-- database never had this problem and this file is a no-op there.
+--
+-- What went wrong: fk-migration-2026-07-19.sql added
+--   seat_overrides_seats_check  check (seats > 0)
+-- and seat-overrides-hourly-2026-07-19.sql later added
+--   seat_overrides_seats_nonneg check (seats >= 0)
+-- to permit seats = 0 — the "cancel this slot for the day" mechanism — but it
+-- never DROPPED the older, stricter check. Both constraints stayed on the live
+-- DB, so the stricter one kept rejecting seats = 0. Effect in production: the
+-- מבנה יומי tab's "remove a shift" path (which writes a seats=0 override) and
+-- any hand-written slot cancellation failed, while every local/test database
+-- — built from schema.sql — accepted them. Found 2026-07-26 by diffing the
+-- live schema against a fresh schema.sql build.
+--
+-- After this, seats >= 0 is still enforced, by seat_overrides_seats_nonneg.
+--
+-- NOTE — remaining cosmetic drift: the surviving constraint is named
+-- seat_overrides_seats_nonneg, while a fresh schema.sql build names the
+-- equivalent one seat_overrides_seats_check (inline, auto-named). Same
+-- semantics, different name. Deliberately left alone; to align, run:
+--   alter table seat_overrides
+--     rename constraint seat_overrides_seats_nonneg to seat_overrides_seats_check;
+-- ============================================================================
+
+alter table seat_overrides drop constraint if exists seat_overrides_seats_check;
