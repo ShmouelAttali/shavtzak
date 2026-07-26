@@ -79,9 +79,20 @@ export async function validateDay(day: string, preloaded?: ValidateRefs): Promis
      from position_candidates pc
      order by pc.position_id, pc.priority nulls last, pc.id`);
   const iSubPos = at(`select id, position_id, name from sub_positions`);
+  // SCOPE: the slots the officers actually see. Mirrors api/day-structure.ts's
+  // SCOPE constant verbatim — the predicate the מבנה יומי editor and the
+  // צור שבצק tab render by — so the validator stops judging rows no surface
+  // shows: a staff_all_roles crew (חמל/מפלג) sizes itself, and a non-scheduled
+  // position is staffed by hand or not at all. Duplicated as TEXT rather than
+  // imported: api/ and scheduler/src/ are separate deployables. Change one,
+  // change the other.
   const iDaySlots = at(`select ds.position_id, sp.name sub_name, ds.period::text, ds.seats, ds.commander_first_seat
      from day_slots ds
-     left join sub_positions sp on sp.id = ds.sub_position_id where ds.day = ${litDate(day)}`);
+     join positions p on p.id = ds.position_id
+     left join sub_positions sp on sp.id = ds.sub_position_id
+     where ds.day = ${litDate(day)}
+       and p.is_scheduled and p.mission_class <> 'rest'
+       and not (p.config ? 'staff_all_roles')`);
   // 7-day lookback for streak rules (consecutive nights R6, static streak
   // T3, weekly תורנות T5)
   const iHistory = at(`select sa.soldier_id, s.full_name, sa.period::text, p.mission_class, p.name pos_name,
@@ -613,9 +624,12 @@ export async function validateDay(day: string, preloaded?: ValidateRefs): Promis
   // ── 10: slot coverage — empty seats are errors (visible at the top) ──────
   const posInfo = new Map((posRows as any[]).map((p) => [p.id, p]));
   for (const ds of daySlotRows as any[]) {
+    // is_scheduled / non-rest / non-staff_all_roles are already the day_slots
+    // read's SCOPE (see the query above), so every row here is a slot the tab
+    // renders. A staff_all_roles crew never reaches this loop — its `seats` is
+    // a cap on a self-sizing crew, not a demand.
     const p = posInfo.get(ds.position_id);
-    if (!p || !p.is_scheduled || p.mission_class === 'rest') continue;
-    if (p.config?.staff_all_roles) continue;   // variable crew — seats is a cap, not demand
+    if (!p) continue;
     const period = parseRange(ds.period);
     // Staffing is counted by the shared helper (coverage.ts) — api/draft.ts's
     // לא-מאויש markers call the very same code, so the tab and this rule can
