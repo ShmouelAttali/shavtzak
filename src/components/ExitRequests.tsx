@@ -5,7 +5,8 @@ import { ExitWindowPicker, ExitWindowSummary, windowInfo, todayIso, heDate } fro
 
 export function ExitRequests({ soldierName, email }: { soldierName: string; email: string }) {
   const { requests, loading, error, add, remove } = useExitRequests(soldierName, email);
-  const [day, setDay] = useState(todayIso());
+  const [fromDate, setFromDate] = useState(todayIso());
+  const [toDate, setToDate] = useState(todayIso());
   const [from, setFrom] = useState<string>(FROM_TIMES[0]);
   const [to, setTo] = useState<string>(TO_TIMES[0]);
   const [note, setNote] = useState('');
@@ -22,12 +23,12 @@ export function ExitRequests({ soldierName, email }: { soldierName: string; emai
     );
   }
 
-  const { effectiveTo, tooLong } = windowInfo(from, to);
+  const { invalid, tooLong } = windowInfo(fromDate, from, toDate, to);
 
   const submit = async () => {
     setFormError(null);
     setSubmitting(true);
-    const err = await add(day, from, effectiveTo, note);
+    const err = await add(fromDate, from, toDate, to, note);
     setSubmitting(false);
     if (err) { setFormError(err); return; }
     setNote('');
@@ -48,9 +49,10 @@ export function ExitRequests({ soldierName, email }: { soldierName: string; emai
         <h2 className="text-lg font-bold text-slate-800">בקשת יציאה קצרה</h2>
         <div className="flex flex-wrap items-end gap-4">
           <ExitWindowPicker
-            day={day} from={from} to={to}
-            onDay={setDay}
-            onFrom={(f, correctedTo) => { setFrom(f); setTo(correctedTo); }}
+            fromDate={fromDate} from={from} toDate={toDate} to={to}
+            onFromDate={setFromDate}
+            onFrom={setFrom}
+            onToDate={setToDate}
             onTo={setTo}
           />
           <div className="flex-1 min-w-[12rem] space-y-1">
@@ -64,13 +66,13 @@ export function ExitRequests({ soldierName, email }: { soldierName: string; emai
             />
           </div>
         </div>
-        <ExitWindowSummary from={from} to={to} />
+        <ExitWindowSummary fromDate={fromDate} from={from} toDate={toDate} to={to} />
         {formError && (
           <div className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{formError}</div>
         )}
         <button
           onClick={() => void submit()}
-          disabled={submitting || tooLong}
+          disabled={submitting || tooLong || invalid}
           className="rounded-lg bg-blue-600 hover:bg-blue-500 disabled:opacity-50 px-4 py-2 text-sm font-semibold text-white"
         >
           {submitting ? '⏳ שולח...' : 'הגש בקשה'}
@@ -97,6 +99,9 @@ export function ExitRequests({ soldierName, email }: { soldierName: string; emai
               <span className="font-semibold text-slate-800">{heDate(r.day)}</span>
               <span className="text-sm text-gray-600" dir="ltr">
                 {r.start.slice(11)} → {r.end.slice(11)}
+                {r.end.slice(0, 10) !== r.start.slice(0, 10) && (
+                  <span className="text-xs text-gray-400"> ({heDate(r.end.slice(0, 10))})</span>
+                )}
               </span>
               {r.note && <span className="text-sm text-gray-500">{r.note}</span>}
               <button

@@ -126,14 +126,29 @@ export function rank(g: Gen, candidates: SoldierState[], positionId: number,
       forSub != null ? g.assignments.filter((a) => a.soldierId === st.soldier.id
         && a.subPositionId === forSub).length : 0,                           // P4b
       nightsOf(st, forNight),                                                // P2
+      // P5 role fit: נהג טיגריס for the התקפי crew; נהג דוד for a patrol slot
+      // overlapping the night window. Owner decision 2026-07-24: both P5
+      // role-fit keys rank ABOVE the P3 bucketed-load key (rule 6, the
+      // patrol-night driver, is "more of a hard rule" per the owner) — the
+      // hard ≥1-driver-per-crew is already guaranteed by H6d (Level-1 quota +
+      // Level-2 driver seat + validator), so these keys only pick the RIGHT
+      // driver among ties: within the same load bucket the qualified driver
+      // wins rather than being displaced by a marginally-lighter non-driver.
+      // They stay BELOW the hard rest floor (R1) and night fairness (P2) — a
+      // soft driver preference must not cost a rest violation or a night.
+      posName === 'התקפי' && !st.soldier.isTigerDriver ? 1 : 0,              // P5 (rule 5)
+      posName === 'סיור' && forNight && !st.soldier.isDudDriver ? 1 : 0,     // P5 (rule 6)
       // P3 bucketed to one duty-day (dailyCapH hours)
       Math.floor(loadOf(st) / dailyCap),                                     // P3
-      // P5 role fit: נהג טיגריס for the התקפי crew; נהג דוד for a patrol
-      // slot overlapping the night window
-      posName === 'התקפי' && !st.soldier.isTigerDriver ? 1 : 0,              // P5
-      posName === 'סיור' && forNight && !st.soldier.isDudDriver ? 1 : 0,     // P5
       loadOf(st),                                                            // P3 fine tie-break
       -Math.min(restAt, P6_REST_CLAMP),                                      // P6
+      // P4c cross-day sub-post spread (owner 2026-07-24): the LAST
+      // discriminator before the seeded random tie — among candidates equal
+      // on everything above, prefer whoever held THIS sub-position least over
+      // the recent days (spreads a soldier across the static posts across the
+      // week, e.g. ש.ג. Sunday → בונקר Wednesday). Purely additive; P4b above
+      // still owns the within-24h rotation.
+      forSub != null ? (g.ctx.recentSubCount.get(st.soldier.id)?.get(forSub) ?? 0) : 0, // P4c
     ];
   }
 }

@@ -8,7 +8,7 @@ import { DAY, dayStart, minToDate, minToIso, scheduleDayStart, toMin, type Minut
 export interface ExitRequest {
   id: number;
   soldierName: string;
-  day: string;        // schedule day YYYY-MM-DD (the 14:00 cycle the exit starts in)
+  day: string;        // literal calendar date the exit starts on (YYYY-MM-DD)
   start: string;      // 'YYYY-MM-DD HH:MM' naive local
   end: string;        // 'YYYY-MM-DD HH:MM'
   note: string | null;
@@ -20,15 +20,10 @@ export interface ExitRequestsResponse { requests: ExitRequest[] }
 import { FROM_TIMES, TO_TIMES } from '../src/constants/exitRequests.js';
 export { FROM_TIMES, TO_TIMES };
 
-// ── Time math (mirrors slotStart() in scheduler/src/time.ts) ────────────────
-// Boundary times are shift boundaries inside the 14:00→14:00 schedule day:
-// hours-from-14:00 offsets. Times before 14:00 belong to the NEXT calendar
-// day; a 14:00 `to` means the end of the cycle (offset 24).
-
-const BOUNDARY_OFFSET: Record<string, number> = {
-  '14:00': 0, '18:00': 4, '22:00': 8, '02:00': 12, '06:00': 16,
-};
-const toOffsetOf = (to: string) => (to === '14:00' ? 24 : BOUNDARY_OFFSET[to]);
+// ── Time math ───────────────────────────────────────────────────────────────
+// Exit windows are LITERAL calendar datetimes: a chosen date + a shift-boundary
+// time combine directly (no 14:00 schedule-day rounding). Cross-date requests
+// carry a distinct From date and To date.
 
 /** Timestamp literal for SQL ('YYYY-MM-DD HH:MM:00'); the contract's
  *  'YYYY-MM-DD HH:MM' display form is produced by to_char in the queries. */
@@ -58,10 +53,11 @@ async function resolveSoldier(
   const pool = getPool();
   const cond = schedulableOnly ? 'and is_schedulable' : '';
   const exact = await pool.query(
-    `select id, full_name from soldiers where full_name = $1 ${cond}`, [name]);
+    `select id, full_name from soldiers
+     where full_name = $1 and archived_at is null ${cond}`, [name]);
   if (exact.rows[0]) return { id: Number(exact.rows[0].id), fullName: exact.rows[0].full_name };
   const all = await pool.query(
-    `select id, full_name from soldiers where true ${cond}`);
+    `select id, full_name from soldiers where archived_at is null ${cond}`);
   const wanted = normalizeName(name);
   const hit = all.rows.find((r: any) => normalizeName(r.full_name) === wanted);
   return hit ? { id: Number(hit.id), fullName: hit.full_name } : null;
@@ -85,7 +81,7 @@ async function generatedDay(days: string[]): Promise<string | null> {
 // period overlaps ([) upper bound → last day is schedule_day_of(upper - 1min).
 const REQUEST_COLS = `
   er.id, s.full_name,
-  schedule_day_of(lower(er.period))::text as day,
+  lower(er.period)::date::text as day,
   to_char(lower(er.period), 'YYYY-MM-DD HH24:MI') as start,
   to_char(upper(er.period), 'YYYY-MM-DD HH24:MI') as "end",
   er.note,
@@ -131,7 +127,7 @@ async function handleGet(req: VercelRequest, res: VercelResponse) {
     `select ${REQUEST_COLS}
      from exit_requests er
      join soldiers s on s.id = er.soldier_id
-     where schedule_day_of(lower(er.period)) between $1::date and $2::date ${nameCond}
+     where lower(er.period)::date between $1::date and $2::date ${nameCond}
      order by er.period, er.id`, params);
   const out: ExitRequestsResponse = { requests: rows.map(toExitRequest) };
   return res.status(200).json(out);
@@ -149,24 +145,30 @@ function leavesUnderEightHours(days: string[], s: Minutes, e: Minutes): boolean 
   });
 }
 
+const RANGE_ERR = 'זמן החזרה חייב להיות אחרי זמן היציאה';
+
 async function handlePost(req: VercelRequest, res: VercelResponse) {
   if ((req.body as any)?.admin === true) return handleAdminPost(req, res);
-  const { name, day, from, to, email, note } = (req.body ?? {}) as {
-    name?: string; day?: string; from?: string; to?: string;
+  const { name, fromDate, from, toDate, to, email, note } = (req.body ?? {}) as {
+    name?: string; fromDate?: string; from?: string; toDate?: string; to?: string;
     email?: string; note?: string;
   };
 
-  // 1. shift-boundary window inside one 14:00→14:00 cycle
+  // 1. two literal calendar dates + shift-boundary times
   if (
-    !day || !DATE_RE.test(day)
+    !fromDate || !DATE_RE.test(fromDate)
+    || !toDate || !DATE_RE.test(toDate)
     || !from || !(FROM_TIMES as readonly string[]).includes(from)
     || !to || !(TO_TIMES as readonly string[]).includes(to)
-    || toOffsetOf(to) <= BOUNDARY_OFFSET[from]
   ) {
     return res.status(400).json({ error: 'טווח שעות לא תקין — יש לבחור שעות גבול משמרת' });
   }
-  const s = dayStart(day) + BOUNDARY_OFFSET[from] * 60;
-  const e = dayStart(day) + toOffsetOf(to) * 60;
+  // literal datetimes — no schedule-day rounding
+  const s = toMin(fromDate, from);
+  const e = toMin(toDate, to);
+  // return must be strictly after leave (a same-day to ≤ from is next-day only
+  // when the user picks a later To date)
+  if (e <= s) return res.status(400).json({ error: RANGE_ERR });
 
   // 2. soldier resolution (exact, then normalized)
   const soldier = await resolveSoldier(String(name ?? ''), true);

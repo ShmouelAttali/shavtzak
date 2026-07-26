@@ -100,7 +100,7 @@ Summarize for the user, per day:
 - generation issues that indicate real staffing gaps: `חסרים X חיילים`,
   `חסרים נהגים`, `לא אויש`, empty חפק seats.
 
-Remind the user the drafts are visible in the שבצק חדש (טיוטה) tab and remain
+Remind the user the drafts are visible in the צור שבצק tab and remain
 draft-only (no sheet sync-out).
 
 ### Diagnosing recurring errors before reporting them

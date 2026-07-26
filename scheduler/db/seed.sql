@@ -47,15 +47,27 @@ insert into positions (id, name, mission_class, is_scheduled, config) values
   -- The pool itself is id-based rows in position_candidates (seed-candidates.sql).
   ( 9, 'קצין מוצב',   'other',     true,  '{"daily":true,"no_rest_floor":true,"candidate_pool":true}'),
   (10, 'כרמל חטיבה',  'readiness', true,  '{}'),
-  -- חמל: standing crew — every present role-חמל soldier staffs it daily,
-  -- full schedule day; readiness class = rest-transparent (internal shifts)
-  (11, 'חמל',         'readiness', true,  '{"staff_all_roles":["חמל"]}'),
+  -- חמל: MANUAL-ONLY (is_scheduled=false) — the generator never auto-fills it;
+  -- the dedicated חמל tab places per-shift picks (day-scoped slot_templates +
+  -- manual/locked shift_assignments). staff_all_roles still drives חמל-tab auth
+  -- (api/admins.ts) and the H6c role whitelist (role חמל → position חמל only).
+  (11, 'חמל',         'readiness', false, '{"staff_all_roles":["חמל"]}'),
   (12, 'מנוחה',       'rest',      true,  '{}'),
   (13, 'בבית',        'rest',      true,  '{}'),  -- fully unavailable (H1) — not on base
   -- מפלג: the רס"פ/סרס"פ/מנהלה staff — they do no shifts (role-restricted to
   -- this position, like חמל) but appear in the שבצק when present on base.
   -- Presence follows the מפלג sheet tab's סטטוס (לא מגיע -> is_schedulable=false).
   (14, 'מפלג',        'other',     true,  '{"daily":true,"staff_all_roles":["רס\"פ","סרס\"פ","מנהלה"]}'),
+  -- משימות שונות: ad-hoc missions the officers add by hand (the sheet writes
+  -- them as 'כח <שם>' / 'תפיסת בית' / 'משימות שונות', all typed משימות שונות).
+  -- MANUAL-ONLY (is_scheduled=false): the generator never invents them, but the
+  -- imported rows still occupy the soldier (rest, double-booking, fairness).
+  -- The individual force is the sub-position.
+  (15, 'משימות שונות', 'other',    false, '{}'),
+  -- חפק2: the second חפק team (appears from 24/07/2026). Same daily
+  -- 14:00-14:00 duty semantics as חפק; manual-only until the owner decides the
+  -- generator should staff it (no seat_rules, no candidate lists).
+  (16, 'חפק2',        'other',     false, '{"daily":true,"no_rest_floor":true}'),
   -- אחר: catch-all for imported history rows whose position no longer exists
   (99, 'אחר',         'other',     false, '{}');
 
@@ -70,7 +82,15 @@ insert into sub_positions (id, position_id, name) values
   ( 7,  6, 'מפקד'),              -- חפק seats (H6b seat_rules on the position config)
   ( 8,  6, 'קשר'),
   ( 9,  6, 'חובש'),
-  (10,  6, 'נהג');
+  (10,  6, 'נהג'),
+  -- משימות שונות: one row per named ad-hoc force, exactly as the sheet spells
+  -- it. New force names are added here (or by a delta) as they appear.
+  (11, 15, 'כח אלישיב'),
+  (12, 15, 'כח אמיתי'),
+  (13, 15, 'כח גלעד'),
+  (14, 15, 'כח שאג'),
+  (15, 15, 'תפיסת בית'),
+  (16, 15, 'משימות שונות');   -- unnamed / generic mission row
 
 -- ── Slot templates (valid from 2026-07-15) ──────────────────────────────────
 -- סיור: 3 shifts × 8h × 4 seats, first seat = commander
@@ -113,9 +133,10 @@ values
   (8, '07:00', 420, 1, '2026-07-15'),   -- 07:00–14:00
   (8, '14:00', 480, 1, '2026-07-15');   -- 14:00–22:00
 
--- חמל: full schedule day, up to 5 present role-חמל soldiers
-insert into slot_templates (position_id, start_time, duration_minutes, seats, valid_from)
-values (11, '14:00', 1440, 5, '2026-07-15');
+-- חמל: NO permanent slot_template — manual-only, per-shift. The חמל tab writes
+-- day-scoped slot_templates (valid_from = valid_to = day) for the windows it
+-- shows. Default windows come from the config row below (or the api/hamal.ts
+-- hardcoded fallback).
 
 -- קצין מוצב: 1 seat, full schedule day 14:00–14:00 (blocks day)
 insert into slot_templates (position_id, start_time, duration_minutes, seats, valid_from)
@@ -125,11 +146,17 @@ values (9, '14:00', 1440, 1, '2026-07-15');
 insert into slot_templates (position_id, start_time, duration_minutes, seats, valid_from)
 values (14, '14:00', 1440, 6, '2026-07-17');
 
--- כרמל חטיבה: 3 regular + 1 commander × 6 shifts × 4h (same grid as עמדות הגנה)
+-- כרמל חטיבה: 3 regular + 1 commander. FIVE windows — four 4h ones on the
+-- עמדות הגנה grid plus ONE 8h night, 22:00→06:00 (owner 2026-07-26): the
+-- 18:00–22:00 defense crew comes down at 22:00 and holds standby through to
+-- 06:00, so the 22:00–02:00 crew gets no standby window at all. A 6×4h grid
+-- with a 02:00 window was never real — the whole imported history (28/06
+-- onward) writes the night as one 22:00→06:00 row.
 insert into slot_templates (position_id, sub_position_id, start_time, duration_minutes, seats, valid_from)
-select 10, sp, t.start_time, 240, case sp when 5 then 3 else 1 end, date '2026-07-15'
+select 10, sp, t.start_time, t.dur, case sp when 5 then 3 else 1 end, date '2026-07-15'
 from (values (5),(6)) s(sp)
-cross join (values (time '06:00'),('10:00'),('14:00'),('18:00'),('22:00'),('02:00')) t(start_time);
+cross join (values (time '06:00', 240), ('10:00', 240), ('14:00', 240),
+                   ('18:00', 240), ('22:00', 480)) t(start_time, dur);
 
 -- ── Chain rules (T4) ────────────────────────────────────────────────────────
 -- source_day_offset is relative to the 14:00–14:00 schedule day of the TARGET.
@@ -139,8 +166,9 @@ insert into chain_rules (id, target_position, target_start, source_position, sou
   ( 2, 10, '10:00', 2, '06:00',  0, 'all'),
   ( 3, 10, '14:00', 2, '10:00', -1, 'all'),  -- defense 10:00 belongs to previous schedule day
   ( 4, 10, '18:00', 2, '14:00',  0, 'all'),
-  ( 5, 10, '22:00', 2, '18:00',  0, 'all'),
-  ( 6, 10, '02:00', 2, '22:00',  0, 'all'),
+  ( 5, 10, '22:00', 2, '18:00',  0, 'all'),  -- the 8h night window (22:00→06:00)
+-- (id 6, carmel 02:00 ← defense 22:00, removed 2026-07-26: the night is ONE 8h
+--  window off the 18:00 crew, so the 22:00–02:00 crew has no standby.)
 -- (T4b konenut-from-patrol chains removed: התקפי is a standing Level-1 crew)
 -- T4c: tracker window ← one soldier from the descending patrol crew
   ( 9,  8, '22:00', 1, '14:00',  0, 'min_tracker_hours'),  -- ירד ב-22:00 → 22:00–07:00
@@ -158,4 +186,8 @@ insert into chain_rules (id, target_position, target_start, source_position, sou
 insert into config (key, value) values
   ('readiness_hour_weight', '0.25'),
   ('daily_cap_hours',       '8'),
-  ('rest_rules',            '{"minimum_hours":4,"ideal_hours":8,"long_task_hours":4,"gashash_effective_hours":1.5}');
+  ('rest_rules',            '{"minimum_hours":4,"ideal_hours":8,"long_task_hours":4,"gashash_effective_hours":1.5}'),
+  -- default חמל shift windows shown by the חמל tab for a virgin day (the tab
+  -- writes day-scoped slot_templates only when a day differs from these or has
+  -- picks). api/hamal.ts has the same hardcoded fallback.
+  ('hamal_default_shifts',  '[{"start":"10:00","end":"18:00"},{"start":"18:00","end":"02:00"},{"start":"02:00","end":"10:00"}]');

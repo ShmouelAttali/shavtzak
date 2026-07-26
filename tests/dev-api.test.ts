@@ -56,7 +56,7 @@ test('admin POST over HTTP routes to the admin path (JSON body parsed)', async (
 });
 
 test('soldier POST over HTTP: boundary window accepted', async () => {
-  const res = await postJson({ name: 'חייל 41', day: D2, from: '14:00', to: '18:00' });
+  const res = await postJson({ name: 'חייל 41', fromDate: D2, from: '14:00', toDate: D2, to: '18:00' });
   const body = await res.json() as { request?: ExitRequest; error?: string };
   assert.equal(res.status, 200, JSON.stringify(body));
   assert.equal(body.request!.day, D2);

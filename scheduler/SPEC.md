@@ -39,9 +39,9 @@ History shows 39 distinct position names over 20 days; templates change mid-depl
 | תורנים | 2 seats, **14:00–14:00** | full schedule day; class `other` — outside T2/T3 rotation; **soft T5**: at most one תורנות per soldier per schedule week (the count resets on Sunday — §6.1 fairness week); **`night_exit_ok`** — the one position a night-exit soldier may additionally hold on his exit day (H9 night-exit relaxation) |
 | כונן גשש | chained to סיור — see T4c | windows: 22–07, 07–14, 14–22; **only the night window counts as load** (R3) |
 | קצין מוצב | 1 seat, **14:00–14:00** | full schedule day; manned **only from a fixed candidate pool** — see H6-pool; **`no_rest_floor`** — internally-scheduled, may be entered with any rest (H8) |
-| חמל | **14:00–14:00**, variable crew | standing crew: every present role-חמל soldier daily (`staff_all_roles`); readiness class (rest-transparent); members restricted to חמל only via the derived H6c whitelist |
+| חמל | **manual-only, per-shift** | MANUAL-ONLY (`is_scheduled=false`) — the generator NEVER auto-fills חמל; shifts start empty until the dedicated חמל tab places them. readiness class (rest-transparent); role-חמל members are still restricted to חמל only via the derived H6c whitelist (`staff_all_roles` kept — it drives that whitelist + the חמל-tab auth in api/admins.ts), so an unplaced role-חמל soldier is simply unassigned. **Per-shift picks**: the חמל runs on its own **10:00→10:00** cycle (NOT the 14:00 schedule day). The tab tiles the day into **contiguous** shift windows (3 defaults 10:00-18:00 / 18:00-02:00 / 02:00-10:00) that ALWAYS cover the whole day with no gaps or overlaps — the first starts at 10:00, the last ends at 10:00, and every internal boundary is shared, so editing a shift's end moves the adjacent shift's start (shrink one → the neighbor grows), adding a window re-tiles around it, and removing one merges its span into the neighbor. **One soldier per shift**, from the **role-חמל soldiers only** (the חמל position's `staff_all_roles`; not the whole roster, and not filtered by presence). **On-demand shifts = day-scoped `slot_templates`** (`valid_from = valid_to = the day`; the generic "add a shift on this one day" mechanism, reused later for מגן) — the tab always sends the full contiguous window list, so the tiling is enforced client-side, not in the DB. A pick RESERVES the soldier for the whole day (one locked `day_assignments` bucket per picked soldier), so they are seated nowhere else; picks are `shift_assignments` rows with `blocks_overlap=false` (readiness) |
 | מפלג | **14:00–14:00**, variable staff crew | the רס"פ/סרס"פ/מנהלה staff do **no shifts**; they appear in the שבצק in this dedicated daily position whenever present on base and are restricted to it (`staff_all_roles`, like חמל). Presence follows the sheet's מפלג tab (סטטוס מגיע/לא מגיע → the soldier's schedulable flag — see Import) |
-| כרמל חטיבה / מפקד כרמל חטיבה | 3+1 × 14,18,22,02,06,10 | 4h — same grid as עמדות הגנה; commander seat: prefer a real מפקד from the descending crew, else highest רובאי (T4a) |
+| כרמל חטיבה / מפקד כרמל חטיבה | 3+1 × 14,18,22,06,10 | 4h on the עמדות הגנה grid, except the night: **22:00 is ONE 8h window** (22:00→06:00) — no 02:00 window. Commander seat: prefer a real מפקד from the descending crew, else highest רובאי (T4a) |
 
 **Everyone works**: **מנוחה is not a planned outcome** — every present soldier
 must do a shift (~8h) every schedule day unless at home. All positions are
@@ -65,7 +65,7 @@ mission rows when they happen; they may **not** overlap a readiness row —
 the readiness assignment must be trimmed/replaced for the attack window (H3).
 
 **Boundary rule for daily missions**: all daily duties — מגן, חפק, התקפי,
-קצין מוצב, תורנים, חמל, מפלג — run **14:00–14:00**, so a daily mission
+קצין מוצב, תורנים, מפלג — run **14:00–14:00**, so a daily mission
 occupies exactly its schedule day and blocks nothing the day after; nothing
 crosses the 14:00 boundary. An assignment's counted hours belong to the
 schedule day containing its start (relevant only for imported history rows
@@ -113,6 +113,32 @@ that did cross the boundary — §10).
   outside the system entirely — never loaded, never assigned (e.g. מפלג staff
   marked לא מגיע on the sheet's מפלג tab). Contrast H6c role crews (חמל,
   present מפלג staff), which ARE scheduled — into their own position only.
+- **H2b Removed from the מצבת**: a soldier with `archived_at` set (someone who
+  left the unit — set from the מצבת חיילים tab, reversible) is out of every
+  roster read: generator, validator, `presence()`, `soldier_fairness()`, the
+  pickers, the closed candidate lists and the חמל email grant. Their history
+  rows, name and personal number are kept, so a sheet re-import cannot
+  resurrect them as a duplicate.
+
+**Load-order independence (invariant, enforced by test)**: Level 1 must not
+depend on the order the roster arrives in. The ranking cascades were always
+order-free (`rank()` / `rankGroup()` end in `tieJitter(day, soldierId)`), but
+three decisions used to read `[...state.values()]` raw — i.e. the roster
+query's row order, which with no `ORDER BY` is whichever plan Postgres picks.
+Consequence, measured 2026-07-26: adding a WHERE clause that removed **zero**
+rows re-planned the aggregate (HashAggregate → GroupAggregate), reordered the
+התקפי platoon-group anchors, swapped one soldier between התקפי and תורנים on
+day 1, and two days later produced a 9-instead-of-10 מגן single-מחלקה core.
+Closed on three levels:
+- `load.ts` orders the roster query by `s.id`;
+- the התקפי group anchors are `rankGroup`-ordered, the same-platoon anchor
+  breaks count ties by מחלקה name, and seat-rule role matches break
+  same-role ties by id — so no decision reads raw Map order;
+- `tests/magensunday.test.ts` reverses the loaded roster Map and asserts an
+  identical Level-1 partition.
+
+Keep it that way: any new `[...state.values()]` whose ORDER feeds a decision
+needs its own explicit tie-break, not a reliance on the query.
 - **H3 No overlap**: no two time-overlapping assignments per soldier — **no
   exceptions**: a soldier is either on an active mission or on כוננות, never
   both. Enforced at the DB level for mission rows (`no_double_booking`
@@ -192,9 +218,23 @@ that did cross the boundary — §10).
   soft/fairness assignment: Level 1 fills a driver quota (one qualified driver
   per distinct slot start) right after the commander quota; Level 2 reserves
   the seat right after the commander seat as a dedicated driver seat until the
-  crew has one. Validated (`driver` rule, error; crews that are entirely
-  imported history are excused). The soft P5 driver preferences remain as
+  crew has one. The soft P5 driver preferences remain as
   tie-breakers beyond the one required driver.
+  **Shortage priority** (owner 2026-07-24): when the נהג דוד pool is too small
+  for every סיור crew, the scarce drivers stay with the **earlier-starting**
+  crews — **noon (14:00) keeps a driver longest → then night (22:00) → the
+  morning (06:00) crew goes without first**. Chronological start order **is**
+  this priority (14:00 < 22:00 < 06:00-next): the Level-1 quota reserves as many
+  drivers as crews (all available on a shortage), and the Level-2 fill —
+  processing crews in start order, with driver-preservation holding a driver
+  for the later crews — leaves the last-starting crew(s) driverless.
+  **Validation** (`driver` rule; crews that are entirely imported history are
+  excused): a driverless crew is an **error** when a qualified driver was idle
+  and free to cover it (skipped) or when a **lower**-priority crew kept a driver
+  while a **higher**-priority one went without (priority violated); it is only a
+  **warning** when the pool is genuinely exhausted (no idle driver could have
+  covered the crew) AND the driverless crews are exactly the lowest-priority
+  (latest-starting) ones.
 - **H7 Crew integrity**: no duplicate soldier in a crew/slot.
 - **H8 Rest floor — absolute**: < 4h rest before a task → hard block. **Never
   a "בדוחק" fallback, no exceptions** — the exemptions are the R5
@@ -358,7 +398,7 @@ that did cross the boundary — §10).
   demoted for another on-call assignment) + validator warning
   (`oncall_streak`).
 - **T4 Chained duties** — deterministic staffing; the crew that just descended covers the standby:
-  - **T4a כרמל חטיבה**: carmel shift starting at hour H = the 4 soldiers who finished עמדות הגנה at H, on the same 6×4h grid (defense 06–10 → carmel 10–14, …, 18–22 → carmel 22–02, 22–02 → carmel 02–06; previous day 10–14 → carmel 14–18). Commander seat: prefer a **real מפקד** (מ"מ/סמל/מ"כ/מ"ח) from the descending crew; only when none exists take the **highest רובאי** among them. Min staffing 3 regular + 1 commander (validated).
+  - **T4a כרמל חטיבה**: carmel shift starting at hour H = the 4 soldiers who finished עמדות הגנה at H (defense 02–06 → carmel 06–10, 06–10 → carmel 10–14, previous day 10–14 → carmel 14–18, 14–18 → carmel 18–22). The **night is ONE 8h window**: defense 18–22 → carmel **22–06**, so the defense 22–02 crew descends into **no standby at all** (owner 2026-07-26 — the company has run it this way throughout the imported history; a 02–06 carmel window never existed in practice). Commander seat: prefer a **real מפקד** (מ"מ/סמל/מ"כ/מ"ח) from the descending crew; only when none exists take the **highest רובאי** among them. Min staffing 3 regular + 1 commander (validated).
   - **T4b** — there is no התקפי chain: התקפי is a standing Level-1 crew
     (8 soldiers, 14:00–14:00) rather than patrol-chained windows; ad-hoc
     attack missions are separate rows that replace/trim the readiness (H3).
@@ -437,7 +477,11 @@ the report's decisive-key rationale labels cite these item numbers (e.g.
 Nights (P2), sub-post rotation (P4b), role fit (P5), load (P3) and
 accumulated rest (P6) are **Level-2 keys only** — positions are not lighter
 or heavier than each other, so burden considerations play no part in
-choosing WHICH position a soldier gets.
+choosing WHICH position a soldier gets. The same holds for group
+**composition** within a position (the התקפי platoon groups, the מגן crew):
+everyone in a group serves identical hours, so **weekly load never selects a
+group's members** — group fill uses only the Level-1 group cascade above (and
+no "low weekly load in the group" pick rationale is emitted).
 
 **Level-2 slot cascade** (which concrete shift window/seat inside the group)
 — slot-level keys only; the day-level keys were already decided when the
@@ -449,10 +493,11 @@ soldier joined the group:
 | 2 | R1 quasi-constraint: candidates with a full 8h rest before the slot start sort before all others | — |
 | 3 | **P4b sub-post rotation** — within the same 24h round, a soldier mans a DIFFERENT static post each shift (not שג twice in one day); a CONTIGUOUS same-post pair is one continuous stint, not a repeat (non-static positions only; static grids use the two-phase post spread instead, §7 Level 2) | current day |
 | 4 | **P2** — fewest **night assignments** (00–06, incl. today's fresh nights when ranking a night slot). Readiness assignments do **not** count as nights (sleeping assumption, R2) | current week |
-| 5 | **P3** — fewest **weighted mission hours** (readiness hours × low weight, default 0.25), compared in **8-hour buckets** (one duty-day). The soldier's TOTAL for the week across ALL positions | current week |
-| 6 | **P5 role fit** (ties only, beyond the H6d required driver): נהג טיגריס preferred for the התקפי crew; נהג דוד preferred for a סיור slot overlapping the night window | current crew |
+| 5 | **P5 role fit** (ties only, beyond the H6d required driver): נהג טיגריס preferred for the התקפי crew; נהג דוד preferred for a סיור slot overlapping the night window. Ranks **above** the load keys (owner 2026-07-24: rule 6, the patrol-night driver, is "more of a hard rule") — the hard ≥1-driver-per-crew is already H6d, so this key only decides the RIGHT driver among ties, and it sits **below** R1 rest + P2 nights so a soft driver preference never costs a rest violation or a night | current crew |
+| 6 | **P3** — fewest **weighted mission hours** (readiness hours × low weight, default 0.25), compared in **8-hour buckets** (one duty-day). The soldier's TOTAL for the week across ALL positions | current week |
 | 7 | P3 fine tie-break — exact weighted hours | current week |
 | 8 | **P6** — most rest since last shift (clamped at 48h) | — |
+| 9 | **P4c cross-day sub-post spread** — the LAST discriminator before the seeded random tie: among candidates equal on everything above, prefer whoever held THIS sub-position **least over the recent days** (spreads a soldier across the static posts across the week, e.g. ש.ג. Sunday → בונקר Wednesday). Purely additive — P4b (key 3) still owns the within-24h rotation. Also applied in the עמדות הגנה two-phase post distribution (§7 Level 2) as a secondary tie-break after the within-day even-spread | recent days |
 
 **Recruiting a soldier whose day is not yet settled** — pull-from-מנוחה,
 chain completions, replacement-pair halves — additionally applies the
@@ -512,7 +557,8 @@ where nights rank), weighted_hours second, per-position counts third.
   enter those daily rows with any rest at all (H8; התקפי gets the same via
   readiness). The order:
   1. honor Level-1 **locks**;
-  2. **H6b seat-rule pre-pass** (חפק) and **staff_all_roles crews** (חמל, מפלג);
+  2. **H6b seat-rule pre-pass** (חפק) and **staff_all_roles crews** (מפלג;
+     חמל is manual-only / `is_scheduled=false` → skipped, never auto-filled);
   3. **closed-list pre-pass**: every `candidate_pool` position (H6-pool —
      קצין מוצב) is staffed now, from its fixed list only, by the pool's
      fairness rotation — BEFORE the מגן-commander reservation, continuity, or
@@ -561,7 +607,21 @@ where nights rank), weighted_hours second, per-position counts third.
      normal flow;
   8. demand-driven fill in a fixed order (קצין מוצב → סיור → התקפי → מגן →
      עמדות הגנה → תורנים; seat-rule and staff positions were already staffed
-     by their pre-passes), in **two passes**: pass A reserves the HARD role
+     by their pre-passes).
+     **Sunday exception** (owner decision, 2026-07-26): on a Sunday the order
+     is קצין מוצב → **מגן** → סיור → התקפי → עמדות הגנה → תורנים. Every other
+     day step 6 has already reserved the מגן crew, so its slot in this list
+     hardly matters; a Sunday resets continuity and builds the crew from
+     scratch, and filling it after סיור/התקפי would make it pick its anchor
+     מחלקה out of a pool those positions already thinned — the single-מחלקה
+     core then misses its flex min and the crew comes out mixed. Filling it
+     first keeps every מחלקה whole for the anchor choice. This does not
+     re-open the 2026-07-20 "מגן held 12 while תורנים sat empty" bug: the pass
+     only fills מגן to its template demand (10) — surplus is still absorbed
+     in step 9, after every position is staffed. It is also a no-op for pass
+     A, since מגן has no `commander_first_seat`, `group_size` or `driver_qual`
+     and therefore no hard quota.
+     The fill runs in **two passes**: pass A reserves the HARD role
      needs for ALL positions first — per position the **commander quota**
      (one per commander-first slot start; התקפי: one per `group_size` group =
      2) and the **H6d driver quota** (one qualified driver per distinct slot
@@ -605,7 +665,9 @@ where nights rank), weighted_hours second, per-position counts third.
   **no post bias**; phase 2 then distributes the window's soldiers to the
   concrete posts (שג/בונקר/מזרחית/דרומית) where the ONLY consideration is
   **even spread**: a soldier rotates through all posts and never repeats the
-  same post within the same 24h round when an alternative exists. Non-static
+  same post within the same 24h round when an alternative exists; when several
+  posts are equally fresh today, a cross-day tie-break (P4c) prefers the post
+  the soldier held **least over the recent days**. Non-static
   positions keep the single-phase per-slot fill, with P4b as the in-cascade
   rotation mechanism. **Scarce-role preservation** (future-looking): a regular
   seat prefers **non-commanders** when a LATER slot of the position still has
@@ -746,8 +808,12 @@ or **warning** tagged with a rule key:
   non-commander; a commander-first-seat slot with no commander-seat row
   (slots covered only by import rows are excused — imports carry no seat
   metadata).
-- `driver` — H6d: a סיור/התקפי crew with no qualified נהג דוד/נהג טיגריס:
-  error (all-import crews excused).
+- `driver` — H6d: a crew with no qualified נהג דוד/נהג טיגריס. **Error** when a
+  driver was available/skipped or the shift priority was violated (a
+  lower-priority crew kept a driver while a higher-priority one went without);
+  **warning** when the driver pool is genuinely exhausted AND only the
+  lowest-priority (latest-starting) crews lack a driver (H6d shortage
+  priority). All-import crews excused.
 - `consecutive_nights` — R6 over a 7-day lookback: 2 nights in a row =
   warning, 3+ = error (`night_exempt` duties excluded).
 - `static_streak` — T3: a 3rd consecutive static-only day: warning.
@@ -822,13 +888,18 @@ Principles:
   `valid_to = day_start(D+1)`; null = open-ended, the legacy "onward"
   behavior); `start_time` (nullable — null applies to every slot of the
   position, set matches only the slot whose template starts at that time,
-  e.g. just the 18:00 סיור shift). **`seats = 0` cancels the matched
-  slot(s)**: `day_slots` omits them entirely, so the generator redistributes
-  the crew and the validator raises no coverage gap. When several rows match
-  a slot, the most specific wins: a `start_time` match beats a position-wide
-  row, then the latest `valid_from`, then the newest row. Primary use:
-  manually removing or resizing a specific shift on a specific day *before*
-  generating, instead of hand-editing assignment rows.
+  e.g. just the 18:00 סיור shift); `slot_template_id` (nullable FK, on delete
+  cascade — targets **one specific template row**, so a `(position, start_time)`
+  pair that a cancelled permanent template and its day-scoped replacement share
+  can still be resized/cancelled independently; the מבנה יומי tab writes these).
+  **`seats = 0` cancels the matched slot(s)**: `day_slots` omits them entirely,
+  so the generator redistributes the crew and the validator raises no coverage
+  gap. When several rows match a slot, the most specific wins: a
+  `slot_template_id` match beats a `start_time` match beats a position-wide
+  row, then the latest `valid_from`, then the newest row (unique key
+  `(position_id, valid_from, start_time, slot_template_id)`, nulls not
+  distinct). Primary use: manually removing or resizing a specific shift on a
+  specific day *before* generating, instead of hand-editing assignment rows.
 - **Position behavior flags live in `positions.config` jsonb**: `daily`
   (sleeping 14:00–14:00 day duty — implies `night_exempt` + `full_rest_after`
   + `yomi_display`, each overridable by an explicit key; e.g. תורנים sets
@@ -922,8 +993,12 @@ stored rows are **data facts** and are not rewritten:
   normalized-name match (quotes stripped, spaces collapsed, single-letter edit
   distance within the same platoon); the roster spelling is kept and history rows
   re-pointed. Every merge is logged.
-- `unavailability` is built from the roster's date-status matrix: consecutive
-  non-נוכח runs become one period row anchored to 14:00 day boundaries.
+- **Presence is DB-owned (2026-07-26)**: `unavailability` is maintained in the
+  **נוכחות tab** (§12), not by the sheet. Building it from the roster's
+  date-status matrix (consecutive non-נוכח runs → one period row, boundaries at
+  the bus hour of each boundary's own calendar day: 08:00 on Sunday, 06:00
+  otherwise) is `cleanup.py --rebuild-presence`, opt-in and for the initial
+  import of a fresh database only.
 
 ## 12. Operational UI (viewer app)
 
@@ -931,13 +1006,60 @@ Two officer-only tabs (client-side gating via COMPANY_ROLES, consistent with the
 existing סיכום פלוגתי tab) and one soldier-facing tab added to the existing
 React viewer:
 
-- **שבצק חדש (טיוטה)** — daily draft view. Date picker with optional multi-day range;
+- **צור שבצק** — daily draft view. Date picker with optional multi-day range;
   renders drafts from the DB in the same station-group layouts as the sheet-based
   שבצק tab. Shows per-day status badge, per-assignment violation markers, the day's
   validation panel (errors/warnings), and the מנוחה list. A **צור שבצ"ק** button
   triggers generation for the selected day(s) via the API; regeneration replaces
-  only `source in ('auto','chain')` unlocked rows. Days remain in the draft family
-  (`generated`) — approval/publish and sheet sync-out are explicitly out of scope.
+  only `source in ('auto','chain')` unlocked rows. Each generated day stores its
+  self-contained generation report HTML in `schedule_days.report_html` (built at
+  persist time from the pure `report.ts` builders); the tab opens it in a new tab
+  after generation and offers a **פתח דוח** link per day (`GET /api/report?day=`).
+  **Manual replacement**: clicking a name here opens a replacement picker (the
+  same searchable single-select body the חמל tab uses, `SoldierPicker`), not
+  the live tab's phone card. The clicked assignment is identified by day +
+  soldier + the slot's time label — the same key the `meta` map uses, and the
+  label is recomputed server-side with the very same `labelSlot()`. A driver
+  or commander seat (rationale `driver_seat`/`driver_quota`,
+  `commander_seat`/`commander_quota`/`chain_commander`/`magen_commander`)
+  defaults the list to qualified candidates only, with a checkbox that reveals
+  the full roster. `PUT /api/draft {day,time,fromSoldierId,toSoldierId}`
+  rewrites those rows to `source='manual', locked=true` with a
+  `manual_replace` rationale, pins the incoming soldier's `day_assignments`
+  bucket (manual+locked) and re-buckets the outgoing one (a position he still
+  holds, else מנוחה unlocked) — so a regeneration re-seats the replacement at
+  the same position/window/seat (Level 1 `ctx.lockedDay`, Level 2
+  `lockedInSlot`) and re-plans the replaced soldier freely. Refused when the
+  label matches no row (404) or the incoming soldier already sits in that very
+  seat (409). A **published day is editable** — one seat may be fixed without
+  unpublishing (only the wholesale operations, regenerate and מחק טיוטה, stay
+  frozen). **Double-booking resolution**: the incoming soldier already holding a
+  BLOCKING row over the window is a 409 naming where he is; the tab detects it
+  first, client-side, from the day's groups + `meta.blocksOverlap` (overlap in
+  14:00-anchored minutes; `יומי` spans the day; readiness overlays never
+  clash — `src/lib/draftConflicts.ts`) and asks the officer to vacate the named
+  seat. Approving sends `force:true`, and the swap deletes those rows **before**
+  seating him, in one transaction (`no_double_booking` can never fire); the
+  vacated seats come back as לא מאויש, the response lists them, and his
+  Level-1 bucket on any other day an evicted row belonged to is re-pointed.
+  **Publish flow**: a `generated` day can be **פרסם**ed → `published`
+  (`schedule_days.approved_by` = the officer's email, `published_at` = now);
+  published days keep their rows and stay visible in the draft view with the
+  פורסם marker — regeneration and draft deletion are refused with a 409, a
+  single manual replacement is allowed — with an admin
+  **בטל פרסום** action reverting to `generated`. **Stale-draft cleanup** runs
+  lazily on read: a past day whose 14:00→14:00 cycle has ended, was never
+  published, and has a published successor (a `published` row on that day or a
+  later one) has its regenerable `auto`/`chain` rows dropped (locked/manual rows
+  kept; an emptied day reverts to `draft`) — days with no published successor are
+  kept as a fallback, published days are never touched. **מחק טיוטה**
+  (`DELETE /api/draft?day=`) is its manual, unconditional twin: the day's whole
+  draft goes — `auto`/`chain` **and** the officer's manual/locked rows — keeping
+  `import` history and manual-only positions (`is_scheduled=false`: חמל, חפק2,
+  משימות שונות); the day reverts to `draft` with `generated_at`, the stored
+  report and the validation snapshot cleared, unless imported history remains.
+  Refused on a published day (409). Sheet sync-out remains
+  out of scope.
 - **הוגנות** — weekly compliance + fairness dashboard. Date picker selects the
   schedule week (Sunday-anchored — matching the weekly fairness scope, §6.1).
   Top: summary strip (total
@@ -973,10 +1095,90 @@ React viewer:
   generated-day freeze is **bypassed with a warning** instead of a block: the
   request is saved/removed and the UI flags that the affected day's שבצ"ק
   must be regenerated for it to take effect.
+- **חמל** — visible to `shavtzak_admins` **OR** any soldier whose role is a חמל
+  staff role (the חמל position's `config.staff_all_roles`), matched to the
+  signed-in user by `soldiers.email`. A date-range picker (like the draft tab)
+  over the **role-חמל soldiers only** (the חמל position's `staff_all_roles`; not
+  the whole roster, and not filtered by presence). The day is a **contiguous
+  tiling** of the חמל **10:00→10:00** cycle — 3 default windows (10:00-18:00,
+  18:00-02:00, 02:00-10:00) that always cover the whole day with no gaps/overlaps,
+  starting EMPTY (חמל is manual-only — no auto-fill). Editing a shift's end moves
+  the shared boundary with the next shift (shrink one → the next grows); "הוסף
+  משמרת מ X עד Y" (a `to <= from` window ends next-day) inserts at the correct
+  sorted place and re-tiles the neighbors; removing a shift merges its span into
+  the adjacent one. The officer picks **one soldier per shift** (searchable
+  single-select). The tiling math is a pure, tested client helper
+  (`src/lib/hamalTiling.ts`); windows keep DISTINCT start times (day-scoped
+  `slot_templates` are keyed by start_time). Picks save immediately (no draft) as locked/manual
+  per-shift חמל rows. **Storage — on-demand shifts = day-scoped `slot_templates`**
+  (`valid_from = valid_to = the day`; the generic "add a shift on this one day"
+  mechanism, reused later for מגן): a day stores template rows when its window
+  list is customized away from the defaults OR it carries picks; a virgin
+  default day stores none and shows the empty defaults. The picks themselves are
+  ordinary `shift_assignments` rows whose `period` is the concrete shift window
+  (computed like the `day_slots` lateral). The default windows come from the
+  `hamal_default_shifts` config row or the `api/hamal.ts` fallback. An empty
+  custom window persists (its template row) even with no picks; a legacy
+  full-day row surfaces as a derived 14:00-14:00 window. Backed by
+  `api/hamal.ts` (GET picks+structure+roster / PUT replace a day's shifts /
+  DELETE virgin-reset).
 
-Data flows through three Vercel serverless endpoints (`api/draft.ts`,
-`api/fairness.ts`, and `api/exit-requests.ts` — GET list / POST create /
+Data flows through the Vercel serverless endpoints `api/draft.ts`,
+`api/fairness.ts`, `api/exit-requests.ts` (GET list / POST create /
 PATCH edit / DELETE cancel over `exit_requests`; admin mutations are
-parameter-gated, free-form-time variants of the same handlers)
+parameter-gated, free-form-time variants of the same handlers),
+`api/report.ts` (GET the stored generation report), `api/publish.ts` /
+`api/unpublish.ts` (POST the publish/unpublish transitions), and
+`api/hamal.ts` (GET חמל per-shift picks + structure + roster / PUT replace a
+day's shifts / DELETE virgin-reset),
 reading the scheduler DB via `SCHEDULER_DATABASE_URL`; endpoints are open like the
-existing sheet endpoints (no server-side auth) per current app security model.
+existing sheet endpoints (no server-side auth) per current app security model —
+the publish flow trusts the officer email supplied by the client.
+
+- **מבנה יומי tab** (`api/day-structure.ts`, admin-only) — overrides the SHIFT
+  STRUCTURE of **one specific schedule day** without hand-written SQL: add /
+  remove / rename a position group (= `positions` row) and its positions
+  (= `sub_positions`), and change a shift's start/end/seats — **no cross-shift
+  validation** (unlike חמל tiling), **no soldier lists**. It reads/writes the
+  existing slot infrastructure, so the generator picks up the edited structure
+  straight from `day_slots` (no `scheduler/src` change). **Scope filter**
+  `is_scheduled AND mission_class <> 'rest' AND NOT (config ? 'staff_all_roles')`
+  — it never touches חמל / מפלג / rest positions. Storage, per change:
+  a **seat change** → a template-targeted single-day `seat_override`
+  (`slot_template_id` = the permanent template, `valid_from = day`,
+  `valid_to = day_start(day+1)`, `note 'מבנה יומי'`); a **removed** shift → the
+  same with `seats = 0`; an **added / moved / duration-changed** shift → a
+  **day-scoped `slot_templates`** row (`valid_from = valid_to = day`) — which may
+  share `(position, sub, start_time)` with a `seats=0`-cancelled permanent
+  template (the day-scoped **exemption** on `slot_templates_no_overlap`,
+  `WHERE valid_from IS DISTINCT FROM valid_to`), so `day_slots` emits exactly one
+  slot for a duration-only change; a **new group** → a `positions` row
+  (`mission_class='static'`, `is_scheduled=true`, `id = max+1`) whose shifts are
+  day-scoped templates only. **Rename = day-scoped delete + create** (no global
+  renames): the renamed item is sent with a null id + the new name (a fresh
+  row); the old id, absent from the payload, has all its slots cancelled for the
+  day; a new name colliding with an existing position/sub → **409**. The **PUT is
+  a declarative whole-day replace** — it first WIPES this tab's prior writes for
+  the day (single-day template-targeted overrides + in-scope day-scoped
+  templates) then re-diffs the desired structure against the permanent baseline
+  keyed by `(subId, start_time, durationMinutes)`; it is idempotent, and saving
+  the default structure back leaves **zero** rows. `DELETE ?day=` resets a day to
+  the default (wipe only). The tab has NO autosave: an explicit Save (top +
+  bottom) PUTs; leaving the tab / reloading / changing the date while there are
+  unsaved edits prompts save/discard/cancel (an `App`-level leave guard).
+- **נוכחות tab** (`api/presence.ts`, admin-only) — the presence matrix
+  (soldier × **calendar** day) and its editor; since 2026-07-26 the DB is the
+  source of truth for `unavailability` (§11). Editable states = the
+  `unavailability` kind CHECK constraint ∩ the **full-day** kinds
+  (חופש/מחלה/לא מגויס/שחרור/גיוס, both מגויס spellings collapsed onto the
+  canonical one) + נוכח; the partial kinds are display-only and are replaced
+  whole when their day is edited. `exit_requests` (§9/H9) is out of scope.
+  `PUT {soldier_id, days:[{day,status}]}` is a **declarative per-day replace**
+  over the touched range: consecutive same-kind days become ONE row
+  `[firstDay bus, lastDay+1 bus)` (bus = 08:00 Sunday / 06:00 otherwise, per the
+  boundary's own day), rows covering a touched day are deleted and re-emitted so
+  runs merge with adjacent same-kind rows and a נוכח day splits a block — one
+  transaction, pure `planPresenceWrite()` (`src/lib/presencePlan.ts`). Reading
+  is the inverse `presenceMatrix()` in the same module: a full-day row occupies
+  `lower.date .. upper.date - 1`, a partial row its `lower.date`, ties by
+  overlap. Explicit save + leave guard.

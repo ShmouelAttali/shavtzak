@@ -57,6 +57,16 @@ the numbered steps of the day page's ניתוח התהליך (process) section. 
 - **מפלג position** (id 14): רס"פ/סרס"פ/מנהלה staff — daily 14:00–14:00 row,
   restricted to it (staff_all_roles); presence follows the sheet's מפלג tab
   סטטוס (לא מגיע → `is_schedulable=false`; that was the בנימין קיי bug).
+- **Staffing the two role-crews** (there is NO מפלג tab and no members table):
+  **מפלג** = set תפקיד to רס"פ/סרס"פ/מנהלה in מצבת חיילים + keep
+  משובץ בשבצ"ק → the generator seats them daily and NOWHERE else; out for one
+  day = נוכחות, permanently = uncheck משובץ בשבצ"ק, one-off swap = click the
+  name in צור שבצק. **חמל** = תפקיד `חמל` (that alone puts them in the חמל
+  tab's picker AND grants the tab via `api/admins.ts`), then pick them per
+  shift in the חמל tab. `api/admins.ts` must pin its join to THE חמל position
+  (marker `staff_all_roles ? 'חמל'`, as `api/hamal.ts` does) — unscoped, it
+  handed the חמל tab to מפלג's staff too (fixed 2026-07-26,
+  `tests/admins.test.ts`).
 - **מגן commander**: weekly decision persisted in `magen_commander_history`
   (latest valid_from ≤ day wins; was `config.magen_commander` until the
   2026-07-19 FK migration); generator reserves him + anchors the crew's
@@ -69,7 +79,7 @@ the numbered steps of the day page's ניתוח התהליך (process) section. 
 
 ## Current state (2026-07-17)
 
-Everything below is implemented, tested (143 tests: `scheduler/` 128 + root 15),
+Everything below is implemented, tested (both suites — see Testing policy),
 and live against the shared Supabase project:
 
 - **Scheduler DB** on Supabase (schema in `scheduler/db/schema.sql`, template
@@ -94,12 +104,191 @@ and live against the shared Supabase project:
   `level2.ts` (slot fill + rationale) → `persist.ts` (write SQL), with shared
   primitives in `rank.ts` / `rest.ts` / `pairs.ts` / `text.ts` / `config.ts`.
   P5 driver-fit + מ"כ spread and R3 גשש effective-rest are implemented.
-- **Viewer app**: two officer-only tabs — שבצק חדש (טיוטה) (date range +
-  צור שבצ"ק button → `api/draft.ts`) and הוגנות (Sunday-anchored week,
+- **Viewer app**: two officer-only tabs — צור שבצק (date range +
+  צור שבצ"ק button → `api/draft.ts`; clicking a name opens the manual
+  replacement picker — `PUT /api/draft` writes a manual+locked row the
+  generator then re-seats verbatim. A **published day is editable** (owner
+  2026-07-26): only the wholesale ops (regenerate, מחק טיוטה) stay frozen at
+  409. **Double-booking is resolved, not refused**: the client finds the
+  overlap itself (`src/lib/draftConflicts.ts` — 14:00-anchored label spans,
+  `יומי` = whole day, `meta.blocksOverlap=false` readiness overlays never
+  clash), shows it as a ⚠ per candidate in the picker, and confirms naming the
+  seat to vacate; approving sends `force:true` and the server deletes those
+  rows BEFORE seating him in one transaction (order matters —
+  `no_double_booking`), returning the evicted seats (now לא מאויש).
+  **A replacement never blocks the screen** (owner 2026-07-26): the popup closes
+  on the pick and the round trip is shown ON the affected seats — the clicked
+  seat plus every force-vacated one (`pendingSeatKeys` → `useDraft.pendingSeats`
+  → `PendingSeatsCtx`) render a spinner and swallow clicks, so several
+  replacements can run at once and only the rows actually being moved are
+  locked (a day with pending seats still blocks its own wholesale buttons).
+  A failure surfaces as a dismissible banner, not in the (already closed) popup;
+  concurrent reloads are ordered by a sequence guard in `useDraft.load`.
+  **מחק טיוטה** = `DELETE /api/draft?day=`,
+  the manual twin of the stale-draft cleanup — drops the day's whole draft incl.
+  manual/locked edits, keeps `source='import'` history and manual-only positions
+  (`is_scheduled=false` → חמל), reverts the day to `status='draft'` and clears
+  the stored report; published days are frozen (409, unpublish first);
+  its ValidationPanel shows the live
+  validator errors/warnings with rule-code chips, matching the report's
+  חריגות card) and הוגנות (Sunday-anchored week,
   compliance dashboard: one exceptions-only card per SPEC rule fed by running
   the validator over the window's days, plus fairness-spread / position-balance
-  cards → `api/fairness.ts`). Tab visibility also
-  granted by the `shavtzak_admins` DB table (`api/admins.ts`).
+  cards → `api/fairness.ts`). **הוגנות draft scope** (owner 2026-07-26): the tab
+  counts the already-scheduled **published** work by default; a `כלול טיוטות`
+  checkbox (`?drafts=1`) factors drafts in, where a day holding a draft
+  contributes its draft INSTEAD of its published rows — never both, so nothing
+  is double-counted. `locked` rows are human truth and count in either mode.
+  Implemented as `soldier_fairness(as_of, include_drafts boolean default true)`
+  (delta `db/fairness-draft-scope-2026-07-26.sql`); the default keeps `load.ts`
+  and the generator on the draft-inclusive behaviour they need, and the old
+  1-arg signature is DROPPED — leaving both makes a 1-arg call ambiguous
+  ("function soldier_fairness(date) is not unique"). Tab visibility also
+  granted by the `shavtzak_admins` DB table (`api/admins.ts`). Plus a חמל tab
+  (per-shift manual staffing, 10:00-cycle tiling), a **מבנה יומי** tab (admin,
+  per-DAY shift-structure editor), a **מצבת חיילים** tab (admin, roster editor)
+  and a **נוכחות** tab (admin, presence editor) — all below. All restricted tabs
+  carry a 🔒.
+- **מבנה יומי tab** (2026-07-26, `api/day-structure.ts` +
+  `src/components/DayStructure.tsx` + `useDayStructure`): admin-only editor for
+  ONE schedule day's shift structure (add/remove/rename position group =
+  `positions` row + its positions = `sub_positions`; change shift start/end/seats;
+  NO cross-shift validation, NO soldier lists). Declarative whole-day-replace PUT
+  over the EXISTING slot infra (generator reads `day_slots` unchanged): seat
+  change → template-targeted single-day `seat_override`; removed → `seats=0`;
+  added/moved/duration-changed → day-scoped `slot_templates`; new group →
+  `positions` row (static, is_scheduled); rename = day-scoped delete+create
+  (collision → 409). Scope excludes חמל / מפלג / rest. Explicit save (no
+  autosave) + leave guard. UI: groups are **collapsed by default** (click a card
+  header to open; כווץ הכל/הרחב הכל toggles all — pure `anyExpanded`/`toggleAll`,
+  `tests/day-structure-collapse.test.ts`; a reload re-mints uids, re-collapsing
+  everything) and every add button (קבוצה/תפקיד/משמרת) sits at the TOP of what it
+  appends to. Schema delta `db/day-structure-2026-07-26.sql`
+  (seat_overrides.slot_template_id + day-scoped exemption on
+  slot_templates_no_overlap) — mirrored in schema.sql and applied to Supabase.
+  Its "remove a shift" path (a `seats=0` override) was **rejected in
+  production** until 2026-07-26: `seat-overrides-hourly-2026-07-19.sql` added
+  `seats_nonneg (>= 0)` but never dropped `seats_check (> 0)` from
+  `fk-migration-2026-07-19.sql`, so the stricter check kept winning on the live
+  DB while every schema.sql-built database accepted `seats=0`. Dropped by
+  `db/seat-overrides-drop-stale-check-2026-07-26.sql` (applied). Lesson: a
+  delta that RELAXES a constraint must drop the old one — and only a live-vs-
+  `schema.sql` diff catches it, since tests rebuild from the baseline.
+- **כרמל חטיבה night = ONE 8h window** (owner 2026-07-26): the template's
+  6×4h grid was never real — every imported day since 28/06 writes the night as
+  one 22:00→06:00 row manned by exactly the עמדות הגנה 18:00-22:00 crew, so the
+  22:00-02:00 crew gets **no standby at all**. Template 22:00 → 480 min, the
+  02:00 windows and T4a chain rule 6 (כרמל 02:00 ← עמדות 22:00) are gone. Delta
+  `db/carmel-night-8h-2026-07-26.sql` (applied), baseline in `db/seed.sql`,
+  SPEC §T4a + positions catalog + LOGIC.he.md updated.
+- **Report ↔ צור שבצק tab alignment** (2026-07-26): both surfaces derive
+  every warning/error from the same code — the tab re-runs `validateDay` live
+  on GET (same findings as the report's חריגות card), and shared pure helpers
+  keep the rest in lockstep: `requiredSeats()` (config.ts — flex coverage
+  math), `staffedSeats()` (coverage.ts — how many of a slot's seats are
+  actually manned; both used by validate.ts §10 + api/draft.ts's לא-מאויש
+  markers) and `violationCoveredByRationale()` (rationale.ts — the
+  raw-violation↔caveat dedup, used by RationalePopup + report cells).
+  **Coverage is counted by OVERLAP, never by the rendered time label**: a real
+  row sliced differently from its template still staffs it. api/draft.ts used
+  to match labels, so a כרמל/גשש night written as one 8h row against 4h
+  template slots showed phantom "לא מאויש" over a fully manned shift while the
+  validator saw nothing wrong (fixed 2026-07-26 — 87 false markers across
+  24/06–26/07, plus 8 real gaps the tab had been hiding). The generator's free-text
+  issues ("אין מועמד ל...") are deliberately NOT shown in the tab — they are
+  process narration and live only in the stored report (פתח דוח button). Any
+  new rule belongs in validate.ts (message shown in both) or rationale.ts
+  (rendered in both).
+- **מצבת חיילים tab** (2026-07-26, `api/roster.ts` → **`/api/roster`**
+  (`/api/soldiers` is the SHEET endpoint) + `src/components/Roster.tsx` +
+  `useRoster` + pure `src/lib/rosterFilter.ts`): admin-only roster editor —
+  read-only table + per-row edit popup + `+ חייל חדש`. Edits `soldiers`
+  (מספר אישי/שם/מחלקה/תפקיד/רובאי/פלאפון/מייל/הערות/is_schedulable),
+  `soldier_qualifications`, `soldier_allowed_positions` (H6c) and that
+  soldier's `position_candidates` rows, plus an `אדמין שבצ"ק` checkbox writing
+  `shavtzak_admins` by email (replaces hand-editing it in the dashboard).
+  POST/PUT are a declarative whole-soldier replace echoing the full GET.
+  **תפקיד and מחלקה are CLOSED dropdowns** (owner 2026-07-26) — free text let a
+  typo silently break role/platoon matching in the generator (`staff_all_roles`
+  restriction, seat rules, `isCommanderRole`, and the two EXACT-match SQL paths
+  `api/admins.ts` / `api/hamal.ts`). The API enforces it: PUT/POST 400 on a
+  role/platoon outside the payload's own catalog ('' role stays legal → NULL).
+  `roles` = observed ∪ `ROLE_CATALOG` (the commander spellings, which can't be
+  derived — `crewOrder.ts`'s `DEFAULT_COMMANDER_ROLES` are *normalized*) ∪ the
+  roles the DB declares (`staff_all_roles` + `seat_rules[].roles`, same sources
+  as validate.ts's `config_roles` lint), deduped by `normalizeName` with the
+  OBSERVED spelling winning (`mergeRoleCatalog`). That union is load-bearing:
+  **setting תפקיד is the only way into חמל / מפלג**, so an observed-only list
+  would make them unassignable whenever nobody holds the role. `platoons` has no
+  catalog — a genuinely NEW מחלקה needs SQL (stated in the popup).
+  **A qualification is NOT a role** (owner 2026-07-26): the sheet's תפקיד column
+  mixes the two and `import_history.py` copies it verbatim, so `soldiers.role`
+  held נהג דוד / נהג טיגריס / חובש / נגב / קלע / מט"ב for 15 soldiers who ALL
+  also carried the matching `soldier_qualifications` row — duplication that
+  surfaced in the closed dropdown as if those were roles. `mergeRoleCatalog`
+  now subtracts the qualification catalog (`qualifications` = `QUAL_CATALOG` ∪
+  in use) from the OBSERVED side only; `declared`/`ROLE_CATALOG` are
+  authoritative and never filtered — note חפק's חובש / נהג דוד seats are
+  declared as `qual`, never as a role, so nothing legitimately declares one.
+  The 15 became לוחם (`db/role-not-qualification-2026-07-26.sql`, applied,
+  guarded on the qual row already existing). Leaves exactly 11 roles: מ"פ,
+  סמ"פ, מ"מ, סמל, מ"כ, מ"ח, לוחם, חמל, רס"פ, סרס"פ, מנהלה. A fresh sheet import
+  of a NEW soldier can still land a qual in תפקיד — they'd 400 in the editor,
+  which surfaces the bad data rather than blessing it.
+  Filters: active/removed, free text (name/מס' אישי/mail), תפקיד (+ מפקדים
+  pseudo-option), הסמכה (+ closed-list and מוגבלי-עמדות pseudo-options) —
+  the qualification filter reuses `hasQualification()` so a qual spelled only
+  in the תפקיד text still matches, and the popup warns when unchecking such a
+  qual is a no-op. **Removal is soft**: `הסר חייל` toggles a mode showing an ✕
+  per row → sets `soldiers.archived_at`; the חיילים שהוסרו view restores.
+  Archived ⇒ out of every roster read AND of `shavtzak_admins`. Schema delta
+  `db/roster-tab-2026-07-26.sql` (`soldiers.archived_at` + `presence()` /
+  `soldier_fairness()` filtered) — mirrored in schema.sql and **applied to
+  Supabase 2026-07-26**.
+  Unavailability is deliberately NOT edited here — it has its own **נוכחות**
+  tab (below).
+- **נוכחות tab** (2026-07-26, `api/presence.ts` → `/api/presence` +
+  `src/components/Presence.tsx` + `usePresence` + pure
+  `src/lib/presencePlan.ts`): admin-only presence editor over `unavailability`.
+  **Source-of-truth decision (owner, 2026-07-26): presence is DB-OWNED** — sheet
+  re-imports must not rebuild it, so `import/cleanup.py` part 3 is now behind
+  `--rebuild-presence`, default OFF (initial imports only; the flag is also
+  documented in the `supabase-access` skill). No schema change.
+  Editable states are **full-day only** and DERIVED FROM THE DB: the
+  `unavailability` kind CHECK constraint ∩ the full-day kinds
+  (חופש/מחלה/לא מגויס/שחרור/גיוס, the two מגויס spellings collapsed onto the
+  canonical one), prefixed by נוכח. The partial kinds (יציאה בבוקר / ב14:00 /
+  בערב, חזרה ב14:00 / בערב, short-exit יציאה) are display-only — shown greyed,
+  and replaced wholesale when their day is edited. `exit_requests` is untouched.
+  **PUT is a declarative per-day replace for ONE soldier** (`{soldier_id, days:
+  [{day,status}]}`, 400 on a partial/unknown status): consecutive same-kind days
+  become ONE row `[firstDay bus, lastDay+1 bus)` with `bus(d)` = 08:00 on Sunday
+  / 06:00 otherwise (cleanup.py's mapping, per the boundary's OWN day); rows
+  covering a touched day are deleted and re-emitted, so runs merge with adjacent
+  untouched same-kind rows and a נוכח day splits a block in two — all in one
+  transaction, all computed by the pure `planPresenceWrite()`.
+  Two views (per-soldier with a "מ־X עד־Y סמן כ־" bulk action, per-date matrix
+  with a click-a-cell popup), the מצבת חיילים filter bar reused verbatim
+  (extracted to `src/components/RosterFilters.tsx`), explicit save + leave guard.
+  **CALENDAR-day semantics**: the read direction is `presenceMatrix()` in the
+  same pure module, NOT the `presence()` DB function — that one buckets by
+  `day_range()` (the 14:00→14:00 SCHEDULE day), so a one-day block would light
+  up two cells. `presence()` has no other caller.
+- **Level-1 load-order independence** (2026-07-26, found via the tab above):
+  adding `and archived_at is null` to `load.ts`'s roster query — a predicate
+  removing ZERO rows — changed generated schedules, because the query had no
+  `ORDER BY`, its plan-dependent row order became the `state` Map order, and
+  three decisions read that order raw. Fixed: `order by s.id` in the query;
+  התקפי's group anchors `rankGroup`-ordered; the same-platoon anchor breaks
+  count ties by מחלקה name; seat-rule role matches break same-role ties by id.
+  Pinned by `tests/magensunday.test.ts` (reverses the roster Map, asserts an
+  identical partition). **Any new `[...state.values()]` whose order feeds a
+  decision needs its own tie-break.** See SPEC §H2b.
+- **Sunday מגן fill order** (owner 2026-07-26): on a Sunday continuity is off
+  and the crew is rebuilt, so מגן is demand-filled FIRST (right after the
+  closed list) while every מחלקה is whole — otherwise it anchors on a pool
+  סיור/התקפי already thinned. Weekdays keep the old order (continuity has
+  already reserved the crew). SPEC §7 step 8, LOGIC.he.md step 8.
 - **Local dev**: `npm run dev:api` (port 3001) + `npm run dev` (vite 5173);
   env in `.env`/`.env.local` (git-ignored). Vercel prod needs
   `SCHEDULER_DATABASE_URL` set in project env — NOT done yet; nothing pushed

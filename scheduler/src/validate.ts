@@ -5,9 +5,10 @@ import {
 } from './time.js';
 import { normalizeName as nrm, hasQualification } from './text.js';
 import { isFullRestExempt, isCountedNight } from './rest.js';
-import { loadTunables, effectiveConfig, isShiftPosition, isNightExitWindows } from './config.js';
+import { loadTunables, effectiveConfig, isShiftPosition, isNightExitWindows, requiredSeats } from './config.js';
 import { roleFlags } from './load.js';
 import { partialWindow } from './pairs.js';
+import { staffedSeats } from './coverage.js';
 import type { SeatRule } from './model.js';
 
 export interface Finding {
@@ -52,7 +53,8 @@ export async function validateDay(day: string): Promise<Finding[]> {
      where period && tsrange(day_start('${day}'), day_start('${day}') + interval '1 day')`,
     `select da.soldier_id, p.name pos_name from day_assignments da
      join positions p on p.id = da.position_id where da.day = '${day}'`,
-    `select id, full_name, is_schedulable, coalesce(role,'') role from soldiers`,
+    `select id, full_name, is_schedulable, coalesce(role,'') role from soldiers
+     where archived_at is null`,
     // H6c whitelist (soldier_allowed_positions), as position NAMES per soldier
     `select sap.soldier_id, array_agg(p.name) as names
      from soldier_allowed_positions sap join positions p on p.id = sap.position_id
@@ -578,26 +580,16 @@ export async function validateDay(day: string): Promise<Finding[]> {
     if (!p || !p.is_scheduled || p.mission_class === 'rest') continue;
     if (p.config?.staff_all_roles) continue;   // variable crew — seats is a cap, not demand
     const period = parseRange(ds.period);
-    // draft rows carry the sub-position; imported history rows don't — count
-    // null-sub rows toward any sub-slot they overlap so published days aren't
-    // falsely flagged. A seat may be covered by a replacement PAIR (H1) — two
-    // rows splitting the slot at the handover — so staffing is the MINIMUM
-    // concurrent row count over the slot window (a split-covered seat counts
-    // as staffed; a partially-covered one does not).
-    const covering = today
-      .filter((r) => r.positionId === ds.position_id
-        && overlaps(r.period, period)
-        && (r.subName === null || nrm(r.subName) === nrm(ds.sub_name ?? '') || ds.sub_name === null))
-      .map((r) => [Math.max(r.period[0], period[0]), Math.min(r.period[1], period[1])] as [Minutes, Minutes]);
-    const points = [...new Set([period[0], ...covering.flat()])]
-      .filter((t) => t >= period[0] && t < period[1]);
-    const n = Math.min(...points.map((t) =>
-      covering.filter((c) => c[0] <= t && t < c[1]).length));
+    // Staffing is counted by the shared helper (coverage.ts) — api/draft.ts's
+    // לא-מאויש markers call the very same code, so the tab and this rule can
+    // never disagree about an empty seat.
+    const n = staffedSeats(period[0], period[1], ds.sub_name ?? null,
+      today.filter((r) => r.positionId === ds.position_id)
+        .map((r) => ({ start: r.period[0], end: r.period[1], subName: r.subName })));
     // flex positions (config.flex_seats, e.g. מגן 10-12, סיור 3-4/shift):
     // the generator may staff below the template seat count down to the flex
-    // minimum — coverage is judged against that minimum
-    const flexMin: number | undefined = posConfig.get(ds.position_id)?.flex_seats?.min;
-    const required = flexMin !== undefined ? Math.min(ds.seats, flexMin) : ds.seats;
+    // minimum — coverage is judged against that minimum (shared helper)
+    const required = requiredSeats(ds.seats, posConfig.get(ds.position_id));
     if (n < required) {
       findings.push({
         severity: 'error', rule: 'coverage',
@@ -691,7 +683,19 @@ export async function validateDay(day: string): Promise<Finding[]> {
   // ── 11c: H6d driver requirement — every crew of a position with
   // config.driver_qual (סיור → נהג דוד, התקפי → נהג טיגריס) must include a
   // qualified driver. Import rows predate the rule — crews that are entirely
-  // imported are excused. ──────────────────────────────────────────────────
+  // imported are excused.
+  //
+  // Driver-shortage PRIORITY (owner 2026-07-24): when נהג דוד are too few for
+  // every crew, the scarce drivers stay with the EARLIER-starting crews —
+  // noon (14:00) keeps its driver longest, then night (22:00), and the morning
+  // (06:00) crew is the first to go without. Chronological start order == this
+  // priority (14:00 < 22:00 < 06:00-next). A driverless crew is therefore only
+  // a WARNING when (a) the driver pool is genuinely exhausted — no idle
+  // qualified driver could have covered the crew's window — AND (b) the
+  // driverless crews are exactly the lowest-priority (latest-starting) ones. A
+  // driver that was available/skipped, or a lower-priority crew that kept a
+  // driver while a higher-priority one went without (priority violated), stays
+  // an ERROR. ────────────────────────────────────────────────────────────────
   for (const p of posRows as any[]) {
     const dq: string | undefined = posConfig.get(p.id)?.driver_qual;
     if (!dq) continue;
@@ -700,16 +704,40 @@ export async function validateDay(day: string): Promise<Finding[]> {
       if (r.positionId !== p.id) continue;
       (crews.get(r.period[0]) ?? crews.set(r.period[0], []).get(r.period[0])!).push(r);
     }
+    if (!crews.size) continue;
+    // shift priority = chronological start order (0 = keep a driver longest)
+    const rankOf = new Map([...crews.keys()].sort((a, b) => a - b).map((s, i) => [s, i]));
+    const crewHasDriver = (crew: Row[]) => crew.some((r) => hasQualification(
+      qualsBySoldier.get(r.soldierId) ?? [], soldierInfo.get(r.soldierId)?.role ?? '', dq));
+    // qualified drivers present today who are genuinely IDLE — no non-rest
+    // assignment anywhere today, so the daily cap did not already spend them on
+    // another crew; only such a driver could have covered a driverless crew
+    const busyToday = new Set(today.filter((r) => r.missionClass !== 'rest').map((r) => r.soldierId));
+    const idleDrivers = [...soldierInfo.keys()].filter((sid) => {
+      const info = soldierInfo.get(sid);
+      return !!info && info.is_schedulable && !busyToday.has(sid)
+        && hasQualification(qualsBySoldier.get(sid) ?? [], info.role ?? '', dq);
+    });
+    const blockedDuring = (sid: number, w: [Minutes, Minutes]) =>
+      unavail.some((u) => u.soldierId === sid && overlaps(u.period, w));
     for (const [start, crew] of crews) {
       if (crew.every((r) => r.source === 'import')) continue;
-      const hasDriver = crew.some((r) => hasQualification(
-        qualsBySoldier.get(r.soldierId) ?? [], soldierInfo.get(r.soldierId)?.role ?? '', dq));
-      if (!hasDriver) {
-        findings.push({
-          severity: 'error', rule: 'driver',
-          message: `${p.name} ${fmtHM(start)}: אין ${dq} בצוות`,
-        });
-      }
+      if (crewHasDriver(crew)) continue;
+      const window = crew[0].period;
+      const rank = rankOf.get(start)!;
+      // a qualified driver was free to cover THIS crew but wasn't used
+      const skipped = idleDrivers.some((sid) => !blockedDuring(sid, window));
+      // priority violated: a lower-priority (later) crew kept a driver while
+      // this higher-priority crew went without
+      const priorityViolated = [...crews.entries()].some(([s2, c2]) =>
+        rankOf.get(s2)! > rank && crewHasDriver(c2));
+      const exhaustedLowest = !skipped && !priorityViolated;
+      findings.push({
+        severity: exhaustedLowest ? 'warning' : 'error', rule: 'driver',
+        message: exhaustedLowest
+          ? `${p.name} ${fmtHM(start)}: אין ${dq} בצוות — מאגר ה${dq} מוצה, זו משמרת בעדיפות הנמוכה ביותר`
+          : `${p.name} ${fmtHM(start)}: אין ${dq} בצוות`,
+      });
     }
   }
 

@@ -19,7 +19,14 @@ export interface SheetData {
   allowedEmails: string[]; // from the 'email' column in the sheet
 }
 
-export type TabId = 'personal' | 'unit' | 'company' | 'shavtzak' | 'draft' | 'fairness' | 'exitreq' | 'exitadmin';
+export type TabId = 'personal' | 'unit' | 'company' | 'shavtzak' | 'draft' | 'fairness' | 'exitreq' | 'exitadmin' | 'hamal' | 'daystructure' | 'roster' | 'presence';
+
+// A tab may register a leave guard so App can prompt to save/discard unsaved
+// edits before switching away or reloading (the מבנה יומי tab uses this).
+export interface TabLeaveGuard {
+  isDirty(): boolean;
+  save(): Promise<boolean>;
+}
 
 export const STATUS_COLORS: Record<string, { bg: string; text: string; label: string }> = {
   'נוכח': { bg: 'bg-green-100', text: 'text-green-800', label: 'נוכח' },

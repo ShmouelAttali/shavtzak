@@ -19,7 +19,9 @@ export type RationaleCode =
   | 'handover_in'           // H1 pair: arriving half — takes over at the handover
   | 'no_prior'              // no earlier shift nearby — fully rested
   | 'fewest_nights'         // at/below the candidate group's night median (P2)
-  | 'low_load'              // at/below the candidate group's load median (P3)
+  | 'low_load'              // LEGACY (owner 2026-07-24: no longer emitted —
+                            // load never decides group composition; kept only
+                            // to render pre-existing persisted drafts)
   | 'position_balance'      // at/below the group's median count for THIS position (P4)
   | 'fairness_pick'         // ranked fill with no dominant comparative key
   | 'decisive_key'          // L1 group pick: the first ranking key that beat the runner-up
@@ -43,6 +45,7 @@ export type RationaleCode =
   | 'exit_packed'           // H9: shift packed outside the exit window
   | 'exit_sticky_magen'     // H9 מגן stickiness: continuity member keeps the daily row despite the exit
   | 'exit_night_toranut'    // H9 night exit: all windows within 22:00–06:00 — a night_exit_ok duty (תורנים) is also allowed
+  | 'manual_replace'        // officer swap from the צור שבצק tab (api/draft.ts PUT)
   // caveats (⚠)
   | 'caveat_rest_lt4'       // בדוחק: under the 4h hard rest floor
   | 'caveat_rest_lt8_long'  // בדוחק: under 8h rest before a long task
@@ -95,6 +98,7 @@ export const TEMPLATES: Record<RationaleCode, string> = {
   exit_packed: 'משמרת מרוכזת מחוץ לחלון היציאה ({from}–{to})',
   exit_sticky_magen: 'נשאר בצוות המגן למרות יציאה קצרה — היציאה באחריות מפקד המגן',
   exit_night_toranut: 'שובץ ל{position} ביום יציאה קצרה לילית (כל חלונות היציאה בין 22:00–06:00) — ההיעדרות באחריות מפקד ה{position}',
+  manual_replace: 'שובץ ידנית מהמסך במקום {from}',
   caveat_rest_lt4: 'פחות מ-4 שעות מנוחה לפני המשמרת',
   caveat_rest_lt8_long: 'פחות מ-8 שעות מנוחה לפני משימה ארוכה',
   caveat_short_rest: 'מנוחה קצרה: {restH} שעות בלבד',
@@ -109,6 +113,19 @@ export const TEMPLATES: Record<RationaleCode, string> = {
 export const RATIONALE_CODES = Object.keys(TEMPLATES) as RationaleCode[];
 
 export const isCaveat = (e: RationaleEntry): boolean => e.code.startsWith('caveat_');
+
+/**
+ * A raw generator violation string that a structured rationale entry already
+ * states — so the two surfaces (RationalePopup + report cells) can dedupe
+ * identically and not show the same fact twice. `codes` is the set of
+ * rationale codes on the same assignment.
+ */
+export function violationCoveredByRationale(violation: string, codes: Set<RationaleCode>): boolean {
+  return (violation === 'הושלם ממנוחה' && codes.has('pulled_from_rest'))
+    || (violation.includes('פחות מ-4') && codes.has('caveat_rest_lt4'))
+    || (violation.includes('פחות מ-8') && codes.has('caveat_rest_lt8_long'))
+    || (violation.startsWith('מנוחה קצרה') && codes.has('caveat_short_rest'));
+}
 
 export function renderRationale(e: RationaleEntry): string {
   const tpl = TEMPLATES[e.code] ?? e.code;

@@ -70,14 +70,19 @@ function buildRationale(g: Gen, st: SoldierState, slot: Slot, pid: number, opts:
       }
   }
 
-  // one comparative fairness claim, only against a real group (>1 candidate)
+  // one comparative fairness claim, only against a real group (>1 candidate).
+  // Weekly load (P3) is NOT reported here (owner 2026-07-24): within a
+  // structurally-composed group (התקפי platoon groups, מגן crew) everyone
+  // serves identical hours, so load never determines WHICH soldiers form the
+  // group — the old "עומס שבועי נמוך בקבוצה" (low_load) claim was misleading and
+  // is no longer emitted. The P3 load KEY is untouched — it still ranks the
+  // per-slot individual fill (§6.1 Level-2 cascade); only the rationale label
+  // is dropped. (The low_load code/template survive for rendering pre-existing
+  // persisted drafts.)
   if (opts.pickedFrom === 'primary' && opts.groupNights.length > 1) {
     const mN = median(opts.groupNights);
-    const mL = median(opts.groupLoads);
     if (opts.myNights <= mN) {
       out.push({ code: 'fewest_nights', params: { nights: opts.myNights, median: mN } });
-    } else if (opts.myLoad <= mL) {
-      out.push({ code: 'low_load', params: { hours: opts.myLoad.toFixed(1), median: mL.toFixed(1) } });
     }
   }
 
@@ -440,14 +445,22 @@ function fillStaticTwoPhase(g: Gen, pid: number, posName: string, sorted: Slot[]
     // behavior-identical to assigning inline.
     const cnt = (st: SoldierState, m: Slot) => g.assignments.filter((a) =>
       a.soldierId === st.soldier.id && a.subPositionId === m.subPositionId).length;
+    // P4c cross-day spread (owner 2026-07-24): among posts tied on today's
+    // even-spread count, prefer the one this soldier held LEAST over the
+    // recent days — so the static grid rotates a soldier across posts across
+    // the week, not only within the 24h round (that stays the today-count
+    // primary key). Secondary tie-break only; never overrides within-day
+    // distinctness.
+    const recent = (st: SoldierState, m: Slot) => m.subPositionId != null
+      ? (g.ctx.recentSubCount.get(st.soldier.id)?.get(m.subPositionId) ?? 0) : 0;
     const chosen: Slot[] = [];
     for (const p of picks) {
       let member: Slot | undefined;
-      let best = Infinity;
+      let best = Infinity, bestR = Infinity;
       for (const m of members) {
         if (capacity.get(m)! <= 0) continue;
-        const n = cnt(p.st, m);
-        if (n < best) { best = n; member = m; }
+        const n = cnt(p.st, m), r = recent(p.st, m);
+        if (n < best || (n === best && r < bestR)) { best = n; bestR = r; member = m; }
       }
       if (!member) break;   // can't happen: |picks| ≤ total capacity
       capacity.set(member, capacity.get(member)! - 1);
@@ -621,8 +634,19 @@ export function fillLevel2(g: Gen, plan1: Level1Plan): void {
       continue;
     }
 
-    // staff_all_roles crew (חמל): everyone in the group takes a seat, no demand math
+    // staff_all_roles crew (מפלג): everyone in the group takes a seat, no demand math
     if (ctx.positions.get(pid)!.config?.staff_all_roles) {
+      // Manual-only staff_all_roles positions (חמל, is_scheduled=false) are
+      // never auto-filled — the חמל tab owns every pick. מפלג (is_scheduled=
+      // true) still gets its full-day staff crew auto-filled below.
+      // (slotsByPosition already excludes !isScheduled slots — this is the
+      // explicit gate.)
+      if (!ctx.positions.get(pid)!.isScheduled) continue;
+      // Manual override (חמל tab): locked/manual rows for the day are
+      // authoritative — keep them as-is and skip the auto role-based fill
+      // (manual replaces auto-staffing). persist() never deletes locked/manual
+      // rows, so the human picks survive regeneration untouched.
+      if (ctx.lockedShift.some((l) => l.positionId === pid)) continue;
       const crew = rank(g, [...state.values()].filter((st) => st.level1 === pid), pid, false);
       for (const slot of [...slots].sort((a, b) => a.period[0] - b.period[0])) {
         let seat = 1;
@@ -640,6 +664,13 @@ export function fillLevel2(g: Gen, plan1: Level1Plan): void {
     }
 
     const group = [...state.values()].filter((st) => st.level1 === pid);
+    // Chronological order == shift PRIORITY for a scarce driver (owner
+    // 2026-07-24): the earliest-starting crew is filled first, claims a driver
+    // for its driver seat first, and (with driver preservation below) keeps it
+    // — so on a נהג דוד shortage the noon (14:00) crew keeps its driver
+    // longest, then night (22:00), and the morning (06:00) crew is the first to
+    // go without. This is the Level-2 half of the priority the Level-1 driver
+    // quota reserves for.
     const sorted = [...slots].sort((a, b) => a.period[0] - b.period[0]);
     // H6d hard driver rule (config.driver_qual): every crew must include a
     // qualified driver — the seat right after the commander seat is a driver

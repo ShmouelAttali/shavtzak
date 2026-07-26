@@ -45,13 +45,13 @@ export function useExitRequests(name: string, email: string) {
 
   /** POST a new request. Returns the server's Hebrew error text, or null on success. */
   const add = useCallback(async (
-    day: string, from: string, to: string, note: string,
+    fromDate: string, from: string, toDate: string, to: string, note: string,
   ): Promise<string | null> => {
     try {
       const res = await fetch('/api/exit-requests', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, day, from, to, email, note: note.trim() || undefined }),
+        body: JSON.stringify({ name, fromDate, from, toDate, to, email, note: note.trim() || undefined }),
       });
       const body = await res.json();
       if (!res.ok) return (body.error as string) ?? 'שגיאה בשליחת הבקשה';

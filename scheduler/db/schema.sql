@@ -57,7 +57,12 @@ create table soldiers (
   phone           text,
   email           text,
   is_schedulable  boolean not null default true,  -- H2: מפלג / חמ"ל => false
-  notes           text
+  notes           text,
+  -- Soft removal (מצבת חיילים tab): null = active. An archived soldier is out
+  -- of every roster read (generator, validator, pickers, fairness, presence)
+  -- but keeps all history rows and keeps holding their unique full_name /
+  -- personal_number, so a re-import cannot resurrect them as a duplicate.
+  archived_at     timestamp
 );
 
 -- H6c whitelist: no rows = soldier may serve anywhere; else only these
@@ -169,17 +174,23 @@ create table slot_templates (
   valid_to             date                              -- null = still active
 );
 
--- Two template versions of the same (position, sub, start) must never be
--- active on the same day — day_slots would emit the slot twice. day_slots
+-- Two PERMANENT template versions of the same (position, sub, start) must never
+-- be active on the same day — day_slots would emit the slot twice. day_slots
 -- treats valid_to as INCLUSIVE, so validity ranges are closed '[]'
 -- (null valid_to = open-ended). Requires btree_gist (created above).
+-- DAY-SCOPED rows (valid_from = valid_to — the "add/replace a shift on this one
+-- day" mechanism used by the חמל + מבנה יומי tabs) are EXEMPT via the WHERE
+-- predicate, so a day template may share (position, sub, start_time) with the
+-- permanent one it replaces (a duration-only change on a single day). MUST be
+-- `is distinct from`, not `<>` — `<>` would drop valid_to-null rows out of the
+-- constraint entirely.
 alter table slot_templates add constraint slot_templates_no_overlap
   exclude using gist (
     position_id with =,
     (coalesce(sub_position_id, -1)) with =,
     start_time with =,
     daterange(valid_from, valid_to, '[]') with &&
-  );
+  ) where (valid_from is distinct from valid_to);
 
 -- Per-position seat-count changes (seats PER SLOT). Managed by hand —
 -- resolved by the day_slots view. Scoping:
@@ -189,20 +200,29 @@ alter table slot_templates add constraint slot_templates_no_overlap
 --               null = open-ended (the original "onward" behavior).
 --   start_time  optional template start_time match — null applies to every
 --               slot of the position, set targets one shift (e.g. 18:00 סיור).
+--   slot_template_id  optional target of ONE specific template row (FK, day-
+--               scoped delete-cascaded). null = the classic position/start_time
+--               match; set pins exactly one slot — the מבנה יומי tab uses it to
+--               resize/cancel a single shift even when a cancelled permanent
+--               template and its day-scoped replacement share (position,
+--               start_time). The template carries the sub, so sub-level
+--               targeting comes free.
 --   seats = 0   cancels the matched slot(s): day_slots omits them entirely,
 --               so the generator redistributes the crew and the validator
 --               raises no coverage gap.
--- Most specific wins: a start_time match beats a position-wide row, then the
--- latest valid_from, then the newest row.
+-- Most specific wins: a slot_template_id match beats a start_time match, which
+-- beats a position-wide row, then the latest valid_from, then the newest row.
 create table seat_overrides (
   id          smallint generated always as identity primary key,
   position_id smallint not null references positions,
   valid_from  date not null,
   valid_to    timestamp,
   start_time  time,
+  slot_template_id smallint references slot_templates(id) on delete cascade,
   seats       smallint not null check (seats >= 0),
   note        text,
-  unique nulls not distinct (position_id, valid_from, start_time)
+  constraint seat_overrides_uniq
+    unique nulls not distinct (position_id, valid_from, start_time, slot_template_id)
 );
 
 -- T4 chained duties as data.
@@ -247,7 +267,9 @@ create table schedule_days (
   status       text not null default 'draft'
                check (status in ('draft','generated','approved','published')),
   generated_at timestamp,
-  approved_by  text,
+  approved_by  text,                       -- email of the officer who published (publish flow)
+  published_at timestamptz,                -- when the day was published (publish flow)
+  report_html  text,                       -- self-contained generation report (built at persist time)
   validation   jsonb not null default '[]'  -- snapshot of last validation run
 );
 
@@ -292,6 +314,17 @@ create unique index shift_assignments_seat_key
 alter table shift_assignments add constraint no_double_booking
   exclude using gist (soldier_id with =, period with &&) where (blocks_overlap);
 
+-- On-demand shift windows (חמל tab, 2026-07-24; reusable for מגן internal
+-- shifts later) are stored as DAY-SCOPED slot_templates rows (valid_from =
+-- valid_to = the schedule day) — the generic "add a shift on this one day"
+-- mechanism. day_slots materializes them per day; seat_overrides resizes/
+-- cancels them. חמל carries is_scheduled=false and NO permanent template, so a
+-- virgin day emits no חמל slot; the חמל tab writes day-scoped templates only for
+-- the windows shown (empty custom windows persist that way). חמל is manual-only:
+-- the generator never auto-fills it. The picks are ordinary shift_assignments
+-- rows whose period is the concrete shift window (computed like the day_slots
+-- lateral) — see api/hamal.ts.
+
 -- Emails allowed to see the scheduler tabs in the viewer app (SPEC §12),
 -- independent of sheet role. Managed by hand in the Supabase dashboard.
 create table shavtzak_admins (
@@ -299,6 +332,13 @@ create table shavtzak_admins (
   note     text,
   added_at timestamp not null default timezone('Asia/Jerusalem', now())
 );
+
+-- חמל-tab access is NOT a separate table: a חמל member is any soldier whose
+-- role is a חמל staff role (the חמל position's config.staff_all_roles), matched
+-- to the logged-in user by soldiers.email. The חמל tab is shown to admins OR
+-- חמל members (viewer-side gate). See api/admins.ts. The index below serves the
+-- case-insensitive email lookup.
+create index soldiers_email_lower_idx on soldiers (lower(email));
 
 create table sheet_sync_log (
   id         bigint generated always as identity primary key,
@@ -324,6 +364,7 @@ language sql stable as $$
            'נוכח')
   from soldiers s
   cross join generate_series(from_day, to_day, interval '1 day') d(day)
+  where s.archived_at is null
 $$;
 
 -- Concrete slots per schedule day (template × calendar × seat overrides).
@@ -340,7 +381,10 @@ select * from (
                      and o.valid_from <= sd.day
                      and (o.valid_to is null or p.start_ts < o.valid_to)
                      and (o.start_time is null or o.start_time = st.start_time)
-                   order by (o.start_time is not null) desc, o.valid_from desc, o.id desc
+                     and (o.slot_template_id is null or o.slot_template_id = st.id)
+                   order by (o.slot_template_id is not null) desc,
+                            (o.start_time is not null) desc,
+                            o.valid_from desc, o.id desc
                    limit 1),
                   st.seats) as seats,
          st.commander_first_seat
@@ -355,7 +399,11 @@ select * from (
 where s.seats > 0;
 
 -- Fairness counters as of a given day (rolling windows end at day_start(as_of)).
-create or replace function soldier_fairness(as_of date)
+-- include_drafts (owner 2026-07-26, הוגנות tab toggle): true = a day's DRAFT
+-- rows supersede its published rows (what the generator needs while building a
+-- week); false = count only real published work. Default true keeps every
+-- existing caller (load.ts, tests) on the old behaviour.
+create or replace function soldier_fairness(as_of date, include_drafts boolean default true)
 returns table (
   soldier_id          bigint,
   night_count_7d      bigint,
@@ -384,6 +432,18 @@ language sql stable as $$
     from shift_assignments sa
     join positions p on p.id = sa.position_id
     where p.mission_class <> 'rest'
+      -- draft scope: `locked` rows are human truth and always count (the
+      -- generator never deletes them either). Otherwise include_drafts decides
+      -- per DAY — a day holding drafts contributes its drafts instead of its
+      -- published rows, never both, so nothing is double-counted.
+      and (sa.locked
+           or case when include_drafts
+                     then sa.source in ('auto','chain')
+                          or not exists (select 1 from shift_assignments d
+                                          where d.day = sa.day
+                                            and d.source in ('auto','chain'))
+                     else sa.source not in ('auto','chain')
+                end)
   )
   select s.id,
     -- night_exempt positions (24h duties like תורנים/קצין מוצב — the soldier
@@ -432,5 +492,6 @@ language sql stable as $$
              over (partition by soldier_id, position_name) as cnt
     from base
   ) b on b.soldier_id = s.id and lower(b.period) < w.t_end
+  where s.archived_at is null
   group by s.id, w.t_end
 $$;

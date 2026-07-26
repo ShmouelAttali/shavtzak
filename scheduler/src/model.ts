@@ -193,7 +193,14 @@ export interface Context {
   slots: Slot[];
   fairness: Map<number, Fairness>;
   /** existing assignments overlapping [day-8d, day+1 14:00) — history + prior drafts + locks */
-  existing: Map<number, { positionId: number; period: [Minutes, Minutes]; missionClass: string }[]>;
+  existing: Map<number, { positionId: number; subPositionId: number | null;
+                          period: [Minutes, Minutes]; missionClass: string }[]>;
+  /** P4c cross-day sub-post spread (owner 2026-07-24): per soldier, how many
+   *  times he held each sub_position over the RECENT days before today (the
+   *  loaded rest/rotation window, prior to this schedule day). Used as the
+   *  LAST Level-2 tie-break — prefer a DIFFERENT static post than the ones he
+   *  held recently (e.g. ש.ג.+דרומית Sunday → בונקר+מזרחית Wednesday). */
+  recentSubCount: Map<number, Map<number, number>>;
   /** yesterday's Level-1 position per soldier */
   yesterdayPosition: Map<number, number>;
   /** consecutive static-only days ending yesterday, per soldier */

@@ -17,7 +17,10 @@ export interface SoldierInfo {
 }
 
 export const SoldierCtx = createContext<Map<string, SoldierInfo>>(new Map());
-export const NameClickCtx = createContext<(name: string, info: SoldierInfo | undefined) => void>(() => {
+// `time` is the clicked slot's label — the live tab's handler ignores it; the
+// draft tab needs it to know WHICH assignment was clicked (its meta/rows are
+// keyed `${name}|${time}`).
+export const NameClickCtx = createContext<(name: string, info: SoldierInfo | undefined, time?: string) => void>(() => {
 });
 export const MyNameCtx = createContext<string>('');
 
@@ -27,6 +30,12 @@ export const MyNameCtx = createContext<string>('');
 export const DraftMetaCtx = createContext<Record<string, DraftAssignmentMeta> | null>(null);
 export const RationaleClickCtx = createContext<(name: string, time: string, meta: DraftAssignmentMeta) => void>(() => {
 });
+
+// Draft-tab only: `${name}|${time}` keys of the seats a replacement is
+// currently writing (the clicked seat + any seat being force-vacated). They
+// render with a spinner and swallow clicks, so a second edit can't collide
+// with a row already in flight — everything else stays editable.
+export const PendingSeatsCtx = createContext<Set<string>>(new Set());
 
 const BOLD_ROLES = new Set(['מ"מ', 'מ"פ', 'סמ"פ', 'סמל', 'מ"כ']);
 const UNIT_COLOR: Record<string, string> = {
@@ -43,6 +52,7 @@ function SoldierName({name, time}: { name: string; time?: string }) {
     const myName = useContext(MyNameCtx);
     const draftMeta = useContext(DraftMetaCtx);
     const onRationale = useContext(RationaleClickCtx);
+    const pending = useContext(PendingSeatsCtx).has(`${name}|${time ?? ''}`);
     // draft API pads under-filled slots with this marker — render as a red badge
     if (name === 'לא מאויש') {
         return (
@@ -57,9 +67,19 @@ function SoldierName({name, time}: { name: string; time?: string }) {
     const isMe = myName !== '' && name === myName;
     const meta = draftMeta && time !== undefined ? draftMeta[`${name}|${time}`] : undefined;
     const warn = meta ? meta.violations.length > 0 || meta.rationale.some(isCaveat) : false;
+    if (pending) {
+        return (
+            <span
+                title="מתבצעת החלפה בשיבוץ זה"
+                className={`text-sm whitespace-nowrap leading-snug select-none opacity-50 cursor-wait ${color} ${bold ? 'font-bold' : 'font-medium'}`}
+            >
+                <span className="animate-spin inline-block ml-0.5 text-blue-500">↺</span>{name}
+            </span>
+        );
+    }
     return (
         <span
-            onClick={() => onCLick(name, info)}
+            onClick={() => onCLick(name, info, time)}
             className={`text-sm whitespace-nowrap leading-snug select-none cursor-pointer active:opacity-70 ${isMe ? `font-bold ${color} bg-yellow-200 ring-1 ring-yellow-400 rounded px-1.5 py-0.5` : `${color} ${bold ? 'font-bold' : 'font-medium'}`}`}
         >
       {name}
@@ -534,14 +554,17 @@ function getColors(name: string): Colors {
 function YomiGrid({subTypes, bg, groupName = ''}: { subTypes: DisplaySubType[]; bg: string; groupName?: string }) {
     if (subTypes.length > 1) {
         return (
-            <div className={`${bg} flex`} dir="rtl">
+            // overflow-x-auto + per-column min-w-max: columns never squeeze a
+            // name past its width — the card scrolls instead of clipping it
+            // (the card itself is overflow-hidden).
+            <div className={`${bg} flex overflow-x-auto`} dir="rtl">
                 {subTypes.map((sub, si) => {
                     const soldiers = sub.times[0]?.soldiers ?? [];
                     const innerCols = soldiers.length > 5 ? 2 : 1;
                     return (
                         <div
                             key={sub.sug}
-                            className={`flex-1 p-3 ${si < subTypes.length - 1 ? 'border-l border-gray-100' : ''}`}
+                            className={`flex-1 min-w-max p-3 ${si < subTypes.length - 1 ? 'border-l border-gray-100' : ''}`}
                         >
                             {sub.sug && (
                                 <div
@@ -566,13 +589,13 @@ function YomiGrid({subTypes, bg, groupName = ''}: { subTypes: DisplaySubType[]; 
     const showSug = sug && sug !== groupName;
     const cols = soldiers.length <= 6 ? 2 : soldiers.length <= 12 ? 3 : 4;
     return (
-        <div className={`p-3 ${bg}`}>
+        <div className={`p-3 overflow-x-auto ${bg}`}>
             {showSug && (
                 <div className="text-xs font-semibold text-gray-500 mb-1.5 pb-1 border-b border-gray-200 text-center">
                     {sug}
                 </div>
             )}
-            <div className="grid gap-x-6 gap-y-0.5" style={{gridTemplateColumns: `repeat(${cols}, auto)`}}>
+            <div className="grid w-max min-w-full gap-x-6 gap-y-0.5" style={{gridTemplateColumns: `repeat(${cols}, auto)`}}>
                 {soldiers.map((name, i) => (
                     <SoldierName key={i} name={name} time={first?.times[0]?.time}/>
                 ))}
@@ -697,7 +720,7 @@ function MissionCards({subTypes, colHeader}: {
         .filter(m => m.entries.length > 0);
 
     return (
-        <div className="flex flex-wrap gap-3 p-3">
+        <div className="flex flex-wrap gap-3 p-3 overflow-x-auto">
             {missions.map(mission => (
                 <div key={mission.sug}
                      className="flex-1 min-w-[170px] rounded-lg border border-gray-200 overflow-hidden">

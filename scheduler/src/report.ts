@@ -17,8 +17,9 @@
 // through rationale.ts's TEMPLATES (renderRationale).
 
 import type { GenerateResult } from './model.js';
-import { RationaleEntry, RationaleCode, renderRationale, isCaveat } from './rationale.js';
+import { RationaleEntry, RationaleCode, renderRationale, isCaveat, violationCoveredByRationale } from './rationale.js';
 import { normalizeName as nrm } from './text.js';
+import { orderCrew } from './crewOrder.js';
 import { Minutes, fmtHM, dayStart, dayEnd } from './time.js';
 
 // ─── input structures (plain + serializable) ───────────────────────────────
@@ -639,11 +640,19 @@ ${narrative.length ? `  <ul class="narrative">\n${narrative.map((n) => `    <li>
   const hasCode = (a: ReportAssignment, code: RationaleCode) =>
     a.rationale.some((e) => e.code === code);
 
+  // raw violations a structured rationale entry already states (shared with the
+  // ⓘ popup — scheduler/src/rationale.ts) so a cell doesn't show the same
+  // בדוחק fact twice (as a caveat in the "why" line and as a raw ⚠ violation)
+  const shownViolations = (as: ReportAssignment[]): string[] => {
+    const codes = new Set(as.flatMap((a) => a.rationale).map((e) => e.code));
+    return [...new Set(as.flatMap((a) => a.violations))]
+      .filter((v) => !violationCoveredByRationale(v, codes));
+  };
+
   const cellHtml = (c: Cell): string => {
     if (c.kind === 'pair') {
       const handover = fmtHM(c.out.end);
-      const viols = [...new Set([...c.out.violations, ...c.in_.violations])]
-        .filter((v) => !v.startsWith('זוג מתחלף'));
+      const viols = shownViolations([c.out, c.in_]).filter((v) => !v.startsWith('זוג מתחלף'));
       return `<div class="who">${nameHtml(c.out.soldierId)} → ${nameHtml(c.in_.soldierId)}</div>` +
         `<div class="why">זוג מתחלף — החלפה ב-${esc(handover)}</div>` +
         (viols.length ? `<div class="viol">⚠ ${esc(viols.join(' | '))}</div>` : '');
@@ -651,13 +660,31 @@ ${narrative.length ? `  <ul class="narrative">\n${narrative.map((n) => `    <li>
     const a = c.a;
     const badges = a.isCommanderSeat ? ' <span class="badge cmd">מפקד</span>' : '';
     const why = pickReasonEntries(a.rationale).map((e) => esc(renderRationale(e))).join(' · ');
+    const viols = shownViolations([a]);
     return `<div class="who">${nameHtml(a.soldierId)}${badges}</div>` +
       (why ? `<div class="why">${why}</div>` : '') +
-      (a.violations.length ? `<div class="viol">⚠ ${esc(a.violations.join(' | '))}</div>` : '');
+      (viols.length ? `<div class="viol">⚠ ${esc(viols.join(' | '))}</div>` : '');
   };
 
+  // Display order within a single time window (same a.start): commander(s)
+  // first, then the remaining crew grouped by platoon (P5/platoon_group
+  // crews like התקפי) — see crewOrder.ts. Windows themselves stay in start
+  // order; this only reorders same-start entries (a window's crew).
+  const orderWindowCrew = (group: ReportAssignment[]): ReportAssignment[] =>
+    orderCrew(group.map((a) => {
+      const s = soldier(a.soldierId);
+      return { a, role: s?.role ?? '', platoon: s?.platoon ?? '', seatIndex: a.seatIndex, name: name(a.soldierId) };
+    })).map((w) => w.a);
+
   const grids = posOrder.map((pid) => {
-    const rows = [...autoByPos.get(pid)!].sort((a, b) => a.start - b.start || a.seatIndex - b.seatIndex);
+    const byStart = new Map<number, ReportAssignment[]>();
+    for (const a of autoByPos.get(pid)!) {
+      const g = byStart.get(a.start) ?? [];
+      g.push(a);
+      byStart.set(a.start, g);
+    }
+    const rows = [...byStart.keys()].sort((a, b) => a - b)
+      .flatMap((start) => orderWindowCrew(byStart.get(start)!));
     // merge H1 handover pairs into one cell spanning the full window
     const cells: Cell[] = [];
     const consumed = new Set<ReportAssignment>();
@@ -711,7 +738,7 @@ ${narrative.length ? `  <ul class="narrative">\n${narrative.map((n) => `    <li>
           const who = c.kind === 'pair'
             ? `${nameHtml(c.out.soldierId)} → ${nameHtml(c.in_.soldierId)}`
             : nameHtml(c.a.soldierId);
-          const viols = c.kind === 'pair' ? [] : c.a.violations;
+          const viols = c.kind === 'pair' ? [] : shownViolations([c.a]);
           return `<td>${who}${viols.length ? `<div class="viol">⚠ ${esc(viols.join(' | '))}</div>` : ''}</td>`;
         }).join('');
         return `<tr><td><b>${winHtml(r.win[0], r.win[1])}</b></td>${tds}</tr>`;
@@ -789,7 +816,7 @@ ${grids || '<p class="empty">לא נוצרו שיבוצי משמרות.</p>'}
       const src = chainEntry
         ? `${esc(String(chainEntry.params?.source ?? ''))} של ${esc(String(chainEntry.params?.sourceStart ?? ''))}`
         : '—';
-      const crew = [...group].sort((x, y) => x.seatIndex - y.seatIndex).map((a) => {
+      const crew = orderWindowCrew(group).map((a) => {
         const b: string[] = [];
         if (a.isCommanderSeat) b.push('<span class="badge cmd">מפקד</span>');
         if (hasCode(a, 'chain_completion')) b.push('<span class="badge warn">השלמה</span>');
@@ -1087,7 +1114,9 @@ function buildProcessSection(input: DayReportInput, h: NameHelpers): string {
   // (and is recorded as the pick's decisive_key). Night spread (P2) and
   // sub-position rotation (P4b) moved into the Level-2 slot cascade.
   // NB: item numbers MUST match rank.ts's groupKey/GROUP_DIMS order — the
-  // decisive_key labels cite them (e.g. "5 — עומס שבועי").
+  // decisive_key labels cite them (e.g. "5 — רוטציה מאתמול"). The Level-1
+  // group cascade has NO weekly-load (P3) key — load is a Level-2 slot key
+  // only; positions are not lighter/heavier than each other.
   const CASCADE = [
     'מנוחה מלאה לפני תחילת המשימה — רק בעמדה יומית שדורשת מנוחה לפני הכניסה (בפועל: תורנים); מי שלא ינוח 8 שעות עד 14:00 נדחק לסוף (R1)',
     'תורנות השבוע — רק בעמדת תורנים: מי שכבר עשה תורנות השבוע נדחק (T5)',
@@ -1112,10 +1141,11 @@ function buildProcessSection(input: DayReportInput, h: NameHelpers): string {
     'מנוחה מלאה לפני תחילת המשמרת — מי שלא נח 8 שעות עד תחילת המשמרת הקונקרטית נדחק לסופה (R1)',
     'רוטציית תת-עמדה — באותה יממה לא מאיישים את אותו פוסט פעמיים (למשל לא שג פעמיים ביום) (P4b)',
     'פיזור לילות — מי שעשה הכי מעט לילות השבוע מקבל את משמרת הלילה (P2)',
+    'התאמת תפקיד — נהג טיגריס למשמרת התקפי; נהג דוד למשמרת סיור החופפת ללילה (P5) — מכריע לפני העומס',
     'מי שצבר השבוע הכי מעט שעות עומס משוקללות — סך כל המשימות בכל העמדות יחד, בדליים של יממת עבודה (P3)',
-    'התאמת תפקיד — נהג טיגריס למשמרת התקפי; נהג דוד למשמרת סיור החופפת ללילה (P5)',
     'העומס השבועי המדויק (P3)',
     'מי שצבר הכי הרבה מנוחה — עד 48 שעות (P6)',
+    'פיזור תתי-עמדה לאורך הימים — שובר השוויון האחרון לפני האקראי: עדיפות למי שאייש את תת-העמדה הזו הכי מעט בימים האחרונים (P4c)',
   ];
   const slotCascadeLine =
     `<details class="inner"><summary>סדר העדיפויות המלא של בחירת המשמרת ותת-העמדה בתוך העמדה (מיון מדורג — לא ניקוד)</summary>` +
