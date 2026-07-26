@@ -114,7 +114,9 @@ create table exit_requests (
   created_at  timestamp not null default timezone('Asia/Jerusalem', now()),
   note        text
 );
-create index exit_requests_soldier_period on exit_requests using gist (soldier_id, period);
+-- No separate (soldier_id, period) index: the exclusion constraint below is
+-- backed by exactly that gist index, and it serves every lookup (a second copy
+-- only doubled the write cost — dropped 2026-07-26, db/query-review-2026-07-26.sql).
 alter table exit_requests add constraint exit_requests_no_overlap
   exclude using gist (soldier_id with =, period with &&);
 
@@ -192,6 +194,14 @@ alter table slot_templates add constraint slot_templates_no_overlap
     daterange(valid_from, valid_to, '[]') with &&
   ) where (valid_from is distinct from valid_to);
 
+-- ...and the complementary index for the rows that exclusion leaves out. The
+-- day-scoped rows (valid_from = valid_to) ARE the חמל + מבנה יומי per-day shift
+-- structure, read and deleted by (position_id, valid_from) on every save/GET;
+-- without this the exclusion GiST is the only index leading with position_id
+-- and it never contains them.
+create index slot_templates_day_scoped
+  on slot_templates (position_id, valid_from) where valid_from = valid_to;
+
 -- Per-position seat-count changes (seats PER SLOT). Managed by hand —
 -- resolved by the day_slots view. Scoping:
 --   valid_from  schedule day the override starts on (inclusive).
@@ -224,6 +234,14 @@ create table seat_overrides (
   constraint seat_overrides_uniq
     unique nulls not distinct (position_id, valid_from, start_time, slot_template_id)
 );
+
+-- slot_template_id is only the 4th column of seat_overrides_uniq, so nothing
+-- leads with it: without this index every `delete from slot_templates` (the
+-- מבנה יומי / חמל tabs drop the day's day-scoped templates wholesale on each
+-- save) seq-scans seat_overrides per deleted row to enforce the ON DELETE
+-- CASCADE, and day_slots' `o.slot_template_id = st.id` probe runs per slot.
+create index seat_overrides_template
+  on seat_overrides (slot_template_id) where slot_template_id is not null;
 
 -- T4 chained duties as data.
 create table chain_rules (
@@ -339,6 +357,22 @@ create table shavtzak_admins (
 -- חמל members (viewer-side gate). See api/admins.ts. The index below serves the
 -- case-insensitive email lookup.
 create index soldiers_email_lower_idx on soldiers (lower(email));
+
+-- Normalized-name lookup (api/exit-requests.ts resolveSoldier's fallback: a
+-- name typed with different quote marks or doubled spaces must still resolve).
+-- MUST STAY IN LOCKSTEP WITH normalizeName() in scheduler/src/text.ts:
+--     (s ?? '').replace(/[״"׳'`]/g, '').replace(/\s+/g, ' ').trim()
+-- Exact mirror: translate's `from` list is NBSP U+00A0, BOM U+FEFF, ״ " ׳ ' `
+-- and its `to` is two spaces — NBSP/BOM (matched by JS \s but NOT by Postgres
+-- \s) become plain spaces, the five quote characters have no counterpart and
+-- are deleted; the \s+ collapse and btrim then mirror the last two JS steps.
+-- All three functions are IMMUTABLE. NOT unique — two rows may normalize
+-- alike (only full_name itself is unique); the caller takes the first match.
+create index soldiers_name_normalized on soldiers (
+  (btrim(regexp_replace(
+     translate(full_name, chr(160) || chr(65279) || '״"׳''`', '  '),
+     '\s+', ' ', 'g')))
+);
 
 create table sheet_sync_log (
   id         bigint generated always as identity primary key,
