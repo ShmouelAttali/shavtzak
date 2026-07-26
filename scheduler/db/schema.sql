@@ -457,6 +457,14 @@ language sql stable as $$
     select day_start(as_of) as t_end,
            day_start(as_of - (extract(dow from as_of))::int) as t_start
   ),
+  -- every schedule day that holds at least one draft row. Was a correlated
+  -- `not exists (...)` in the base filter below; naming the set makes the
+  -- single evaluation explicit instead of leaning on the planner's
+  -- EXISTS→hashed-SubPlan transform (2026-07-26, db/query-review-2026-07-26.sql
+  -- — measured a wash on PG16; kept for the guarantee, not for speed).
+  draft_days as (
+    select distinct day from shift_assignments where source in ('auto','chain')
+  ),
   base as (
     -- daily:true implies night_exempt (src/config.ts effectiveConfig);
     -- an explicit night_exempt key wins over the implied value
@@ -470,12 +478,13 @@ language sql stable as $$
       -- generator never deletes them either). Otherwise include_drafts decides
       -- per DAY — a day holding drafts contributes its drafts instead of its
       -- published rows, never both, so nothing is double-counted.
+      -- `not in` and `not exists` differ only when the subquery can yield
+      -- NULL; shift_assignments.day is `date not null`, so the two are exactly
+      -- equivalent here (tests/fairness-equivalence.test.ts proves it).
       and (sa.locked
            or case when include_drafts
                      then sa.source in ('auto','chain')
-                          or not exists (select 1 from shift_assignments d
-                                          where d.day = sa.day
-                                            and d.source in ('auto','chain'))
+                          or sa.day not in (select day from draft_days)
                      else sa.source not in ('auto','chain')
                 end)
   )
