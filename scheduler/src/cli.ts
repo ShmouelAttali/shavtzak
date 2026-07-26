@@ -123,7 +123,10 @@ async function main() {
     // Level-1 summary
     const byPos = new Map<number, number>();
     for (const pid of res.level1.values()) byPos.set(pid, (byPos.get(pid) ?? 0) + 1);
-    const posNames = new Map((await query(`select id, name from positions`)).map((p) => [p.id, p.name]));
+    // Position names come from the result's report bag — generate() always
+    // fills it (generate.ts buildReportMeta), so this console summary costs no
+    // extra round trip per day of the range.
+    const posNames = new Map((res.report?.positions ?? []).map((p) => [p.id, p.name]));
     console.log('שיבוץ יומי (Level 1):');
     for (const [pid, n] of [...byPos].sort((a, b) => b[1] - a[1])) {
       console.log(`  ${posNames.get(pid)}: ${n}`);
