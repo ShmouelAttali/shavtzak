@@ -164,6 +164,13 @@ and live against the shared Supabase project:
   `db/seat-overrides-drop-stale-check-2026-07-26.sql` (applied). Lesson: a
   delta that RELAXES a constraint must drop the old one — and only a live-vs-
   `schema.sql` diff catches it, since tests rebuild from the baseline.
+- **כרמל חטיבה night = ONE 8h window** (owner 2026-07-26): the template's
+  6×4h grid was never real — every imported day since 28/06 writes the night as
+  one 22:00→06:00 row manned by exactly the עמדות הגנה 18:00-22:00 crew, so the
+  22:00-02:00 crew gets **no standby at all**. Template 22:00 → 480 min, the
+  02:00 windows and T4a chain rule 6 (כרמל 02:00 ← עמדות 22:00) are gone. Delta
+  `db/carmel-night-8h-2026-07-26.sql` (applied), baseline in `db/seed.sql`,
+  SPEC §T4a + positions catalog + LOGIC.he.md updated.
 - **Report ↔ צור שבצק tab alignment** (2026-07-26): both surfaces derive
   every warning/error from the same code — the tab re-runs `validateDay` live
   on GET (same findings as the report's חריגות card), and shared pure helpers

@@ -146,11 +146,17 @@ values (9, '14:00', 1440, 1, '2026-07-15');
 insert into slot_templates (position_id, start_time, duration_minutes, seats, valid_from)
 values (14, '14:00', 1440, 6, '2026-07-17');
 
--- כרמל חטיבה: 3 regular + 1 commander × 6 shifts × 4h (same grid as עמדות הגנה)
+-- כרמל חטיבה: 3 regular + 1 commander. FIVE windows — four 4h ones on the
+-- עמדות הגנה grid plus ONE 8h night, 22:00→06:00 (owner 2026-07-26): the
+-- 18:00–22:00 defense crew comes down at 22:00 and holds standby through to
+-- 06:00, so the 22:00–02:00 crew gets no standby window at all. A 6×4h grid
+-- with a 02:00 window was never real — the whole imported history (28/06
+-- onward) writes the night as one 22:00→06:00 row.
 insert into slot_templates (position_id, sub_position_id, start_time, duration_minutes, seats, valid_from)
-select 10, sp, t.start_time, 240, case sp when 5 then 3 else 1 end, date '2026-07-15'
+select 10, sp, t.start_time, t.dur, case sp when 5 then 3 else 1 end, date '2026-07-15'
 from (values (5),(6)) s(sp)
-cross join (values (time '06:00'),('10:00'),('14:00'),('18:00'),('22:00'),('02:00')) t(start_time);
+cross join (values (time '06:00', 240), ('10:00', 240), ('14:00', 240),
+                   ('18:00', 240), ('22:00', 480)) t(start_time, dur);
 
 -- ── Chain rules (T4) ────────────────────────────────────────────────────────
 -- source_day_offset is relative to the 14:00–14:00 schedule day of the TARGET.
@@ -160,8 +166,9 @@ insert into chain_rules (id, target_position, target_start, source_position, sou
   ( 2, 10, '10:00', 2, '06:00',  0, 'all'),
   ( 3, 10, '14:00', 2, '10:00', -1, 'all'),  -- defense 10:00 belongs to previous schedule day
   ( 4, 10, '18:00', 2, '14:00',  0, 'all'),
-  ( 5, 10, '22:00', 2, '18:00',  0, 'all'),
-  ( 6, 10, '02:00', 2, '22:00',  0, 'all'),
+  ( 5, 10, '22:00', 2, '18:00',  0, 'all'),  -- the 8h night window (22:00→06:00)
+-- (id 6, carmel 02:00 ← defense 22:00, removed 2026-07-26: the night is ONE 8h
+--  window off the 18:00 crew, so the 22:00–02:00 crew has no standby.)
 -- (T4b konenut-from-patrol chains removed: התקפי is a standing Level-1 crew)
 -- T4c: tracker window ← one soldier from the descending patrol crew
   ( 9,  8, '22:00', 1, '14:00',  0, 'min_tracker_hours'),  -- ירד ב-22:00 → 22:00–07:00
