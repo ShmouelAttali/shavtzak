@@ -104,8 +104,9 @@ and live against the shared Supabase project:
   the validator over the window's days, plus fairness-spread / position-balance
   cards → `api/fairness.ts`). Tab visibility also
   granted by the `shavtzak_admins` DB table (`api/admins.ts`). Plus a חמל tab
-  (per-shift manual staffing, 10:00-cycle tiling) and a **מבנה יומי** tab (admin,
-  per-DAY shift-structure editor — see below). All restricted tabs carry a 🔒.
+  (per-shift manual staffing, 10:00-cycle tiling), a **מבנה יומי** tab (admin,
+  per-DAY shift-structure editor) and a **מצבת חיילים** tab (admin, roster
+  editor) — both below. All restricted tabs carry a 🔒.
 - **מבנה יומי tab** (2026-07-26, `api/day-structure.ts` +
   `src/components/DayStructure.tsx` + `useDayStructure`): admin-only editor for
   ONE schedule day's shift structure (add/remove/rename position group =
@@ -118,8 +119,13 @@ and live against the shared Supabase project:
   (collision → 409). Scope excludes חמל / מפלג / rest. Explicit save (no
   autosave) + leave guard. Schema delta `db/day-structure-2026-07-26.sql`
   (seat_overrides.slot_template_id + day-scoped exemption on
-  slot_templates_no_overlap) — mirrored in schema.sql; **NOT yet applied to
-  Supabase** (apply before deploying, or the new column 500s the API).
+  slot_templates_no_overlap) — mirrored in schema.sql and applied to Supabase.
+  **Known live drift (2026-07-26, NOT yet fixed)**: Supabase still carries an
+  old `seat_overrides_seats_check CHECK (seats > 0)` alongside the baseline's
+  `seats >= 0`, so this tab's "remove a shift" path (which writes a `seats=0`
+  override) is rejected in production. Fix =
+  `alter table seat_overrides drop constraint seat_overrides_seats_check,
+   add constraint seat_overrides_seats_check check (seats >= 0);`
 - **Report ↔ צור שבצק tab alignment** (2026-07-26): both surfaces derive
   every warning/error from the same code — the tab re-runs `validateDay` live
   on GET (same findings as the report's חריגות card), and shared pure helpers
@@ -131,6 +137,41 @@ and live against the shared Supabase project:
   process narration and live only in the stored report (פתח דוח button). Any
   new rule belongs in validate.ts (message shown in both) or rationale.ts
   (rendered in both).
+- **מצבת חיילים tab** (2026-07-26, `api/roster.ts` → **`/api/roster`**
+  (`/api/soldiers` is the SHEET endpoint) + `src/components/Roster.tsx` +
+  `useRoster` + pure `src/lib/rosterFilter.ts`): admin-only roster editor —
+  read-only table + per-row edit popup + `+ חייל חדש`. Edits `soldiers`
+  (מספר אישי/שם/מחלקה/תפקיד/רובאי/פלאפון/מייל/הערות/is_schedulable),
+  `soldier_qualifications`, `soldier_allowed_positions` (H6c) and that
+  soldier's `position_candidates` rows, plus an `אדמין שבצ"ק` checkbox writing
+  `shavtzak_admins` by email (replaces hand-editing it in the dashboard).
+  POST/PUT are a declarative whole-soldier replace echoing the full GET.
+  Filters: active/removed, free text (name/מס' אישי/mail), תפקיד (+ מפקדים
+  pseudo-option), הסמכה (+ closed-list and מוגבלי-עמדות pseudo-options) —
+  the qualification filter reuses `hasQualification()` so a qual spelled only
+  in the תפקיד text still matches, and the popup warns when unchecking such a
+  qual is a no-op. **Removal is soft**: `הסר חייל` toggles a mode showing an ✕
+  per row → sets `soldiers.archived_at`; the חיילים שהוסרו view restores.
+  Archived ⇒ out of every roster read AND of `shavtzak_admins`. Schema delta
+  `db/roster-tab-2026-07-26.sql` (`soldiers.archived_at` + `presence()` /
+  `soldier_fairness()` filtered) — mirrored in schema.sql and **applied to
+  Supabase 2026-07-26**.
+  Unavailability is deliberately NOT editable here (`cleanup.py` truncates it).
+- **Level-1 load-order independence** (2026-07-26, found via the tab above):
+  adding `and archived_at is null` to `load.ts`'s roster query — a predicate
+  removing ZERO rows — changed generated schedules, because the query had no
+  `ORDER BY`, its plan-dependent row order became the `state` Map order, and
+  three decisions read that order raw. Fixed: `order by s.id` in the query;
+  התקפי's group anchors `rankGroup`-ordered; the same-platoon anchor breaks
+  count ties by מחלקה name; seat-rule role matches break same-role ties by id.
+  Pinned by `tests/magensunday.test.ts` (reverses the roster Map, asserts an
+  identical partition). **Any new `[...state.values()]` whose order feeds a
+  decision needs its own tie-break.** See SPEC §H2b.
+- **Sunday מגן fill order** (owner 2026-07-26): on a Sunday continuity is off
+  and the crew is rebuilt, so מגן is demand-filled FIRST (right after the
+  closed list) while every מחלקה is whole — otherwise it anchors on a pool
+  סיור/התקפי already thinned. Weekdays keep the old order (continuity has
+  already reserved the crew). SPEC §7 step 8, LOGIC.he.md step 8.
 - **Local dev**: `npm run dev:api` (port 3001) + `npm run dev` (vite 5173);
   env in `.env`/`.env.local` (git-ignored). Vercel prod needs
   `SCHEDULER_DATABASE_URL` set in project env — NOT done yet; nothing pushed

@@ -21,7 +21,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       getPool().query(
         `select 1 from soldiers s
          join positions p on (p.config -> 'staff_all_roles') ? s.role
-         where lower(s.email) = $1 limit 1`, [email]),
+         where lower(s.email) = $1 and s.archived_at is null limit 1`, [email]),
     ]);
     res.setHeader('Cache-Control', 's-maxage=60, stale-while-revalidate=300');
     const out: AdminResponse = {

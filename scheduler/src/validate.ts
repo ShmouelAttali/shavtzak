@@ -52,7 +52,8 @@ export async function validateDay(day: string): Promise<Finding[]> {
      where period && tsrange(day_start('${day}'), day_start('${day}') + interval '1 day')`,
     `select da.soldier_id, p.name pos_name from day_assignments da
      join positions p on p.id = da.position_id where da.day = '${day}'`,
-    `select id, full_name, is_schedulable, coalesce(role,'') role from soldiers`,
+    `select id, full_name, is_schedulable, coalesce(role,'') role from soldiers
+     where archived_at is null`,
     // H6c whitelist (soldier_allowed_positions), as position NAMES per soldier
     `select sap.soldier_id, array_agg(p.name) as names
      from soldier_allowed_positions sap join positions p on p.id = sap.position_id

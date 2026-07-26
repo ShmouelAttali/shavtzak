@@ -53,10 +53,11 @@ async function resolveSoldier(
   const pool = getPool();
   const cond = schedulableOnly ? 'and is_schedulable' : '';
   const exact = await pool.query(
-    `select id, full_name from soldiers where full_name = $1 ${cond}`, [name]);
+    `select id, full_name from soldiers
+     where full_name = $1 and archived_at is null ${cond}`, [name]);
   if (exact.rows[0]) return { id: Number(exact.rows[0].id), fullName: exact.rows[0].full_name };
   const all = await pool.query(
-    `select id, full_name from soldiers where true ${cond}`);
+    `select id, full_name from soldiers where archived_at is null ${cond}`);
   const wanted = normalizeName(name);
   const hit = all.rows.find((r: any) => normalizeName(r.full_name) === wanted);
   return hit ? { id: Number(hit.id), fullName: hit.full_name } : null;

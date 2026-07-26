@@ -168,6 +168,7 @@ async function getHamal(from: string, to: string): Promise<HamalResponse> {
       `select s.id, s.full_name, coalesce(s.role,'') role, coalesce(s.platoon,'') platoon, s.is_schedulable
        from soldiers s
        join positions p on p.id = $1 and (p.config -> 'staff_all_roles') ? s.role
+       where s.archived_at is null
        order by s.full_name`, [pid]),
   ]);
 

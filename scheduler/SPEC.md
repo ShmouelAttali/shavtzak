@@ -113,6 +113,32 @@ that did cross the boundary — §10).
   outside the system entirely — never loaded, never assigned (e.g. מפלג staff
   marked לא מגיע on the sheet's מפלג tab). Contrast H6c role crews (חמל,
   present מפלג staff), which ARE scheduled — into their own position only.
+- **H2b Removed from the מצבת**: a soldier with `archived_at` set (someone who
+  left the unit — set from the מצבת חיילים tab, reversible) is out of every
+  roster read: generator, validator, `presence()`, `soldier_fairness()`, the
+  pickers, the closed candidate lists and the חמל email grant. Their history
+  rows, name and personal number are kept, so a sheet re-import cannot
+  resurrect them as a duplicate.
+
+**Load-order independence (invariant, enforced by test)**: Level 1 must not
+depend on the order the roster arrives in. The ranking cascades were always
+order-free (`rank()` / `rankGroup()` end in `tieJitter(day, soldierId)`), but
+three decisions used to read `[...state.values()]` raw — i.e. the roster
+query's row order, which with no `ORDER BY` is whichever plan Postgres picks.
+Consequence, measured 2026-07-26: adding a WHERE clause that removed **zero**
+rows re-planned the aggregate (HashAggregate → GroupAggregate), reordered the
+התקפי platoon-group anchors, swapped one soldier between התקפי and תורנים on
+day 1, and two days later produced a 9-instead-of-10 מגן single-מחלקה core.
+Closed on three levels:
+- `load.ts` orders the roster query by `s.id`;
+- the התקפי group anchors are `rankGroup`-ordered, the same-platoon anchor
+  breaks count ties by מחלקה name, and seat-rule role matches break
+  same-role ties by id — so no decision reads raw Map order;
+- `tests/magensunday.test.ts` reverses the loaded roster Map and asserts an
+  identical Level-1 partition.
+
+Keep it that way: any new `[...state.values()]` whose ORDER feeds a decision
+needs its own explicit tie-break, not a reliance on the query.
 - **H3 No overlap**: no two time-overlapping assignments per soldier — **no
   exceptions**: a soldier is either on an active mission or on כוננות, never
   both. Enforced at the DB level for mission rows (`no_double_booking`
@@ -581,7 +607,21 @@ where nights rank), weighted_hours second, per-position counts third.
      normal flow;
   8. demand-driven fill in a fixed order (קצין מוצב → סיור → התקפי → מגן →
      עמדות הגנה → תורנים; seat-rule and staff positions were already staffed
-     by their pre-passes), in **two passes**: pass A reserves the HARD role
+     by their pre-passes).
+     **Sunday exception** (owner decision, 2026-07-26): on a Sunday the order
+     is קצין מוצב → **מגן** → סיור → התקפי → עמדות הגנה → תורנים. Every other
+     day step 6 has already reserved the מגן crew, so its slot in this list
+     hardly matters; a Sunday resets continuity and builds the crew from
+     scratch, and filling it after סיור/התקפי would make it pick its anchor
+     מחלקה out of a pool those positions already thinned — the single-מחלקה
+     core then misses its flex min and the crew comes out mixed. Filling it
+     first keeps every מחלקה whole for the anchor choice. This does not
+     re-open the 2026-07-20 "מגן held 12 while תורנים sat empty" bug: the pass
+     only fills מגן to its template demand (10) — surplus is still absorbed
+     in step 9, after every position is staffed. It is also a no-op for pass
+     A, since מגן has no `commander_first_seat`, `group_size` or `driver_qual`
+     and therefore no hard quota.
+     The fill runs in **two passes**: pass A reserves the HARD role
      needs for ALL positions first — per position the **commander quota**
      (one per commander-first slot start; התקפי: one per `group_size` group =
      2) and the **H6d driver quota** (one qualified driver per distinct slot

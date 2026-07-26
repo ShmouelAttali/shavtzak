@@ -63,7 +63,7 @@ async function weekFairness(from: string, to: string): Promise<WeekFairnessRow[]
          where not exists (select 1 from unavailability u
            where u.soldier_id = s.id
              and u.period @> (dd + time '20:00')::timestamp))::int days_present
-      from soldiers s where s.is_schedulable)
+      from soldiers s where s.is_schedulable and s.archived_at is null)
     select b.full_name name, b.platoon, b.role,
       coalesce(sum(hours(r.period * night_range(r.day)))
         filter (where r.period && night_range(r.day)

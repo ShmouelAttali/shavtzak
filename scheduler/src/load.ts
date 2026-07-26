@@ -31,14 +31,25 @@ export async function loadContext(day: string): Promise<Context> {
     // display only — it rides along even for non-schedulable members
     `select pc.position_id, pc.sub_position_id, pc.soldier_id, pc.priority, s.full_name
      from position_candidates pc join soldiers s on s.id = pc.soldier_id
+     where s.archived_at is null
      order by pc.position_id, pc.priority nulls last, pc.id`,
+    // The roster. `order by s.id` is LOAD-BEARING, not cosmetic: this row order
+    // becomes the `soldiers` → `state` Map insertion order, which several
+    // Level-1/2 consumers iterate. Without it the order is whatever plan
+    // Postgres picks (HashAggregate = pseudo-random, GroupAggregate = by id),
+    // so even a WHERE that removes ZERO rows can re-plan the query and change
+    // the generated schedule. Every decision downstream now also carries its
+    // own explicit tie-break (rank/rankGroup end in tieJitter; see level1.ts's
+    // platoon anchor and group anchors) — this ORDER BY is the belt to that
+    // pair of braces. Do not remove it.
     `select s.id, s.full_name, s.platoon, coalesce(s.role,'') role,
             coalesce(s.rifle_level,0) rifle,
             coalesce(array_agg(q.qualification) filter (where q.qualification is not null), '{}') quals
      from soldiers s
      left join soldier_qualifications q on q.soldier_id = s.id
-     where s.is_schedulable
-     group by s.id`,
+     where s.is_schedulable and s.archived_at is null
+     group by s.id
+     order by s.id`,
     // H6c whitelist (soldier_allowed_positions): loaded as position NAMES so
     // allowedIn()'s name comparison stays unchanged; no rows = unrestricted
     `select sap.soldier_id, array_agg(p.name) as names

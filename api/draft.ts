@@ -151,6 +151,7 @@ async function getDrafts(from: string, to: string): Promise<DraftResponse> {
                        '{}') quals
        from soldiers s
        left join soldier_qualifications q on q.soldier_id = s.id
+       where s.archived_at is null
        group by s.id
        order by s.full_name`),
   ]);

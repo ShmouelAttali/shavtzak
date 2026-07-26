@@ -159,9 +159,12 @@ export function runLevel1(g: Gen): Level1Plan {
           ? named.map((c) => state.get(c.soldierId)).filter((x): x is SoldierState => !!x)
           : [...state.values()]
               .filter((st) => (rule.roles ?? []).some((r) => nrm(r) === nrm(st.soldier.role)))
+              // by the roles list (מ"פ before סמ"פ), then by id — two soldiers
+              // of the SAME role must not be ordered by roster load order
               .sort((a, b) =>
                 rule.roles!.findIndex((r) => nrm(r) === nrm(a.soldier.role))
-                - rule.roles!.findIndex((r) => nrm(r) === nrm(b.soldier.role))))
+                - rule.roles!.findIndex((r) => nrm(r) === nrm(b.soldier.role))
+                || a.soldier.id - b.soldier.id))
           // the one restriction gate also here: an exit-day candidate (H9)
           // can't hold a daily seat — the NEXT candidate on the list takes it,
           // and he is never reserved (stays free for a shift position)
@@ -500,8 +503,24 @@ export function runLevel1(g: Gen): Level1Plan {
     });
   }
 
-  // fill order: role-gated / commander-heavy first
-  const order = ['קצין מוצב', 'סיור', 'התקפי', 'מגן', 'עמדות הגנה', 'חפק', 'תורנים'];
+  // Fill order: role-gated / commander-heavy first.
+  //
+  // SUNDAY EXCEPTION (owner 2026-07-26): on every other day the מגן crew is
+  // already reserved by the continuity pre-pass above, so its position in this
+  // list barely matters. A Sunday resets continuity — the crew is built from
+  // scratch — and filling it here, after סיור and התקפי have taken their
+  // people, leaves it choosing an anchor מחלקה from a pool those positions
+  // already thinned out: the single-מחלקה core then can't reach flex min and
+  // the crew comes out mixed. So on a Sunday מגן fills FIRST, right after the
+  // closed-list position, while every מחלקה is still whole.
+  // Safe against the 2026-07-20 "מגן held 12 while תורנים sat empty" bug:
+  // this pass only fills מגן to its template demand (10) — surplus is still
+  // absorbed at the very end, after every position is staffed. Also a no-op
+  // for Pass A: מגן has no commander_first_seat, group_size or driver_qual,
+  // so its hard quota is zero.
+  const order = isSunday(g.day)
+    ? ['קצין מוצב', 'מגן', 'סיור', 'התקפי', 'עמדות הגנה', 'חפק', 'תורנים']
+    : ['קצין מוצב', 'סיור', 'התקפי', 'מגן', 'עמדות הגנה', 'חפק', 'תורנים'];
 
   // pick-order stamp (owner request 2026-07-19): every demand-fill rationale
   // carries the sequence number of its pick, so the report lists soldiers in
@@ -586,16 +605,18 @@ export function runLevel1(g: Gen): Level1Plan {
     // current members if any, else the platoon with the most free candidates.
     if (pos.config?.same_platoon && need > 0) {
       const current = [...state.values()].filter((st) => st.level1 === pid);
-      let platoon: string | undefined;
-      if (current.length) {
+      // Most members wins (current crew's מחלקה if any, else the מחלקה with the
+      // most free candidates — the only choice that can still cover `need`).
+      // The name tie-break is REQUIRED: without it two equally-sized platoons
+      // resolve by Map insertion order, i.e. by the roster query's row order.
+      const byCount = (counts: Map<string, number>) => [...counts.entries()]
+        .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0], 'he'))[0]?.[0];
+      const tally = (xs: SoldierState[]) => {
         const counts = new Map<string, number>();
-        for (const st of current) counts.set(st.soldier.platoon, (counts.get(st.soldier.platoon) ?? 0) + 1);
-        platoon = [...counts.entries()].sort((a, b) => b[1] - a[1])[0][0];
-      } else {
-        const counts = new Map<string, number>();
-        for (const st of free) counts.set(st.soldier.platoon, (counts.get(st.soldier.platoon) ?? 0) + 1);
-        platoon = [...counts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0];
-      }
+        for (const st of xs) counts.set(st.soldier.platoon, (counts.get(st.soldier.platoon) ?? 0) + 1);
+        return counts;
+      };
+      const platoon = byCount(tally(current.length ? current : free));
       if (platoon) {
         const same = free.filter((st) => st.soldier.platoon === platoon);
         if (same.length >= need) {
@@ -622,7 +643,12 @@ export function runLevel1(g: Gen): Level1Plan {
     // P5 platoon groups (config.group_size): each quota commander anchors a
     // group filled preferably from his own platoon (soft)
     if (groupSize && need > 0) {
-      const cmdrs = [...state.values()].filter((st) => st.level1 === pid && st.soldier.isCommander);
+      // Anchor order decides which commander's מחלקה gets its 3 companions
+      // first, so it must be a real decision, not the roster's load order:
+      // rank the anchors by the same group cascade the fill uses.
+      const cmdrs = rankGroup(g,
+        [...state.values()].filter((st) => st.level1 === pid && st.soldier.isCommander),
+        pid, atStart);
       for (const cm of cmdrs) {
         let room = Math.min(groupSize - 1, need);
         for (const st of rankGroup(g, free.filter((x) => x.level1 === null

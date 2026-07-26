@@ -57,7 +57,12 @@ create table soldiers (
   phone           text,
   email           text,
   is_schedulable  boolean not null default true,  -- H2: מפלג / חמ"ל => false
-  notes           text
+  notes           text,
+  -- Soft removal (מצבת חיילים tab): null = active. An archived soldier is out
+  -- of every roster read (generator, validator, pickers, fairness, presence)
+  -- but keeps all history rows and keeps holding their unique full_name /
+  -- personal_number, so a re-import cannot resurrect them as a duplicate.
+  archived_at     timestamp
 );
 
 -- H6c whitelist: no rows = soldier may serve anywhere; else only these
@@ -359,6 +364,7 @@ language sql stable as $$
            'נוכח')
   from soldiers s
   cross join generate_series(from_day, to_day, interval '1 day') d(day)
+  where s.archived_at is null
 $$;
 
 -- Concrete slots per schedule day (template × calendar × seat overrides).
@@ -470,5 +476,6 @@ language sql stable as $$
              over (partition by soldier_id, position_name) as cnt
     from base
   ) b on b.soldier_id = s.id and lower(b.period) < w.t_end
+  where s.archived_at is null
   group by s.id, w.t_end
 $$;

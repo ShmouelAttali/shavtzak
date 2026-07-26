@@ -14,6 +14,7 @@ import { ExitRequests } from './components/ExitRequests';
 import { AdminExits } from './components/AdminExits';
 import { HamalSchedule } from './components/HamalSchedule';
 import { DayStructure } from './components/DayStructure';
+import { Roster } from './components/Roster';
 
 const COMPANY_ROLES = new Set(['מ"פ', 'סמ"פ', 'מ"מ', 'סמל', 'מ"כ']);
 
@@ -30,6 +31,7 @@ const TABS: { id: TabId; label: string; restricted?: 'company' | 'scheduler' | '
   { id: 'fairness',  label: 'הוגנות', restricted: 'scheduler' },
   { id: 'daystructure', label: 'מבנה יומי', restricted: 'scheduler' },
   { id: 'exitadmin', label: 'ניהול יציאות', restricted: 'scheduler' },
+  { id: 'roster',    label: 'מצבת חיילים', restricted: 'scheduler' },
   { id: 'hamal',     label: 'חמל', restricted: 'hamal' },
 ];
 
@@ -97,7 +99,7 @@ function AppContent({ data }: { data: SheetData }) {
   // If a restricted tab becomes inaccessible, fall back to personal
   useEffect(() => {
     if (activeTab === 'company' && !canSeeCompany) setActiveTab('personal');
-    if (['draft', 'fairness', 'daystructure', 'exitadmin'].includes(activeTab) && !canSeeScheduler) setActiveTab('personal');
+    if (['draft', 'fairness', 'daystructure', 'exitadmin', 'roster'].includes(activeTab) && !canSeeScheduler) setActiveTab('personal');
     if (activeTab === 'hamal' && !canSeeHamal) setActiveTab('personal');
   }, [activeTab, canSeeCompany, canSeeScheduler, canSeeHamal]);
   const { data: shavtzakAll, loading: shavtzakLoading, error: shavtzakError, reload: reloadShavtzak } = useShavtzak();
@@ -193,6 +195,7 @@ function AppContent({ data }: { data: SheetData }) {
         {activeTab === 'daystructure' && <DayStructure guardRef={tabLeaveGuardRef} />}
         {activeTab === 'exitreq' && <ExitRequests soldierName={mySoldierName} email={myEmail} />}
         {activeTab === 'exitadmin' && <AdminExits soldiers={data.soldiers} email={myEmail} />}
+        {activeTab === 'roster' && <Roster guardRef={tabLeaveGuardRef} />}
         {activeTab === 'hamal' && <HamalSchedule />}
       </main>
     </div>
