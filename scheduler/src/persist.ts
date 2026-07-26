@@ -47,25 +47,47 @@ export async function persist(res: GenerateResult, opts: PersistOptions = {}): P
   const client = await pool.connect();
   try {
     await client.query('begin');
-    await client.query(
-      `delete from shift_assignments where day = $1 and source in ('auto','chain') and not locked`, [day]);
-    await client.query(
-      `delete from day_assignments where day = $1 and source in ('auto','chain') and not locked`, [day]);
-    // Daily missions extend past the day boundary; regenerating day D can
-    // therefore conflict with a stale draft of D+1. Remove only the future
-    // unlocked draft rows that actually collide — regenerating a range
-    // rebuilds them in order, and the validator flags any hole left behind.
-    const clashed = await client.query(
-      `delete from shift_assignments f
-       using unnest($2::bigint[], $3::tsrange[]) as n(sid, p)
-       where f.day > $1::date and f.source in ('auto','chain') and not f.locked
-         and f.soldier_id = n.sid and f.period && n.p
-       returning f.day`,
+    // Clear the day and stamp it, in ONE statement. The three deletes and the
+    // status update are mutually independent — the two shift_assignments
+    // deletes touch DISJOINT rows (`day = D` vs `day > D`), which is what makes
+    // them safe to run as sibling data-modifying CTEs (siblings share one
+    // snapshot; two of them hitting the same row would be undefined behaviour).
+    // Everything here must land BEFORE the inserts below, which is exactly what
+    // one statement guarantees.
+    //   cleared  — the day's own unlocked auto/chain rows (both levels)
+    //   clashed  — daily missions extend past the day boundary, so regenerating
+    //              day D can collide with a stale draft of D+1. Only the future
+    //              unlocked draft rows that ACTUALLY collide are removed;
+    //              regenerating a range rebuilds them in order, and the
+    //              validator flags any hole left behind.
+    //   stamped  — status/generated_at (naive LOCAL wall-clock, like every
+    //              other timestamp in the schema; Supabase's server TZ is UTC —
+    //              see schema.sql's exit_requests.created_at)
+    const cleared = await client.query<{ clashed: number }>(
+      `with drop_shifts as (
+         delete from shift_assignments
+          where day = $1 and source in ('auto','chain') and not locked
+       ), drop_days as (
+         delete from day_assignments
+          where day = $1 and source in ('auto','chain') and not locked
+       ), drop_future as (
+         delete from shift_assignments f
+          using unnest($2::bigint[], $3::tsrange[]) as n(sid, p)
+          where f.day > $1::date and f.source in ('auto','chain') and not f.locked
+            and f.soldier_id = n.sid and f.period && n.p
+         returning f.day
+       ), stamp as (
+         update schedule_days set status = 'generated',
+                generated_at = timezone('Asia/Jerusalem', now())
+          where day = $1
+       )
+       select count(*)::int clashed from drop_future`,
       [day,
         res.assignments.map((a) => a.soldierId),
         res.assignments.map((a) => `[${minToIso(a.period[0])},${minToIso(a.period[1])})`)]);
-    if (clashed.rowCount) {
-      res.issues.push(`הוסרו ${clashed.rowCount} שיבוצים מתנגשים מטיוטות של ימים עתידיים — יש לחולל אותם מחדש`);
+    const clashed = cleared.rows[0]?.clashed ?? 0;
+    if (clashed) {
+      res.issues.push(`הוסרו ${clashed} שיבוצים מתנגשים מטיוטות של ימים עתידיים — יש לחולל אותם מחדש`);
     }
     // day_assignments: 2 params/row — one row per soldier, so the roster size
     // alone keeps it far under the cap; chunked anyway for uniformity.
@@ -98,12 +120,6 @@ export async function persist(res: GenerateResult, opts: PersistOptions = {}): P
             is_commander_seat, source, blocks_overlap, violations, rationale)
          values ${sTuples.join(',')}`, sv);
     }
-    await client.query(
-      // naive LOCAL wall-clock, like every other timestamp in the schema
-      // (Supabase's server TZ is UTC — a bare now() would store UTC and skew
-      // 2-3h against the shift times; see schema.sql's exit_requests.created_at)
-      `update schedule_days set status = 'generated',
-              generated_at = timezone('Asia/Jerusalem', now()) where day = $1`, [day]);
     await client.query('commit');
   } catch (e) {
     await client.query('rollback');
