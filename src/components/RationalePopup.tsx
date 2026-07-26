@@ -1,5 +1,5 @@
 import type {DraftAssignmentMeta} from '../../api/draft';
-import {isCaveat, renderRationale} from '../../scheduler/src/rationale';
+import {isCaveat, renderRationale, violationCoveredByRationale} from '../../scheduler/src/rationale';
 
 export interface RationalePopupState {
     name: string;
@@ -22,12 +22,8 @@ export function RationalePopup({info, onClose}: { info: RationalePopupState; onC
     const caveats = meta.rationale.filter(isCaveat);
     const codes = new Set(meta.rationale.map(e => e.code));
     // raw generator violations already represented by a structured entry
-    const covered = (v: string) =>
-        (v === 'הושלם ממנוחה' && codes.has('pulled_from_rest'))
-        || (v.includes('פחות מ-4') && codes.has('caveat_rest_lt4'))
-        || (v.includes('פחות מ-8') && codes.has('caveat_rest_lt8_long'))
-        || (v.startsWith('מנוחה קצרה') && codes.has('caveat_short_rest'));
-    const extraViolations = meta.violations.filter(v => !covered(v));
+    // (shared with the report's cells — scheduler/src/rationale.ts)
+    const extraViolations = meta.violations.filter(v => !violationCoveredByRationale(v, codes));
     const badge = meta.locked ? 'נעול' : (SOURCE_LABEL[meta.source] ?? meta.source);
     const notGenerated = meta.rationale.length === 0;
 

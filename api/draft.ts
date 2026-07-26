@@ -2,6 +2,7 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { getPool, DATE_RE } from './_db.js';
 import type { StationGroup, SubType, TimeSlot } from './shavtzak.js';
 import type { RationaleEntry } from '../scheduler/src/rationale.js';
+import { requiredSeats } from '../scheduler/src/config.js';
 
 // ── Types (imported by the frontend as ../../api/draft) ────────────────────
 export type { RationaleEntry };
@@ -224,9 +225,8 @@ async function getDrafts(from: string, to: string): Promise<DraftResponse> {
     if (sl.sub_name !== null) n += countAt(bySug, station, time);
     // flex positions (מגן 10-12, סיור 3-4/shift) may legitimately staff below
     // the template seat count down to the flex minimum — same rule as the
-    // validator's coverage check
-    const flexMin = sl.pos_config?.flex_seats?.min;
-    const required = flexMin !== undefined ? Math.min(Number(sl.seats), Number(flexMin)) : Number(sl.seats);
+    // validator's coverage check (shared helper)
+    const required = requiredSeats(Number(sl.seats), sl.pos_config);
     const missing = required - n;
     if (missing <= 0) continue;
     const byTime = bySug.get(sug) ?? new Map<string, string[]>();

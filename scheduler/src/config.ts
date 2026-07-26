@@ -35,6 +35,18 @@ export function loadTunables(config: Record<string, any>): Tunables {
 }
 
 /**
+ * Seats a slot must actually staff. Flex positions (`config.flex_seats`, e.g.
+ * מגן 10–12, סיור 3–4/shift) may staff below the template seat count down to
+ * `flex_seats.min`; every other position needs its full seat count. Shared by
+ * the validator's coverage check (validate.ts) and the tab's לא מאויש markers
+ * (api/draft.ts) so the two can never diverge on the flex rule.
+ */
+export function requiredSeats(seats: number, config: Record<string, any> | null | undefined): number {
+  const flexMin = config?.flex_seats?.min;
+  return flexMin !== undefined ? Math.min(seats, Number(flexMin)) : seats;
+}
+
+/**
  * Position-config resolution: `daily: true` marks a 14:00–14:00 sleeping day
  * duty and implies `night_exempt` + `full_rest_after` + `yomi_display`.
  * Explicit keys override (e.g. תורנים sets `full_rest_after: false` — R1's 4h

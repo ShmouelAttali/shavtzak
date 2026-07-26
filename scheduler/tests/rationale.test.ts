@@ -3,6 +3,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   TEMPLATES, RATIONALE_CODES, isCaveat, renderRationale, RationaleEntry,
+  violationCoveredByRationale, RationaleCode,
 } from '../src/rationale.js';
 
 test('every code has a non-empty Hebrew template', () => {
@@ -32,4 +33,18 @@ test('isCaveat: caveat_* codes and only them', () => {
   }
   const caveats = RATIONALE_CODES.filter((c) => c.startsWith('caveat_'));
   assert.ok(caveats.length >= 5, 'caveat catalog unexpectedly small');
+});
+
+test('violationCoveredByRationale: each mapped violation matches only with its code', () => {
+  const set = (...c: RationaleCode[]) => new Set<RationaleCode>(c);
+  // covered when the matching code is present
+  assert.ok(violationCoveredByRationale('הושלם ממנוחה', set('pulled_from_rest')));
+  assert.ok(violationCoveredByRationale('פחות מ-4 שעות מנוחה לפני המשמרת', set('caveat_rest_lt4')));
+  assert.ok(violationCoveredByRationale('פחות מ-8 שעות מנוחה לפני משימה ארוכה', set('caveat_rest_lt8_long')));
+  assert.ok(violationCoveredByRationale('מנוחה קצרה: 5 שעות בלבד', set('caveat_short_rest')));
+  // NOT covered when the code is absent
+  assert.ok(!violationCoveredByRationale('הושלם ממנוחה', set('caveat_rest_lt4')));
+  assert.ok(!violationCoveredByRationale('פחות מ-4 שעות מנוחה לפני המשמרת', set()));
+  // an unmapped violation is never covered
+  assert.ok(!violationCoveredByRationale('אין נהג דוד בצוות', set('pulled_from_rest', 'caveat_short_rest')));
 });

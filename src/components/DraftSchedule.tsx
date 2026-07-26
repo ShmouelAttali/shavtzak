@@ -48,6 +48,15 @@ const STATUS_BADGE: Record<string, { label: string; cls: string }> = {
   published: { label: 'פורסם', cls: 'bg-green-200 text-green-800' },
 };
 
+/** small mono rule-code chip, matching the report's findingLi tag */
+function RuleTag({ rule }: { rule: string }) {
+  return (
+    <span className="shrink-0 rounded bg-black/5 px-1.5 py-0.5 text-[11px] font-mono text-gray-500" dir="ltr">
+      {rule}
+    </span>
+  );
+}
+
 function ValidationPanel({ findings }: { findings: DraftFinding[] }) {
   const [open, setOpen] = useState(false);
   const errors = findings.filter((f) => f.severity === 'error');
@@ -55,19 +64,30 @@ function ValidationPanel({ findings }: { findings: DraftFinding[] }) {
   if (!findings.length) {
     return <div className="rounded-lg bg-green-50 px-3 py-2 text-sm text-green-700">✓ הולידציה עברה ללא הערות</div>;
   }
+  const header = [
+    errors.length ? `❌ ${errors.length} שגיאות` : '',
+    warnings.length ? `⚠ ${warnings.length} אזהרות` : '',
+  ].filter(Boolean).join(' · ');
   return (
     <div className={`rounded-lg border ${errors.length ? 'border-red-200 bg-red-50' : 'border-yellow-200 bg-yellow-50'}`}>
       <button onClick={() => setOpen(!open)} className="w-full px-3 py-2 text-right text-sm font-semibold flex justify-between items-center">
         <span className={errors.length ? 'text-red-700' : 'text-yellow-700'}>
-          {errors.length ? `❌ ${errors.length} שגיאות` : ''}{errors.length && warnings.length ? ' · ' : ''}
-          {warnings.length ? `⚠ ${warnings.length} אזהרות` : ''}
+          {header}
         </span>
         <span className="text-gray-400">{open ? '▲' : '▼'}</span>
       </button>
       {open && (
         <ul className="px-4 pb-3 space-y-1 text-sm">
-          {errors.map((f, i) => <li key={`e${i}`} className="text-red-700">❌ {f.message}</li>)}
-          {warnings.map((f, i) => <li key={`w${i}`} className="text-yellow-700">⚠ {f.message}</li>)}
+          {errors.map((f, i) => (
+            <li key={`e${i}`} className="text-red-700 flex gap-1.5 items-start">
+              <span className="shrink-0">❌</span><RuleTag rule={f.rule} /><span>{f.message}</span>
+            </li>
+          ))}
+          {warnings.map((f, i) => (
+            <li key={`w${i}`} className="text-yellow-700 flex gap-1.5 items-start">
+              <span className="shrink-0">⚠</span><RuleTag rule={f.rule} /><span>{f.message}</span>
+            </li>
+          ))}
         </ul>
       )}
     </div>

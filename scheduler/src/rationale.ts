@@ -114,6 +114,19 @@ export const RATIONALE_CODES = Object.keys(TEMPLATES) as RationaleCode[];
 
 export const isCaveat = (e: RationaleEntry): boolean => e.code.startsWith('caveat_');
 
+/**
+ * A raw generator violation string that a structured rationale entry already
+ * states — so the two surfaces (RationalePopup + report cells) can dedupe
+ * identically and not show the same fact twice. `codes` is the set of
+ * rationale codes on the same assignment.
+ */
+export function violationCoveredByRationale(violation: string, codes: Set<RationaleCode>): boolean {
+  return (violation === 'הושלם ממנוחה' && codes.has('pulled_from_rest'))
+    || (violation.includes('פחות מ-4') && codes.has('caveat_rest_lt4'))
+    || (violation.includes('פחות מ-8') && codes.has('caveat_rest_lt8_long'))
+    || (violation.startsWith('מנוחה קצרה') && codes.has('caveat_short_rest'));
+}
+
 export function renderRationale(e: RationaleEntry): string {
   const tpl = TEMPLATES[e.code] ?? e.code;
   return tpl.replace(/\{(\w+)\}/g, (_, k) => String(e.params?.[k] ?? `{${k}}`));

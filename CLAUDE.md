@@ -69,7 +69,7 @@ the numbered steps of the day page's ניתוח התהליך (process) section. 
 
 ## Current state (2026-07-17)
 
-Everything below is implemented, tested (371 tests: `scheduler/` 267 + root 104),
+Everything below is implemented, tested (375 tests: `scheduler/` 271 + root 104),
 and live against the shared Supabase project:
 
 - **Scheduler DB** on Supabase (schema in `scheduler/db/schema.sql`, template
@@ -97,7 +97,9 @@ and live against the shared Supabase project:
 - **Viewer app**: two officer-only tabs — צור שבצק (date range +
   צור שבצ"ק button → `api/draft.ts`; clicking a name opens the manual
   replacement picker — `PUT /api/draft` writes a manual+locked row the
-  generator then re-seats verbatim) and הוגנות (Sunday-anchored week,
+  generator then re-seats verbatim; its ValidationPanel shows the live
+  validator errors/warnings with rule-code chips, matching the report's
+  חריגות card) and הוגנות (Sunday-anchored week,
   compliance dashboard: one exceptions-only card per SPEC rule fed by running
   the validator over the window's days, plus fairness-spread / position-balance
   cards → `api/fairness.ts`). Tab visibility also
@@ -118,6 +120,17 @@ and live against the shared Supabase project:
   (seat_overrides.slot_template_id + day-scoped exemption on
   slot_templates_no_overlap) — mirrored in schema.sql; **NOT yet applied to
   Supabase** (apply before deploying, or the new column 500s the API).
+- **Report ↔ צור שבצק tab alignment** (2026-07-26): both surfaces derive
+  every warning/error from the same code — the tab re-runs `validateDay` live
+  on GET (same findings as the report's חריגות card), and shared pure helpers
+  keep the rest in lockstep: `requiredSeats()` (config.ts — flex coverage
+  math, used by validate.ts + api/draft.ts's לא-מאויש markers) and
+  `violationCoveredByRationale()` (rationale.ts — the raw-violation↔caveat
+  dedup, used by RationalePopup + report cells). The generator's free-text
+  issues ("אין מועמד ל...") are deliberately NOT shown in the tab — they are
+  process narration and live only in the stored report (פתח דוח button). Any
+  new rule belongs in validate.ts (message shown in both) or rationale.ts
+  (rendered in both).
 - **Local dev**: `npm run dev:api` (port 3001) + `npm run dev` (vite 5173);
   env in `.env`/`.env.local` (git-ignored). Vercel prod needs
   `SCHEDULER_DATABASE_URL` set in project env — NOT done yet; nothing pushed

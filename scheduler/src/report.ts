@@ -17,7 +17,7 @@
 // through rationale.ts's TEMPLATES (renderRationale).
 
 import type { GenerateResult } from './model.js';
-import { RationaleEntry, RationaleCode, renderRationale, isCaveat } from './rationale.js';
+import { RationaleEntry, RationaleCode, renderRationale, isCaveat, violationCoveredByRationale } from './rationale.js';
 import { normalizeName as nrm } from './text.js';
 import { orderCrew } from './crewOrder.js';
 import { Minutes, fmtHM, dayStart, dayEnd } from './time.js';
@@ -640,11 +640,19 @@ ${narrative.length ? `  <ul class="narrative">\n${narrative.map((n) => `    <li>
   const hasCode = (a: ReportAssignment, code: RationaleCode) =>
     a.rationale.some((e) => e.code === code);
 
+  // raw violations a structured rationale entry already states (shared with the
+  // ⓘ popup — scheduler/src/rationale.ts) so a cell doesn't show the same
+  // בדוחק fact twice (as a caveat in the "why" line and as a raw ⚠ violation)
+  const shownViolations = (as: ReportAssignment[]): string[] => {
+    const codes = new Set(as.flatMap((a) => a.rationale).map((e) => e.code));
+    return [...new Set(as.flatMap((a) => a.violations))]
+      .filter((v) => !violationCoveredByRationale(v, codes));
+  };
+
   const cellHtml = (c: Cell): string => {
     if (c.kind === 'pair') {
       const handover = fmtHM(c.out.end);
-      const viols = [...new Set([...c.out.violations, ...c.in_.violations])]
-        .filter((v) => !v.startsWith('זוג מתחלף'));
+      const viols = shownViolations([c.out, c.in_]).filter((v) => !v.startsWith('זוג מתחלף'));
       return `<div class="who">${nameHtml(c.out.soldierId)} → ${nameHtml(c.in_.soldierId)}</div>` +
         `<div class="why">זוג מתחלף — החלפה ב-${esc(handover)}</div>` +
         (viols.length ? `<div class="viol">⚠ ${esc(viols.join(' | '))}</div>` : '');
@@ -652,9 +660,10 @@ ${narrative.length ? `  <ul class="narrative">\n${narrative.map((n) => `    <li>
     const a = c.a;
     const badges = a.isCommanderSeat ? ' <span class="badge cmd">מפקד</span>' : '';
     const why = pickReasonEntries(a.rationale).map((e) => esc(renderRationale(e))).join(' · ');
+    const viols = shownViolations([a]);
     return `<div class="who">${nameHtml(a.soldierId)}${badges}</div>` +
       (why ? `<div class="why">${why}</div>` : '') +
-      (a.violations.length ? `<div class="viol">⚠ ${esc(a.violations.join(' | '))}</div>` : '');
+      (viols.length ? `<div class="viol">⚠ ${esc(viols.join(' | '))}</div>` : '');
   };
 
   // Display order within a single time window (same a.start): commander(s)
@@ -729,7 +738,7 @@ ${narrative.length ? `  <ul class="narrative">\n${narrative.map((n) => `    <li>
           const who = c.kind === 'pair'
             ? `${nameHtml(c.out.soldierId)} → ${nameHtml(c.in_.soldierId)}`
             : nameHtml(c.a.soldierId);
-          const viols = c.kind === 'pair' ? [] : c.a.violations;
+          const viols = c.kind === 'pair' ? [] : shownViolations([c.a]);
           return `<td>${who}${viols.length ? `<div class="viol">⚠ ${esc(viols.join(' | '))}</div>` : ''}</td>`;
         }).join('');
         return `<tr><td><b>${winHtml(r.win[0], r.win[1])}</b></td>${tds}</tr>`;

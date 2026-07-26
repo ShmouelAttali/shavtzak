@@ -5,7 +5,7 @@ import {
 } from './time.js';
 import { normalizeName as nrm, hasQualification } from './text.js';
 import { isFullRestExempt, isCountedNight } from './rest.js';
-import { loadTunables, effectiveConfig, isShiftPosition, isNightExitWindows } from './config.js';
+import { loadTunables, effectiveConfig, isShiftPosition, isNightExitWindows, requiredSeats } from './config.js';
 import { roleFlags } from './load.js';
 import { partialWindow } from './pairs.js';
 import type { SeatRule } from './model.js';
@@ -595,9 +595,8 @@ export async function validateDay(day: string): Promise<Finding[]> {
       covering.filter((c) => c[0] <= t && t < c[1]).length));
     // flex positions (config.flex_seats, e.g. מגן 10-12, סיור 3-4/shift):
     // the generator may staff below the template seat count down to the flex
-    // minimum — coverage is judged against that minimum
-    const flexMin: number | undefined = posConfig.get(ds.position_id)?.flex_seats?.min;
-    const required = flexMin !== undefined ? Math.min(ds.seats, flexMin) : ds.seats;
+    // minimum — coverage is judged against that minimum (shared helper)
+    const required = requiredSeats(ds.seats, posConfig.get(ds.position_id));
     if (n < required) {
       findings.push({
         severity: 'error', rule: 'coverage',
