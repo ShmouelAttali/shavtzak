@@ -95,6 +95,17 @@ export function conflictLabel(c: SlotConflict): string {
   return `${where} (${c.time === 'יומי' ? 'יומי' : c.time})`;
 }
 
+/** The seats one in-flight replacement touches, as `${name}|${time}` keys (the
+ *  same identity the grid's meta map uses): the clicked seat, plus every seat
+ *  the incoming soldier is about to be evicted from (`force`). The tab shows a
+ *  spinner on each and swallows clicks on them, so a second edit cannot collide
+ *  with a row this request is already moving. */
+export function pendingSeatKeys(target: ReplaceTarget, incoming: string, conflicts: SlotConflict[]): string[] {
+  const keys = new Set([`${target.outgoing}|${target.time}`]);
+  for (const c of conflicts) keys.add(`${incoming}|${c.time}`);
+  return [...keys];
+}
+
 /** soldier name -> conflict hint, for every candidate the picker will list, so
  *  the officer sees the clash BEFORE clicking. */
 export function conflictNotes(day: DraftDay, target: ReplaceTarget): Record<string, string> {

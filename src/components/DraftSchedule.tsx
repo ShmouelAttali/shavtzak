@@ -2,13 +2,13 @@ import { useMemo, useState } from 'react';
 import type { Soldier } from '../types';
 import type { DraftAssignmentMeta, DraftDay, DraftFinding } from '../../api/draft';
 import type { StationGroup } from '../../api/shavtzak';
-import { useDraft } from '../hooks/useDraft';
-import { GroupsView, buildDisplayGroups, SoldierCtx, NameClickCtx, MyNameCtx, DraftMetaCtx, RationaleClickCtx, SoldierInfo } from './Shavtzak';
+import { seatsForDay, useDraft } from '../hooks/useDraft';
+import { GroupsView, buildDisplayGroups, SoldierCtx, NameClickCtx, MyNameCtx, DraftMetaCtx, PendingSeatsCtx, RationaleClickCtx, SoldierInfo } from './Shavtzak';
 import { ReplaceSoldierPopup, ReplaceState } from './ReplaceSoldierPopup';
 import { RationalePopup, RationalePopupState } from './RationalePopup';
 import { DateRangePicker, todayIso, addDaysIso, heDate } from './DateRangePicker';
 import { orderCrew } from '../../scheduler/src/crewOrder';
-import { conflictLabel, conflictNotes, findSlotConflicts } from '../lib/draftConflicts';
+import { conflictLabel, conflictNotes, findSlotConflicts, pendingSeatKeys } from '../lib/draftConflicts';
 
 // Draft-only display ordering (owner request): commander(s) first, then the
 // remaining soldiers grouped by מחלקה (platoon) — reuses the SAME generic
@@ -41,6 +41,8 @@ function daysBetween(from: string, to: string): string[] {
   for (let d = from; d <= to && out.length < 14; d = addDaysIso(d, 1)) out.push(d);
   return out;
 }
+
+const EMPTY_SEATS: Set<string> = new Set();
 
 const STATUS_BADGE: Record<string, { label: string; cls: string }> = {
   draft: { label: 'טיוטה ריקה', cls: 'bg-gray-100 text-gray-600' },
@@ -140,18 +142,21 @@ function DayViolations({ day }: { day: DraftDay }) {
   );
 }
 
-function DaySection({ day, onGenerate, onPublish, onUnpublish, onDelete, generating, busyDay, soldierLookup, onNameClick }: {
+function DaySection({ day, onGenerate, onPublish, onUnpublish, onDelete, generating, busyDay, pendingSeats, soldierLookup, onNameClick }: {
   day: DraftDay; onGenerate: (d: string) => void;
   onPublish: (d: string) => void; onUnpublish: (d: string) => void;
   onDelete: (d: string) => void;
   generating: string | null; busyDay: string | null;
+  /** `${name}|${time}` seats of THIS day currently being replaced */
+  pendingSeats: Set<string>;
   soldierLookup: Map<string, SoldierInfo>;
   onNameClick: (day: DraftDay, name: string, time: string, meta?: DraftAssignmentMeta) => void;
 }) {
   const badge = STATUS_BADGE[day.status] ?? STATUS_BADGE.draft;
   const isEmpty = day.groups.length === 0;
   const published = day.status === 'published';
-  const busy = generating !== null || busyDay !== null;
+  // a seat-level replacement blocks only this day's WHOLESALE actions
+  const busy = generating !== null || busyDay !== null || pendingSeats.size > 0;
   return (
     <section className="space-y-3">
       <div className="flex items-center gap-2 flex-wrap">
@@ -218,10 +223,12 @@ function DaySection({ day, onGenerate, onPublish, onUnpublish, onDelete, generat
           {/* per-day click handler: a click carries the day it happened on
               plus the clicked slot's meta (rationale ⇒ driver/commander seat) */}
           <DraftMetaCtx.Provider value={day.meta}>
-            <NameClickCtx.Provider value={(name, _info, time) =>
-              onNameClick(day, name, time ?? '', day.meta[`${name}|${time ?? ''}`])}>
-              <GroupsView groups={buildDisplayGroups(day.day, orderStationGroups(day.groups, soldierLookup), null)} />
-            </NameClickCtx.Provider>
+            <PendingSeatsCtx.Provider value={pendingSeats}>
+              <NameClickCtx.Provider value={(name, _info, time) =>
+                onNameClick(day, name, time ?? '', day.meta[`${name}|${time ?? ''}`])}>
+                <GroupsView groups={buildDisplayGroups(day.day, orderStationGroups(day.groups, soldierLookup), null)} />
+              </NameClickCtx.Provider>
+            </PendingSeatsCtx.Provider>
           </DraftMetaCtx.Provider>
           <RestList day={day} />
         </>
@@ -238,10 +245,10 @@ export function DraftSchedule({ soldiers, mySoldierName = '', email = '' }: {
   const [multiDay, setMultiDay] = useState(false);
   const [to, setTo] = useState(todayIso());
   const [replacing, setReplacing] = useState<ReplaceState | null>(null);
-  const [replaceError, setReplaceError] = useState<string | null>(null);
+  const [replaceErrors, setReplaceErrors] = useState<string[]>([]);   // failed replacements (popup is already closed)
   const [rationalePopup, setRationalePopup] = useState<RationalePopupState | null>(null);
   const effectiveTo = multiDay && to >= from ? to : from;
-  const { data, loading, error, generating, busyDay, generateRange, publish, unpublish, deleteDraft, replaceSoldier } = useDraft(from, effectiveTo);
+  const { data, loading, error, generating, busyDay, pendingSeats, generateRange, publish, unpublish, deleteDraft, replaceSoldier } = useDraft(from, effectiveTo);
 
   const lookup = useMemo(() => {
     const map = new Map<string, SoldierInfo>();
@@ -265,7 +272,6 @@ export function DraftSchedule({ soldiers, mySoldierName = '', email = '' }: {
     for (const [position, names] of Object.entries(day.dayAssignments)) {
       for (const n of names) busyNote[n] = position;
     }
-    setReplaceError(null);
     setReplacing({
       day: day.day, name, time, meta,
       soldierId: idByName.get(name) ?? null,
@@ -281,16 +287,16 @@ export function DraftSchedule({ soldiers, mySoldierName = '', email = '' }: {
   // Picking a candidate who is already booked in the target hours would hit the
   // DB's no_double_booking — so ask first, naming the seat that gets vacated,
   // and let the server do remove-then-assign in one transaction (`force`).
+  // The popup closes on the pick: the round trip is shown ON the touched seats
+  // (spinner + clicks swallowed, incl. the seat being force-vacated), leaving
+  // the rest of the day editable — several replacements may run at once.
   const doReplace = async (toSoldierId: number) => {
     if (!replacing?.soldierId) return;
-    const day = data?.days.find((d) => d.day === replacing.day);
+    const target = { ...replacing, soldierId: replacing.soldierId };
+    const day = data?.days.find((d) => d.day === target.day);
     const candidate = roster.find((s) => s.id === toSoldierId);
-    const conflicts = day && candidate
-      ? findSlotConflicts(day, candidate.name, {
-          time: replacing.time, outgoing: replacing.name,
-          blocks: replacing.meta?.blocksOverlap ?? true,
-        })
-      : [];
+    const slot = { time: target.time, outgoing: target.name, blocks: target.meta?.blocksOverlap ?? true };
+    const conflicts = day && candidate ? findSlotConflicts(day, candidate.name, slot) : [];
     if (conflicts.length) {
       const where = conflicts.map(conflictLabel).join('\n• ');
       const ok = window.confirm(
@@ -298,13 +304,21 @@ export function DraftSchedule({ soldiers, mySoldierName = '', email = '' }: {
         `להסיר אותו משם ולשבץ אותו כאן?\n(המקום שיתפנה יסומן "לא מאויש".)`);
       if (!ok) return;
     }
-    const err = await replaceSoldier(
-      replacing.day, replacing.time, replacing.soldierId, toSoldierId, conflicts.length > 0);
-    if (err) setReplaceError(err);
-    else setReplacing(null);
+    setReplacing(null);
+    const err = await replaceSoldier({
+      day: target.day, time: target.time,
+      fromSoldierId: target.soldierId, toSoldierId, force: conflicts.length > 0,
+      seats: pendingSeatKeys(slot, candidate?.name ?? '', conflicts),
+    });
+    if (err) setReplaceErrors((prev) => [...prev, `${heDate(target.day)} · ${target.name} (${target.time}): ${err}`]);
   };
 
   const days = daysBetween(from, effectiveTo);
+  const dayPending = useMemo(
+    () => new Map(days.map((d) => [d, seatsForDay(pendingSeats, d)])),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [pendingSeats, days.join()],
+  );
   const generateAll = () => {
     const existing = data?.days.some((d) => d.groups.length > 0);
     if (existing && !window.confirm('קיימת כבר טיוטה בטווח — לחולל מחדש? שיבוצים נעולים/ידניים יישמרו.')) return;
@@ -351,6 +365,14 @@ export function DraftSchedule({ soldiers, mySoldierName = '', email = '' }: {
             {error && (
               <div className="rounded-xl bg-red-50 p-4 text-center text-red-700 text-sm">{error}</div>
             )}
+            {/* a replacement that failed after its popup already closed */}
+            {replaceErrors.map((msg, i) => (
+              <div key={i} className="rounded-xl bg-red-50 px-4 py-3 text-sm text-red-700 flex items-center gap-2" dir="rtl">
+                <span className="flex-1">❌ {msg}</span>
+                <button onClick={() => setReplaceErrors((prev) => prev.filter((_, j) => j !== i))}
+                  className="rounded px-2 py-0.5 text-red-500 hover:bg-red-100">✕</button>
+              </div>
+            ))}
 
             {/* Days */}
             {days.map((day) => {
@@ -358,14 +380,14 @@ export function DraftSchedule({ soldiers, mySoldierName = '', email = '' }: {
                 ?? { day, status: 'draft', generatedAt: null, publishedAt: null, approvedBy: null, hasReport: false, validation: [], groups: [], meta: {}, dayAssignments: {} };
               return <DaySection key={day} day={d} onGenerate={generateOne}
                 onPublish={publishOne} onUnpublish={unpublishOne} onDelete={deleteOne}
-                generating={generating} busyDay={busyDay} soldierLookup={lookup}
+                generating={generating} busyDay={busyDay}
+                pendingSeats={dayPending.get(day) ?? EMPTY_SEATS} soldierLookup={lookup}
                 onNameClick={handleNameClick} />;
             })}
           </div>
           {replacing && (
             <ReplaceSoldierPopup
               info={replacing} roster={roster}
-              busy={busyDay === replacing.day} error={replaceError}
               onReplace={doReplace} onClose={() => setReplacing(null)} />
           )}
           {rationalePopup && <RationalePopup info={rationalePopup} onClose={() => setRationalePopup(null)} />}

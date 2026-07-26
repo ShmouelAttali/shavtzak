@@ -68,12 +68,13 @@ export function replacementOptions(
 
 /** Replace the soldier sitting in one assignment. Driver/commander seats
  *  default to showing only qualified candidates (owner request) — unchecking
- *  the box falls back to the whole roster. */
-export function ReplaceSoldierPopup({ info, roster, busy, error, onReplace, onClose }: {
+ *  the box falls back to the whole roster.
+ *  The pick CLOSES this popup: the request's progress is shown on the affected
+ *  seats in the grid (PendingSeatsCtx), not by a modal spinner, so the officer
+ *  can keep editing other seats while it runs. */
+export function ReplaceSoldierPopup({ info, roster, onReplace, onClose }: {
   info: ReplaceState;
   roster: DraftRosterEntry[];
-  busy: boolean;
-  error: string | null;
   onReplace: (toSoldierId: number) => void;
   onClose: () => void;
 }) {
@@ -137,16 +138,7 @@ export function ReplaceSoldierPopup({ info, roster, busy, error, onReplace, onCl
           </p>
         ) : (
           <div className="border-t border-gray-100">
-            {error && (
-              <p className="px-4 py-2 text-sm text-red-700 bg-red-50 text-center">{error}</p>
-            )}
-            {busy ? (
-              <p className="px-4 py-6 text-center text-sm text-gray-400">
-                <span className="animate-spin inline-block">↺</span> מחליף...
-              </p>
-            ) : (
-              <SoldierPicker options={options} onPick={onReplace} filters={filters} autoFocus />
-            )}
+            <SoldierPicker options={options} onPick={onReplace} filters={filters} autoFocus />
           </div>
         )}
 

@@ -5,8 +5,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  conflictLabel, conflictNotes, findSlotConflicts, parseSlotSpan, spansOverlap,
+  conflictLabel, conflictNotes, findSlotConflicts, parseSlotSpan, pendingSeatKeys, spansOverlap,
 } from '../src/lib/draftConflicts';
+import { seatKey, seatsForDay } from '../src/hooks/useDraft';
 import type { DraftAssignmentMeta, DraftDay } from '../api/draft';
 
 const span = (label: string) => {
@@ -102,4 +103,40 @@ test('conflictNotes covers every candidate, skipping the outgoing soldier', () =
   assert.equal(notes['ורד'], 'מגן (יומי)');       // sub == position → not repeated
   assert.ok(!('אבי' in notes), 'the soldier being replaced is not a candidate');
   assert.ok(!('זיו' in notes), 'readiness overlay holder is free to join');
+});
+
+// ── Seats locked while a replacement is in flight ───────────────────────────
+// The popup closes on the pick, so the round trip is shown on the grid: the
+// clicked seat AND every seat the incoming soldier is evicted from get a
+// spinner and swallow clicks (no colliding second edit on a row being moved).
+test('pendingSeatKeys locks the clicked seat', () => {
+  assert.deepEqual(pendingSeatKeys(target, 'דני', []), ['אבי|18:00-02:00']);
+});
+
+test('pendingSeatKeys also locks each seat the incoming soldier is evicted from', () => {
+  const conflicts = findSlotConflicts(DAY, 'דני', target);
+  assert.deepEqual(pendingSeatKeys(target, 'דני', conflicts),
+    ['אבי|18:00-02:00', 'דני|22:00-06:00']);
+});
+
+test('pendingSeatKeys dedupes two evictions sharing one label', () => {
+  const conflicts = [
+    { position: 'עמדות הגנה', sub: 'שג', time: '22:00-06:00' },
+    { position: 'כרמל חטיבה', sub: 'כרמל חטיבה', time: '22:00-06:00' },
+  ];
+  assert.deepEqual(pendingSeatKeys(target, 'דני', conflicts),
+    ['אבי|18:00-02:00', 'דני|22:00-06:00']);
+});
+
+// ── The flat pending set is per-day-sliced for the grid ─────────────────────
+test('seatsForDay slices the pending set by day, keeping the name|time key', () => {
+  const pending = new Set([
+    seatKey('2026-07-20', 'אבי|18:00-02:00'),
+    seatKey('2026-07-20', 'דני|22:00-06:00'),
+    seatKey('2026-07-21', 'אבי|18:00-02:00'),
+  ]);
+  assert.deepEqual(seatsForDay(pending, '2026-07-20'),
+    new Set(['אבי|18:00-02:00', 'דני|22:00-06:00']));
+  assert.deepEqual(seatsForDay(pending, '2026-07-21'), new Set(['אבי|18:00-02:00']));
+  assert.deepEqual(seatsForDay(pending, '2026-07-22'), new Set());
 });

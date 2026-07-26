@@ -106,6 +106,14 @@ and live against the shared Supabase project:
   seat to vacate; approving sends `force:true` and the server deletes those
   rows BEFORE seating him in one transaction (order matters —
   `no_double_booking`), returning the evicted seats (now לא מאויש).
+  **A replacement never blocks the screen** (owner 2026-07-26): the popup closes
+  on the pick and the round trip is shown ON the affected seats — the clicked
+  seat plus every force-vacated one (`pendingSeatKeys` → `useDraft.pendingSeats`
+  → `PendingSeatsCtx`) render a spinner and swallow clicks, so several
+  replacements can run at once and only the rows actually being moved are
+  locked (a day with pending seats still blocks its own wholesale buttons).
+  A failure surfaces as a dismissible banner, not in the (already closed) popup;
+  concurrent reloads are ordered by a sequence guard in `useDraft.load`.
   **מחק טיוטה** = `DELETE /api/draft?day=`,
   the manual twin of the stale-draft cleanup — drops the day's whole draft incl.
   manual/locked edits, keeps `source='import'` history and manual-only positions

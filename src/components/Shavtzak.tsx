@@ -31,6 +31,12 @@ export const DraftMetaCtx = createContext<Record<string, DraftAssignmentMeta> | 
 export const RationaleClickCtx = createContext<(name: string, time: string, meta: DraftAssignmentMeta) => void>(() => {
 });
 
+// Draft-tab only: `${name}|${time}` keys of the seats a replacement is
+// currently writing (the clicked seat + any seat being force-vacated). They
+// render with a spinner and swallow clicks, so a second edit can't collide
+// with a row already in flight — everything else stays editable.
+export const PendingSeatsCtx = createContext<Set<string>>(new Set());
+
 const BOLD_ROLES = new Set(['מ"מ', 'מ"פ', 'סמ"פ', 'סמל', 'מ"כ']);
 const UNIT_COLOR: Record<string, string> = {
     '1': 'text-red-500',
@@ -46,6 +52,7 @@ function SoldierName({name, time}: { name: string; time?: string }) {
     const myName = useContext(MyNameCtx);
     const draftMeta = useContext(DraftMetaCtx);
     const onRationale = useContext(RationaleClickCtx);
+    const pending = useContext(PendingSeatsCtx).has(`${name}|${time ?? ''}`);
     // draft API pads under-filled slots with this marker — render as a red badge
     if (name === 'לא מאויש') {
         return (
@@ -60,6 +67,16 @@ function SoldierName({name, time}: { name: string; time?: string }) {
     const isMe = myName !== '' && name === myName;
     const meta = draftMeta && time !== undefined ? draftMeta[`${name}|${time}`] : undefined;
     const warn = meta ? meta.violations.length > 0 || meta.rationale.some(isCaveat) : false;
+    if (pending) {
+        return (
+            <span
+                title="מתבצעת החלפה בשיבוץ זה"
+                className={`text-sm whitespace-nowrap leading-snug select-none opacity-50 cursor-wait ${color} ${bold ? 'font-bold' : 'font-medium'}`}
+            >
+                <span className="animate-spin inline-block ml-0.5 text-blue-500">↺</span>{name}
+            </span>
+        );
+    }
     return (
         <span
             onClick={() => onCLick(name, info, time)}
