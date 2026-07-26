@@ -64,6 +64,10 @@ POSITION_MAP = [
     ('מגן',        'מגן'),
     ('תגבצ',       'תגבצ'),
     ('סיור',       'סיור'),
+    # 'פעילות עומק' is deliberately the FULL סוג, not the bare 'עומק': the
+    # earlier deep missions ('פטרול עומק', "צ׳קפוסט עומק") are typed התקפי and
+    # must keep that attribution on a re-import.
+    ('פעילות עומק', 'פעילות עומק'),
     ('משימות',     'משימות שונות'),
 ]
 DEFENSE_POSTS = {'שג', 'בונקר', 'מזרחית', 'דרומית'}
@@ -88,8 +92,10 @@ def canonical_position(position, typ):
         return 'התקפי'
     return 'התקפי' if 'פטרול' in text or 'צ׳קפוסט' in text else 'אחר'
 
+# 'פעילות עומק': the sheet writes a bare 00:00 and the activity runs to the
+# schedule-day boundary (owner 2026-07-26) — 14h from midnight.
 SINGLE_TIME_DURATION = {'סיור': 8, 'עמדות הגנה': 4, 'כרמל': 4, 'חמל': 8, 'כרמל חטיבה': 4,
-                        'כונן גשש': 8}
+                        'כונן גשש': 8, 'פעילות עומק': 14}
 
 def parse_time(text):
     m = re.match(r'^(\d{1,2})[:.](\d{2})', text)

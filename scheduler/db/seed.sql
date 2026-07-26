@@ -68,6 +68,11 @@ insert into positions (id, name, mission_class, is_scheduled, config) values
   -- 14:00-14:00 duty semantics as חפק; manual-only until the owner decides the
   -- generator should staff it (no seat_rules, no candidate lists).
   (16, 'חפק2',        'other',     false, '{"daily":true,"no_rest_floor":true}'),
+  -- פעילות עומק: deep-activity operation (appears from 27/07/2026, sheet
+  -- סוג='פעילות עומק' with העמדה = the team). MANUAL-ONLY (is_scheduled=false):
+  -- the generator never invents it, but the imported rows occupy the soldier
+  -- (rest, double-booking, fairness). The team is the sub-position.
+  (17, 'פעילות עומק', 'other',     false, '{}'),
   -- אחר: catch-all for imported history rows whose position no longer exists
   (99, 'אחר',         'other',     false, '{}');
 
@@ -90,7 +95,11 @@ insert into sub_positions (id, position_id, name) values
   (13, 15, 'כח גלעד'),
   (14, 15, 'כח שאג'),
   (15, 15, 'תפיסת בית'),
-  (16, 15, 'משימות שונות');   -- unnamed / generic mission row
+  (16, 15, 'משימות שונות'),   -- unnamed / generic mission row
+  -- פעילות עומק: one row per team, exactly as the sheet spells the העמדה
+  (17, 17, 'צוות א'),
+  (18, 17, 'צוות ב'),
+  (19, 17, 'נהג טיגריס');
 
 -- ── Slot templates (valid from 2026-07-15) ──────────────────────────────────
 -- סיור: 3 shifts × 8h × 4 seats, first seat = commander

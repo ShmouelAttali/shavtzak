@@ -61,6 +61,20 @@ class PositionMapping(unittest.TestCase):
         for pos, typ, want in cases:
             self.assertEqual(canonical_position(pos, typ), want, pos)
 
+    def test_deep_activity_is_its_own_position_and_runs_to_the_boundary(self):
+        """סוג='פעילות עומק' (from 27/07/2026): העמדה is the team, the bare 00:00
+        runs to the 14:00 schedule-day boundary (owner 2026-07-26)."""
+        for team in ('צוות א', 'צוות ב', 'נהג טיגריס'):
+            canon, (start, end) = period('27/07/2026', team, 'פעילות עומק', '00:00')
+            self.assertEqual(canon, 'פעילות עומק', team)
+            self.assertEqual((start, end), (datetime(2026, 7, 27, 0), datetime(2026, 7, 27, 14)))
+
+    def test_earlier_deep_missions_keep_their_hatkafi_attribution(self):
+        """The keyword is the full 'פעילות עומק', so the older עומק missions —
+        typed התקפי — must NOT be re-attributed."""
+        self.assertEqual(canonical_position('פטרול עומק - אודלה', 'התקפי'), 'התקפי')
+        self.assertEqual(canonical_position('פטרול עומק', 'התקפי'), 'התקפי')
+
     def test_daily_rows_span_the_1400_schedule_day(self):
         for pos, typ in (('חפק2', 'חפק'), ('כח גלעד', 'משימות שונות')):
             _, (start, end) = period('24/07/2026', pos, typ, 'יומי')
