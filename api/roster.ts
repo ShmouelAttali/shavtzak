@@ -1,5 +1,6 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { getPool } from './_db.js';
+import { normalizeName } from '../scheduler/src/text.js';
 
 // ── מצבת חיילים tab API (roster editor, admin-only) ──────────────────────────
 // The scheduler DB is the source of truth for the roster, but until now only
@@ -21,7 +22,8 @@ import { getPool } from './_db.js';
 // NO-ACTION FKs, so anyone with history could not be deleted anyway, and
 // dropping fairness history would be wrong. Restore = { archived: false }.
 //
-// Mutations echo the full re-read GET payload so the hook can rebase.
+// Mutations echo the full re-read GET payload so the hook can rebase, and are
+// validated against the payload's own closed lists (`roles`, `platoons`).
 
 export interface RosterCandidacy {
   positionId: number;
@@ -93,7 +95,37 @@ export const QUAL_CATALOG = [
   'נהג דוד', 'נהג טיגריס', 'חובש', 'קלע', 'נגב', 'מאג', 'רחפן', 'מטב',
 ];
 
-const UNKNOWN_PLATOON = 'לא ידוע';   // soldiers.platoon is NOT NULL (importer's fallback)
+// תפקיד is a CLOSED list in the editor (owner 2026-07-26) — free text used to
+// let a typo silently break the generator, which matches role strings for the
+// staff_all_roles restriction, seat rules and commander detection. The list is
+// observed roles ∪ the roles the DB itself declares (staff_all_roles +
+// seat_rules[].roles, same sources as validate.ts's config_roles lint) ∪ this
+// catalog: the roles the system knows semantically but cannot derive, because
+// crewOrder.ts's DEFAULT_COMMANDER_ROLES holds *normalized* forms (gershayim
+// stripped) that can't be spelled back. Without the union, assigning anyone to
+// חמל / מפלג would be impossible whenever nobody currently holds the role —
+// setting תפקיד is the ONLY way in for both.
+export const ROLE_CATALOG = [
+  'מ"פ', 'סמ"פ', 'מ"מ', 'סמל', 'מ"כ', 'מ"ח', 'לוחם',
+];
+
+export const UNKNOWN_PLATOON = 'לא ידוע';   // soldiers.platoon is NOT NULL (importer's fallback)
+
+/** Merge the role dropdown's options. Observed spellings WIN over declared /
+ *  catalog ones that normalize the same (רס"פ vs רספ): the observed string is
+ *  what soldiers actually carry and what the exact-match SQL paths
+ *  (api/admins.ts, api/hamal.ts) compare against, and it guarantees every
+ *  soldier's current role is selectable. Sorted Hebrew. */
+export function mergeRoleCatalog(observed: string[], declared: string[]): string[] {
+  const byKey = new Map<string, string>();
+  for (const r of [...observed, ...declared]) {
+    if (!r) continue;
+    const k = normalizeName(r);
+    if (!k || byKey.has(k)) continue;
+    byKey.set(k, r);
+  }
+  return [...byKey.values()].sort((a, b) => a.localeCompare(b, 'he'));
+}
 
 const err = (message: string, status: number) =>
   Object.assign(new Error(message), { status });
@@ -123,7 +155,7 @@ export async function getRoster(): Promise<RosterResponse> {
     pool.query(`select soldier_id, position_id, sub_position_id, priority
                 from position_candidates
                 order by position_id, priority nulls last, id`),
-    pool.query(`select id, name, is_scheduled, mission_class,
+    pool.query(`select id, name, is_scheduled, mission_class, config,
                        (config ? 'candidate_pool') as is_pool
                 from positions order by id`),
     pool.query(`select position_id, id, name from sub_positions order by position_id, id`),
@@ -164,6 +196,13 @@ export async function getRoster(): Promise<RosterResponse> {
   const uniqSorted = (xs: string[]) =>
     [...new Set(xs.filter(Boolean))].sort((a, b) => a.localeCompare(b, 'he'));
 
+  // the role strings the DB itself declares (staff_all_roles = חמל / מפלג
+  // crews, seat_rules[].roles = חפק's מפקד seat) — pickable even when unheld
+  const declaredRoles = (positions.rows as any[]).flatMap((r) => [
+    ...((r.config?.staff_all_roles ?? []) as string[]),
+    ...((r.config?.seat_rules ?? []) as any[]).flatMap((sr) => (sr?.roles ?? []) as string[]),
+  ]);
+
   const posName = new Map<number, string>(positions.rows.map((r: any) => [Number(r.id), r.name]));
   const subName = new Map<string, string>(
     subs.rows.map((r: any) => [`${r.position_id}|${r.id}`, r.name]));
@@ -198,14 +237,20 @@ export async function getRoster(): Promise<RosterResponse> {
     })),
     closedLists,
     qualifications: uniqSorted([...QUAL_CATALOG, ...quals.rows.map((r: any) => r.qualification)]),
-    roles: uniqSorted(out.map((s) => s.role)),
+    roles: mergeRoleCatalog(out.map((s) => s.role), [...ROLE_CATALOG, ...declaredRoles]),
     platoons: uniqSorted([...out.map((s) => s.platoon), UNKNOWN_PLATOON]),
   };
 }
 
 // ── validate ─────────────────────────────────────────────────────────────────
 
-function validate(body: unknown, requireId: boolean): RosterInput {
+/** `catalogs` = the closed lists from the current GET payload: תפקיד and מחלקה
+ *  are dropdowns in the editor, so anything else is a bug or a stale client. */
+function validate(
+  body: unknown,
+  requireId: boolean,
+  catalogs: Pick<RosterResponse, 'roles' | 'platoons'>,
+): RosterInput {
   if (!body || typeof body !== 'object') throw err('גוף הבקשה חסר', 400);
   const b = body as Record<string, unknown>;
 
@@ -217,6 +262,12 @@ function validate(body: unknown, requireId: boolean): RosterInput {
   if (!fullName) throw err('שם מלא הוא שדה חובה', 400);
   const personalNumber = str(b.personalNumber);
   if (!personalNumber) throw err('מספר אישי הוא שדה חובה', 400);
+
+  // closed lists — '' role stays legal (stored as NULL, per `role <> ''`)
+  const role = str(b.role);
+  if (role && !catalogs.roles.includes(role)) throw err(`תפקיד לא מוכר: ${role}`, 400);
+  const platoon = str(b.platoon) || UNKNOWN_PLATOON;
+  if (!catalogs.platoons.includes(platoon)) throw err(`מחלקה לא מוכרת: ${platoon}`, 400);
 
   let rifleLevel: number | null = null;
   if (b.rifleLevel != null && String(b.rifleLevel).trim() !== '') {
@@ -265,8 +316,8 @@ function validate(body: unknown, requireId: boolean): RosterInput {
     id,
     personalNumber,
     fullName,
-    platoon: str(b.platoon) || UNKNOWN_PLATOON,
-    role: str(b.role),
+    platoon,
+    role,
     rifleLevel,
     phone: str(b.phone),
     email,
@@ -386,10 +437,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       res.setHeader('Cache-Control', 'no-store');
       return res.status(200).json(await getRoster());
     }
-    if (req.method === 'POST')
-      return res.status(200).json(await saveSoldier(validate(req.body, false)));
-    if (req.method === 'PUT')
-      return res.status(200).json(await saveSoldier(validate(req.body, true)));
+    if (req.method === 'POST' || req.method === 'PUT') {
+      const catalogs = await getRoster();     // the closed lists to validate against
+      const input = validate(req.body, req.method === 'PUT', catalogs);
+      return res.status(200).json(await saveSoldier(input));
+    }
     return res.status(405).json({ error: 'method not allowed' });
   } catch (e) {
     const status = (e as any)?.status ?? 500;
