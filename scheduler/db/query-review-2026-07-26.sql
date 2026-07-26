@@ -20,6 +20,7 @@
 --      the draft-scope filter becomes an explicit non-correlated set. IDENTICAL
 --      output (tests/fairness-equivalence.test.ts compares both bodies row by
 --      row); see the measurement note at section 5 before expecting a speedup.
+--   6. drop presence(date, date) — zero callers since the נוכחות tab.
 --
 -- KNOWN PRE-EXISTING DRIFT (benign, NOT touched here): the live seats>=0 check
 -- on seat_overrides is named `seat_overrides_seats_nonneg` (added by
@@ -211,3 +212,15 @@ language sql stable as $$
   where s.archived_at is null
   group by s.id, w.t_end
 $$;
+
+-- 6. drop the dead presence() function ───────────────────────────────────────
+-- Zero callers as of 2026-07-26: the נוכחות tab reads presence through the pure
+-- JS presenceMatrix() in src/lib/presencePlan.ts, deliberately — presence()
+-- buckets by day_range(), the 14:00→14:00 SCHEDULE day, so a one-calendar-day
+-- block lights up two cells. Nothing in api/, scheduler/src/, scheduler/tests/
+-- or scheduler/import/ calls it. Keeping it around only invites someone to use
+-- the wrong day semantics.
+-- day_range() itself STAYS: it is a documented time helper (schema.sql, mirror
+-- of src/time.ts) and is still used directly — e.g. tests/hamalapi.test.ts
+-- builds a whole-day period with it.
+drop function if exists presence(date, date);

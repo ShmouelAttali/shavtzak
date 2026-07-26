@@ -52,6 +52,16 @@ test('exit_requests keeps exactly one (soldier_id, period) gist index', async ()
     'the exclusion constraint index is the only gist index left');
 });
 
+test('presence() is gone, day_range() stays', async () => {
+  const fns = await query<{ proname: string }>(
+    `select proname from pg_proc p
+       join pg_namespace n on n.oid = p.pronamespace
+      where n.nspname = 'public' and proname in ('presence', 'day_range')`);
+  assert.deepEqual(fns.map((f) => f.proname).sort(), ['day_range'],
+    'presence() had no caller and the wrong (schedule-day) bucketing — dropped; ' +
+    'day_range() is still a used time helper');
+});
+
 test('the indexed name expression mirrors normalizeName() exactly', async () => {
   // Every character class normalizeName() touches, plus the whitespace
   // characters JS's \s matches and Postgres's does not (NBSP U+00A0, BOM

@@ -386,20 +386,11 @@ create table sheet_sync_log (
 
 -- ── Derived views ───────────────────────────────────────────────────────────
 
--- Presence matrix (what the sheet stores explicitly) — derived on demand.
-create or replace function presence(from_day date, to_day date)
-returns table (soldier_id bigint, day date, status text)
-language sql stable as $$
-  select s.id, d.day::date,
-         coalesce(
-           (select u.kind from unavailability u
-             where u.soldier_id = s.id and u.period && day_range(d.day::date)
-             order by hours(u.period * day_range(d.day::date)) desc limit 1),
-           'נוכח')
-  from soldiers s
-  cross join generate_series(from_day, to_day, interval '1 day') d(day)
-  where s.archived_at is null
-$$;
+-- NB: there is no presence() function (dropped 2026-07-26,
+-- db/query-review-2026-07-26.sql). It bucketed unavailability by day_range(),
+-- i.e. the 14:00→14:00 SCHEDULE day, so a one-CALENDAR-day block lit up two
+-- cells; the נוכחות tab needs calendar days and reads the rows itself through
+-- the pure presenceMatrix() in src/lib/presencePlan.ts. It had no other caller.
 
 -- Concrete slots per schedule day (template × calendar × seat overrides).
 -- Zero-seat resolutions (cancelled slots) are omitted entirely.
