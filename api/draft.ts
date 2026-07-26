@@ -50,6 +50,7 @@ export interface DraftRosterEntry {
 }
 
 export interface DraftResponse { days: DraftDay[]; roster: DraftRosterEntry[] }
+export interface DeleteDraftResponse { day: string; status: string; shiftRows: number; dayRows: number }
 export interface GenerateResponse {
   day: string;
   rows: number;
@@ -403,9 +404,65 @@ async function replaceSoldier(day: string, time: string, fromId: number, toId: n
   return { day, updated: targets.length };
 }
 
+// ── Draft delete (DELETE) ───────────────────────────────────────────────────
+// "מחק טיוטה" from the צור שבצק tab: throw away ONE day's generated draft, so
+// the day goes back to empty and what stands is the published schedule instead
+// of a draft the officer decided against. The manual, unconditional twin of
+// cleanupStaleDrafts() above.
+//
+// Deleted: every draft row of the day — auto/chain AND the officer's
+// manual/locked edits. (The "human rows are never deleted" rule guards the
+// GENERATOR; an explicit delete is the officer asking for a clean slate.)
+// Kept:
+//   - source='import' rows — real history imported from the sheet;
+//   - rows of manual-only positions (positions.is_scheduled=false → חמל,
+//     חפק2, משימות שונות): owned by other tabs, never produced by generation.
+// The day reverts to status='draft' (report + validation snapshot dropped —
+// they describe rows that no longer exist), unless imported history remains, in
+// which case the day is history and its status is left alone. A published day
+// is frozen (409) — unpublish first, exactly like regenerating.
+async function deleteDraft(day: string): Promise<DeleteDraftResponse> {
+  const pool = getPool();
+  const st = await pool.query<{ status: string }>(
+    `select status from schedule_days where day = $1`, [day]);
+  if (!st.rows.length) throw err(404, 'אין טיוטה ליום זה');
+  if (st.rows[0].status === 'published') {
+    throw err(409, 'היום פורסם — יש לבטל פרסום לפני מחיקת הטיוטה');
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query('begin');
+    const sa = await client.query(
+      `delete from shift_assignments sa using positions p
+        where p.id = sa.position_id and sa.day = $1
+          and p.is_scheduled and sa.source <> 'import'`, [day]);
+    const da = await client.query(
+      `delete from day_assignments da using positions p
+        where p.id = da.position_id and da.day = $1 and p.is_scheduled`, [day]);
+    const upd = await client.query<{ status: string }>(
+      `update schedule_days set status = 'draft', generated_at = null,
+              report_html = null, validation = '[]'::jsonb
+        where day = $1
+          and not exists (select 1 from shift_assignments sa
+                          where sa.day = $1 and sa.source = 'import')
+        returning status`, [day]);
+    await client.query('commit');
+    return {
+      day, status: upd.rows[0]?.status ?? st.rows[0].status,
+      shiftRows: sa.rowCount ?? 0, dayRows: da.rowCount ?? 0,
+    };
+  } catch (e) {
+    await client.query('rollback');
+    throw e;
+  } finally {
+    client.release();
+  }
+}
+
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,OPTIONS');
+  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
   if (req.method === 'OPTIONS') return res.status(200).end();
 
@@ -457,6 +514,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         return res.status(400).json({ error: 'fromSoldierId/toSoldierId required' });
       }
       return res.status(200).json(await replaceSoldier(day, time, from, to));
+    }
+
+    if (req.method === 'DELETE') {
+      // day travels in the query string (a DELETE body is not universally
+      // forwarded); ?day= is also what the GET uses.
+      const day = String(req.query.day ?? (req.body as any)?.day ?? '');
+      if (!DATE_RE.test(day)) {
+        return res.status(400).json({ error: 'day required (YYYY-MM-DD)' });
+      }
+      return res.status(200).json(await deleteDraft(day));
     }
 
     return res.status(405).json({ error: 'method not allowed' });

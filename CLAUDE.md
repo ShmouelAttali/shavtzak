@@ -97,7 +97,12 @@ and live against the shared Supabase project:
 - **Viewer app**: two officer-only tabs — צור שבצק (date range +
   צור שבצ"ק button → `api/draft.ts`; clicking a name opens the manual
   replacement picker — `PUT /api/draft` writes a manual+locked row the
-  generator then re-seats verbatim; its ValidationPanel shows the live
+  generator then re-seats verbatim; **מחק טיוטה** = `DELETE /api/draft?day=`,
+  the manual twin of the stale-draft cleanup — drops the day's whole draft incl.
+  manual/locked edits, keeps `source='import'` history and manual-only positions
+  (`is_scheduled=false` → חמל), reverts the day to `status='draft'` and clears
+  the stored report; published days are frozen (409, unpublish first);
+  its ValidationPanel shows the live
   validator errors/warnings with rule-code chips, matching the report's
   חריגות card) and הוגנות (Sunday-anchored week,
   compliance dashboard: one exceptions-only card per SPEC rule fed by running

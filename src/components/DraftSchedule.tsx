@@ -139,9 +139,10 @@ function DayViolations({ day }: { day: DraftDay }) {
   );
 }
 
-function DaySection({ day, onGenerate, onPublish, onUnpublish, generating, busyDay, soldierLookup, onNameClick }: {
+function DaySection({ day, onGenerate, onPublish, onUnpublish, onDelete, generating, busyDay, soldierLookup, onNameClick }: {
   day: DraftDay; onGenerate: (d: string) => void;
   onPublish: (d: string) => void; onUnpublish: (d: string) => void;
+  onDelete: (d: string) => void;
   generating: string | null; busyDay: string | null;
   soldierLookup: Map<string, SoldierInfo>;
   onNameClick: (day: DraftDay, name: string, time: string, meta?: DraftAssignmentMeta) => void;
@@ -185,6 +186,14 @@ function DaySection({ day, onGenerate, onPublish, onUnpublish, generating, busyD
                   className="rounded-lg bg-green-600 hover:bg-green-500 disabled:opacity-50 px-3 py-1.5 text-sm font-semibold text-white"
                 >
                   {busyDay === day.day ? '⏳...' : 'פרסם'}
+                </button>
+              )}
+              {!isEmpty && (
+                <button
+                  onClick={() => onDelete(day.day)} disabled={busy}
+                  className="rounded-lg border border-red-300 text-red-700 hover:bg-red-50 disabled:opacity-50 px-3 py-1.5 text-sm font-semibold"
+                >
+                  {busyDay === day.day ? '⏳...' : 'מחק טיוטה'}
                 </button>
               )}
               <button
@@ -231,7 +240,7 @@ export function DraftSchedule({ soldiers, mySoldierName = '', email = '' }: {
   const [replaceError, setReplaceError] = useState<string | null>(null);
   const [rationalePopup, setRationalePopup] = useState<RationalePopupState | null>(null);
   const effectiveTo = multiDay && to >= from ? to : from;
-  const { data, loading, error, generating, busyDay, generateRange, publish, unpublish, replaceSoldier } = useDraft(from, effectiveTo);
+  const { data, loading, error, generating, busyDay, generateRange, publish, unpublish, deleteDraft, replaceSoldier } = useDraft(from, effectiveTo);
 
   const lookup = useMemo(() => {
     const map = new Map<string, SoldierInfo>();
@@ -290,6 +299,14 @@ export function DraftSchedule({ soldiers, mySoldierName = '', email = '' }: {
     if (!window.confirm(`לבטל את פרסום ${heDate(day)}?`)) return;
     void unpublish(day);
   };
+  // Discarding a draft is destructive and includes the officer's manual edits —
+  // spell that out in the confirmation.
+  const deleteOne = (day: string) => {
+    if (!window.confirm(
+      `למחוק את טיוטת ${heDate(day)}?\n\nכל השיבוצים של היום יימחקו — כולל החלפות ידניות ושיבוצים נעולים. ` +
+      `יישאר מה שפורסם. (חמל ושיבוצי היסטוריה מיובאת אינם נמחקים.)`)) return;
+    void deleteDraft(day);
+  };
 
   return (
     <SoldierCtx.Provider value={lookup}>
@@ -316,7 +333,7 @@ export function DraftSchedule({ soldiers, mySoldierName = '', email = '' }: {
               const d = data?.days.find((x) => x.day === day)
                 ?? { day, status: 'draft', generatedAt: null, publishedAt: null, approvedBy: null, hasReport: false, validation: [], groups: [], meta: {}, dayAssignments: {} };
               return <DaySection key={day} day={d} onGenerate={generateOne}
-                onPublish={publishOne} onUnpublish={unpublishOne}
+                onPublish={publishOne} onUnpublish={unpublishOne} onDelete={deleteOne}
                 generating={generating} busyDay={busyDay} soldierLookup={lookup}
                 onNameClick={handleNameClick} />;
             })}

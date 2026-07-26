@@ -129,5 +129,24 @@ export function useDraft(from: string, to: string) {
     }
   }, [load]);
 
-  return { data, loading, error, generating, busyDay, reload: load, generateRange, publish, unpublish, replaceSoldier };
+  /** Throw away a day's draft (auto/chain + manual rows) — the day goes back to
+   *  empty, leaving the published schedule as what stands. */
+  const deleteDraft = useCallback(async (day: string): Promise<boolean> => {
+    setBusyDay(day);
+    setError(null);
+    try {
+      const res = await fetch(`/api/draft?day=${day}`, { method: 'DELETE' });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.error ?? 'שגיאה במחיקת הטיוטה');
+      return true;
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'שגיאה במחיקת הטיוטה');
+      return false;
+    } finally {
+      setBusyDay(null);
+      await load();
+    }
+  }, [load]);
+
+  return { data, loading, error, generating, busyDay, reload: load, generateRange, publish, unpublish, deleteDraft, replaceSoldier };
 }
