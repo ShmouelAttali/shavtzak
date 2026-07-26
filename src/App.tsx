@@ -15,7 +15,7 @@ import { AdminExits } from './components/AdminExits';
 
 const COMPANY_ROLES = new Set(['מ"פ', 'סמ"פ', 'מ"מ', 'סמל', 'מ"כ']);
 
-// restricted levels: 'company' = command roles only (sheet role);
+// restricted levels: 'company' = command roles (sheet role) OR shavtzak_admins;
 // 'scheduler' = shavtzak_admins (scheduler DB table) only — NOT command roles
 const TABS: { id: TabId; label: string; restricted?: 'company' | 'scheduler' }[] = [
   { id: 'personal',  label: 'לוז אישי' },
@@ -57,8 +57,8 @@ function AppContent({ data }: { data: SheetData }) {
   const mySoldier = data.soldiers.find(s => s.email.toLowerCase() === myEmail) ?? null;
   const myRole = mySoldier?.role ?? '';
   const mySoldierName = mySoldier?.fullName ?? '';
-  const canSeeCompany = COMPANY_ROLES.has(myRole);
   const isShavtzakAdmin = useIsShavtzakAdmin(myEmail);
+  const canSeeCompany = COMPANY_ROLES.has(myRole) || isShavtzakAdmin;
   const canSeeScheduler = isShavtzakAdmin;
 
   // If a restricted tab becomes inaccessible, fall back to personal
