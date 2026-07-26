@@ -174,6 +174,14 @@ export interface GenerateResult {
   /** report-support data (filled by generate(); optional so tests may build
    *  bare results) */
   report?: ReportMeta;
+  /** day-independent rows the load already fetched, forwarded to
+   *  validateDay() by persist() so the post-write validation can skip them
+   *  (load.ts's ValidateRefs). Optional: a hand-built result just omits it and
+   *  the validator reads everything itself. Structural type so model.ts keeps
+   *  no import of the load module. */
+  validateRefs?: {
+    positions: any[]; allowedPositions: any[]; chainRules: any[]; config: any[];
+  };
 }
 
 export interface ChainRule {

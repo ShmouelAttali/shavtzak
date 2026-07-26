@@ -1,7 +1,7 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { generate, persist } from './generate.js';
+import { generate, persist, loadStatic } from './generate.js';
 import { validateAndStore, Finding } from './validate.js';
 import { pool, query } from './db.js';
 import { fmtHM, addDays } from './time.js';
@@ -117,8 +117,13 @@ async function main() {
   if (!noReport) mkdirSync(reportDir, { recursive: true });
   const daySummaries: WeekDaySummary[] = [];
 
+  // The roster / positions / closed lists / chain rules are the same for every
+  // day of the range — load them ONCE and hand the bundle to each generate().
+  // Local to this run on purpose: never a module-level cache (load.ts).
+  const staticCtx = await loadStatic();
+
   for (let day = from; day <= to; day = addDays(day, 1)) {
-    const res = await generate(day);
+    const res = await generate(day, staticCtx);
     console.log(`\n═══ שבצ"ק ${day} (14:00 → 14:00) ═══`);
 
     // Level-1 summary
