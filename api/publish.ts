@@ -18,14 +18,20 @@ export interface PublishResponse {
   publishedAt: string | null;
 }
 
-async function currentStatus(day: string): Promise<string | null> {
+type DayRow = { day: string; status: string; approved_by: string | null; published_at: string | null };
+
+/** The day's whole row, or null when it has none. Selecting all four columns
+ *  (not just status) means the idempotent already-published / already-
+ *  unpublished paths can answer straight from it — no second read. */
+async function currentRow(day: string): Promise<DayRow | null> {
   const pool = getPool();
-  const r = await pool.query<{ status: string }>(
-    `select status from schedule_days where day = $1`, [day]);
-  return r.rows[0]?.status ?? null;
+  const r = await pool.query<DayRow>(
+    `select day::text, status, approved_by, published_at
+     from schedule_days where day = $1`, [day]);
+  return r.rows[0] ?? null;
 }
 
-function respond(res: VercelResponse, row: { day: string; status: string; approved_by: string | null; published_at: string | null }) {
+function respond(res: VercelResponse, row: DayRow) {
   const out: PublishResponse = {
     day: row.day, status: row.status,
     approvedBy: row.approved_by,
@@ -35,7 +41,20 @@ function respond(res: VercelResponse, row: { day: string; status: string; approv
 }
 
 /** 'generated' -> 'published' (idempotent). Returns 409 if the day is not in a
- *  publishable state (missing, or still a bare draft). */
+ *  publishable state (missing, or still a bare draft).
+ *
+ *  `published_at = now()` — NOT the repo's usual
+ *  `timezone('Asia/Jerusalem', now())`, because this column is the schema's one
+ *  `timestamptz` (schema.sql: every other stamp — generated_at beside it,
+ *  created_at, decided_at, added_at — is a naive-local `timestamp`). On a
+ *  timestamptz column `now()` already records the correct instant, while the
+ *  Jerusalem expression yields a naive wall-clock timestamp that Postgres then
+ *  re-reads in the session zone (UTC on Supabase/Vercel) and stores 2-3h in the
+ *  FUTURE — verified: true 17:12Z was written as 20:12Z.
+ *  The genuine inconsistency is the column TYPE, so the fix belongs in
+ *  schema.sql: migrate published_at to `timestamp` like generated_at, and only
+ *  THEN switch this expression to timezone('Asia/Jerusalem', now()). Both must
+ *  move together — either one alone re-introduces the skew. */
 export async function publishDay(res: VercelResponse, day: string, email: string | null) {
   const pool = getPool();
   const upd = await pool.query(
@@ -45,13 +64,9 @@ export async function publishDay(res: VercelResponse, day: string, email: string
      returning day::text, status, approved_by, published_at`, [day, email]);
   if (upd.rowCount) return respond(res, upd.rows[0]);
   // No transition — figure out why for a clear message / idempotent success.
-  const st = await currentStatus(day);
-  if (st === 'published') {
-    const cur = await pool.query(
-      `select day::text, status, approved_by, published_at from schedule_days where day = $1`, [day]);
-    return respond(res, cur.rows[0]);         // already published — idempotent
-  }
-  if (st === null) return res.status(404).json({ error: 'day not found' });
+  const cur = await currentRow(day);
+  if (cur?.status === 'published') return respond(res, cur);   // idempotent
+  if (cur === null) return res.status(404).json({ error: 'day not found' });
   return res.status(409).json({ error: 'ניתן לפרסם רק יום שחולל (status=generated)' });
 }
 
@@ -64,13 +79,9 @@ export async function unpublishDay(res: VercelResponse, day: string) {
      where day = $1 and status = 'published'
      returning day::text, status, approved_by, published_at`, [day]);
   if (upd.rowCount) return respond(res, upd.rows[0]);
-  const st = await currentStatus(day);
-  if (st === 'generated') {
-    const cur = await pool.query(
-      `select day::text, status, approved_by, published_at from schedule_days where day = $1`, [day]);
-    return respond(res, cur.rows[0]);         // already unpublished — idempotent
-  }
-  if (st === null) return res.status(404).json({ error: 'day not found' });
+  const cur = await currentRow(day);
+  if (cur?.status === 'generated') return respond(res, cur);   // idempotent
+  if (cur === null) return res.status(404).json({ error: 'day not found' });
   return res.status(409).json({ error: 'ניתן לבטל פרסום רק ליום שפורסם' });
 }
 
