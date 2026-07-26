@@ -1,4 +1,4 @@
-import { multiQuery } from './db.js';
+import { multiQuery, litDate } from './db.js';
 import { Context, Soldier, Position, Slot, Fairness, ChainRule } from './model.js';
 import { parseRange, dayStart, dayEnd, addDays, overlaps, nightRange, weekStart, isSunday, Minutes } from './time.js';
 import { normalizeName } from './text.js';
@@ -28,15 +28,17 @@ export async function loadContext(day: string): Promise<Context> {
   const wantNextMagen = isSunday(tomorrow);
 
   // ONE round trip for everything — per-query round trips (and per-connection
-  // TLS handshakes) dominate wall-clock over the WAN pooler. Day literals are
-  // regex-validated above; no user input reaches this SQL.
+  // TLS handshakes) dominate wall-clock over the WAN pooler. The simple query
+  // protocol takes no bind parameters, so every day boundary goes through
+  // litDate() (db.ts), which re-asserts the YYYY-MM-DD shape at the point of
+  // use; the entry-point regex above is the outer guard.
   const [, posRows, candRows, soldierRows, allowedRows, magenRows, fairRows, slotRows, existRows, ydayRows,
     blockRows, exitRows, lockShiftRows, lockDayRows, chainRows, configRows, nextMagenRows = []] = await multiQuery([
     // ORDERING CONSTRAINT: this insert MUST stay ahead of the `day_slots` read
     // below — day_slots is a VIEW over schedule_days, and multiQuery sends the
     // whole batch as one simple-protocol string (= one implicit transaction),
     // so a day with no schedule_days row yet would read zero slots.
-    `insert into schedule_days (day) values ('${day}') on conflict do nothing`,
+    `insert into schedule_days (day) values (${litDate(day)}) on conflict do nothing`,
     `select id, name, mission_class, is_scheduled, config from positions`,
     // id-based closed lists (position_candidates); the name is joined for
     // display only — it rides along even for non-schedulable members
@@ -69,33 +71,33 @@ export async function loadContext(day: string): Promise<Context> {
     // the מגן-commander decision effective for this day (weekly history)
     `select h.soldier_id, s.full_name
      from magen_commander_history h join soldiers s on s.id = h.soldier_id
-     where h.valid_from <= '${day}'
+     where h.valid_from <= ${litDate(day)}
      order by h.valid_from desc limit 1`,
-    `select * from soldier_fairness('${day}')`,
+    `select * from soldier_fairness(${litDate(day)})`,
     `select ds.position_id, ds.sub_position_id, sp.name sub_name, ds.period::text, ds.seats, ds.commander_first_seat
      from day_slots ds left join sub_positions sp on sp.id = ds.sub_position_id
-     where ds.day = '${day}'`,
+     where ds.day = ${litDate(day)}`,
     // NB: the day's own auto/chain unlocked rows are EXCLUDED — regeneration
     // replaces them; including them makes every soldier look already-assigned.
     `select sa.soldier_id, sa.position_id, sa.sub_position_id, sa.period::text, p.mission_class
      from shift_assignments sa join positions p on p.id = sa.position_id
-     where sa.period && tsrange(day_start('${winFrom}'), day_start('${tomorrow}'))
-       and not (sa.day = '${day}' and sa.source in ('auto','chain') and not sa.locked)`,
-    `select soldier_id, position_id from day_assignments where day = '${yesterday}'`,
+     where sa.period && tsrange(day_start(${litDate(winFrom)}), day_start(${litDate(tomorrow)}))
+       and not (sa.day = ${litDate(day)} and sa.source in ('auto','chain') and not sa.locked)`,
+    `select soldier_id, position_id from day_assignments where day = ${litDate(yesterday)}`,
     `select soldier_id, period::text from unavailability
-     where period && tsrange(day_start('${day}'), day_start('${day}') + interval '1 day')`,
+     where period && tsrange(day_start(${litDate(day)}), day_start(${litDate(day)}) + interval '1 day')`,
     `select soldier_id, period::text from exit_requests
-     where period && tsrange(day_start('${day}'), day_start('${day}') + interval '1 day')`,
+     where period && tsrange(day_start(${litDate(day)}), day_start(${litDate(day)}) + interval '1 day')`,
     `select soldier_id, position_id, sub_position_id, seat_index, period::text from shift_assignments
-     where day = '${day}' and (locked or source in ('manual','import'))`,
+     where day = ${litDate(day)} and (locked or source in ('manual','import'))`,
     `select soldier_id, position_id from day_assignments
-     where day = '${day}' and (locked or source = 'manual')`,
+     where day = ${litDate(day)} and (locked or source = 'manual')`,
     `select * from chain_rules order by id`,
     `select key, value from config`,
     // ...and LAST, only on a Saturday: the incoming week's מגן commander
     ...(wantNextMagen ? [`select h.soldier_id, s.full_name
      from magen_commander_history h join soldiers s on s.id = h.soldier_id
-     where h.valid_from <= '${tomorrow}'
+     where h.valid_from <= ${litDate(tomorrow)}
      order by h.valid_from desc limit 1`] : []),
   ]);
 

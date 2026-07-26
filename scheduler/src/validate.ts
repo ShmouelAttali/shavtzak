@@ -1,4 +1,4 @@
-import { multiQuery, query } from './db.js';
+import { multiQuery, query, litDate } from './db.js';
 import {
   Minutes, DAY, parseRange, dayStart, dayEnd, addDays, slotStart, scheduleDayStart,
   overlaps, hours, fmtHM, nightRange, nightRangeAt,
@@ -48,11 +48,11 @@ export async function validateDay(day: string): Promise<Finding[]> {
       join positions p on p.id = sa.position_id
       left join sub_positions sp on sp.id = sa.sub_position_id
       left join soldiers s on s.id = sa.soldier_id
-      where sa.day = '${d}'`),
+      where sa.day = ${litDate(d)}`),
     `select soldier_id, period::text, kind from unavailability
-     where period && tsrange(day_start('${day}'), day_start('${day}') + interval '1 day')`,
+     where period && tsrange(day_start(${litDate(day)}), day_start(${litDate(day)}) + interval '1 day')`,
     `select da.soldier_id, p.name pos_name from day_assignments da
-     join positions p on p.id = da.position_id where da.day = '${day}'`,
+     join positions p on p.id = da.position_id where da.day = ${litDate(day)}`,
     `select id, full_name, is_schedulable, coalesce(role,'') role from soldiers
      where archived_at is null`,
     // H6c whitelist (soldier_allowed_positions), as position NAMES per soldier
@@ -70,7 +70,7 @@ export async function validateDay(day: string): Promise<Finding[]> {
     `select id, name, config from positions where config ? 'seat_rules'`,
     `select ds.position_id, sp.name sub_name, ds.period::text, ds.seats, ds.commander_first_seat
      from day_slots ds
-     left join sub_positions sp on sp.id = ds.sub_position_id where ds.day = '${day}'`,
+     left join sub_positions sp on sp.id = ds.sub_position_id where ds.day = ${litDate(day)}`,
     `select id, name, is_scheduled, mission_class, config from positions`,
     // 7-day lookback for streak rules (consecutive nights R6, static streak
     // T3, weekly תורנות T5)
@@ -80,14 +80,14 @@ export async function validateDay(day: string): Promise<Finding[]> {
      from shift_assignments sa
      join positions p on p.id = sa.position_id
      left join soldiers s on s.id = sa.soldier_id
-     where sa.period && tsrange(day_start('${addDays(day, -7)}'), day_start('${day}') + interval '1 day')
+     where sa.period && tsrange(day_start(${litDate(addDays(day, -7))}), day_start(${litDate(day)}) + interval '1 day')
        and p.mission_class <> 'rest'`,
     `select key, value from config`,
     `select soldier_id, qualification from soldier_qualifications`,
     // H9: exit windows ±1 day, so boundary rest gaps can be attributed to the
     // exit day on either side of the 14:00 anchor
     `select soldier_id, period::text from exit_requests
-     where period && tsrange(day_start('${addDays(day, -1)}'), day_start('${day}') + interval '1 day')`,
+     where period && tsrange(day_start(${litDate(addDays(day, -1))}), day_start(${litDate(day)}) + interval '1 day')`,
   ]);
 
   const config: Record<string, any> = {};
