@@ -159,8 +159,16 @@ test('cleanup deletes past auto/chain drafts with a published successor, keeps l
   // C: past, generated, auto, but AFTER the only published day → no successor → kept
   await seedDay('2020-06-01', 'generated', [{ sid: s4, source: 'auto', seat: 1 }]);
 
-  const res = await call(draftHandler, { method: 'GET', query: { from: '2020-01-01', to: '2020-12-31' } });
-  assert.equal(res.statusCode, 200);
+  // GET now caps the range at 62 days (query-review 2026-07-26), so the year
+  // is walked in three in-cap windows. The cleanup's published-successor
+  // check is global (any published day >= d), not bound to the requested
+  // range, so the narrower trigger windows change nothing about what it sees.
+  for (const [from, to] of [['2020-01-01', '2020-01-31'],
+                            ['2020-03-01', '2020-03-31'],
+                            ['2020-06-01', '2020-06-30']] as const) {
+    const res = await call(draftHandler, { method: 'GET', query: { from, to } });
+    assert.equal(res.statusCode, 200);
+  }
 
   assert.equal(await rowsOn('2020-01-01'), '1', 'A: only the locked row survives');
   assert.equal(await statusOf('2020-01-01'), 'generated', 'A: keeps generated (human rows remain)');
@@ -177,7 +185,9 @@ test('cleanup leaves future / in-cycle days untouched even with a published succ
   await seedDay('2099-01-01', 'generated', [{ sid: s1, source: 'auto', seat: 1 }]);
   await seedDay('2099-12-01', 'published', [{ sid: s1, source: 'auto', seat: 2 }]);
 
-  const res = await call(draftHandler, { method: 'GET', query: { from: '2099-01-01', to: '2099-12-31' } });
+  // In-cap window (62-day GET guard); the 2099-12-01 published successor is
+  // still visible to the cleanup — its successor check is range-independent.
+  const res = await call(draftHandler, { method: 'GET', query: { from: '2099-01-01', to: '2099-01-31' } });
   assert.equal(res.statusCode, 200);
   assert.equal(await rowsOn('2099-01-01'), '1', 'future day auto rows kept (cycle not ended)');
   assert.equal(await statusOf('2099-01-01'), 'generated');
