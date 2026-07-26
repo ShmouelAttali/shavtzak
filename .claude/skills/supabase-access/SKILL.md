@@ -247,7 +247,20 @@ around a convention change is the fingerprint, not missing data.
   `כח <שם>` / `תפיסת בית`. Both are `is_scheduled=false`: the generator never
   invents them, but the imported rows still occupy the soldier for rest,
   double-booking and fairness (`load.ts` reads assignments regardless of
-  `is_scheduled`; `api/draft.ts` displays them).
+  `is_scheduled`; `api/draft.ts` displays them). A recurring multi-team activity
+  becomes a **position with one sub-position per team** — `פעילות עומק` (id 17,
+  subs צוות א / צוות ב / נהג טיגריס, owner 2026-07-26, delta
+  `db/deep-activity-2026-07-26.sql`).
+- **A sheet row can be dropped by BOTH gates, so check both**: an unknown `סוג`
+  fails `canonical_position` (→ `אחר`) *and* a bare single time fails
+  `infer_period` (no `SINGLE_TIME_DURATION` entry → `None`). The period check
+  runs first and returns before the row is ever classified, so a dry-run that
+  only asserts "nothing lands in `אחר`" passes while silently dropping every
+  row — `פעילות עומק` lost 17 rows that way. **Always count the skipped rows in
+  the date range too, not just the `אחר` ones.**
+- **Scope a new keyword to the exact new spelling**, not a shared substring: the
+  keyword is `פעילות עומק`, because the bare `עומק` would also re-attribute the
+  older `פטרול עומק` / `צ׳קפוסט עומק` rows (typed `התקפי`) on any re-import.
 - The importer resolves `sub_position_id` **by name** from the sheet's
   `העמדה` column, scoped to the canonical position (unknown names simply stay
   NULL). So a new named force only needs a `sub_positions` row — no code change.
