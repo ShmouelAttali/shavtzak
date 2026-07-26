@@ -168,9 +168,16 @@ and live against the shared Supabase project:
   every warning/error from the same code — the tab re-runs `validateDay` live
   on GET (same findings as the report's חריגות card), and shared pure helpers
   keep the rest in lockstep: `requiredSeats()` (config.ts — flex coverage
-  math, used by validate.ts + api/draft.ts's לא-מאויש markers) and
-  `violationCoveredByRationale()` (rationale.ts — the raw-violation↔caveat
-  dedup, used by RationalePopup + report cells). The generator's free-text
+  math), `staffedSeats()` (coverage.ts — how many of a slot's seats are
+  actually manned; both used by validate.ts §10 + api/draft.ts's לא-מאויש
+  markers) and `violationCoveredByRationale()` (rationale.ts — the
+  raw-violation↔caveat dedup, used by RationalePopup + report cells).
+  **Coverage is counted by OVERLAP, never by the rendered time label**: a real
+  row sliced differently from its template still staffs it. api/draft.ts used
+  to match labels, so a כרמל/גשש night written as one 8h row against 4h
+  template slots showed phantom "לא מאויש" over a fully manned shift while the
+  validator saw nothing wrong (fixed 2026-07-26 — 87 false markers across
+  24/06–26/07, plus 8 real gaps the tab had been hiding). The generator's free-text
   issues ("אין מועמד ל...") are deliberately NOT shown in the tab — they are
   process narration and live only in the stored report (פתח דוח button). Any
   new rule belongs in validate.ts (message shown in both) or rationale.ts

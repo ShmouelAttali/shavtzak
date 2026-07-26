@@ -3,6 +3,7 @@ import { getPool, DATE_RE } from './_db.js';
 import type { StationGroup, SubType, TimeSlot } from './shavtzak.js';
 import type { RationaleEntry } from '../scheduler/src/rationale.js';
 import { requiredSeats } from '../scheduler/src/config.js';
+import { staffedSeats, type CoverRow } from '../scheduler/src/coverage.js';
 
 // ── Types (imported by the frontend as ../../api/draft) ────────────────────
 export type { RationaleEntry };
@@ -126,7 +127,7 @@ async function getDrafts(from: string, to: string): Promise<DraftResponse> {
               (report_html is not null) has_report
        from schedule_days where day between $1 and $2 order by day`, [from, to]),
     pool.query(
-      `select sa.day::text, p.name pos_name, p.config pos_config, sp.name sub_name, s.full_name,
+      `select sa.day::text, sa.position_id, p.name pos_name, p.config pos_config, sp.name sub_name, s.full_name,
               lower(sa.period) p_start, upper(sa.period) p_end,
               sa.source, sa.locked, sa.violations, sa.rationale, sa.seat_index,
               sa.blocks_overlap
@@ -144,7 +145,7 @@ async function getDrafts(from: string, to: string): Promise<DraftResponse> {
        where da.day between $1 and $2
        order by da.day, p.id, s.full_name`, [from, to]),
     pool.query(
-      `select ds.day::text, p.name pos_name, p.config pos_config, sp.name sub_name,
+      `select ds.day::text, ds.position_id, p.name pos_name, p.config pos_config, sp.name sub_name,
               lower(ds.period) p_start, upper(ds.period) p_end, ds.seats
        from day_slots ds
        join positions p on p.id = ds.position_id
@@ -222,28 +223,44 @@ async function getDrafts(from: string, to: string): Promise<DraftResponse> {
   }
   // Merge the day's slot catalog in: an under-filled slot shows explicit
   // "לא מאויש" markers so empty positions are visible on the page itself,
-  // not only in the validation panel. Imported history rows carry no
-  // sub-position, so null-sub rows at the same start excuse any sub-slot.
-  const countAt = (bySug: Map<string, Map<string, string[]>>, sug: string, time: string) =>
-    bySug.get(sug)?.get(time)?.length ?? 0;
+  // not only in the validation panel.
+  //
+  // Staffing is counted by OVERLAP against the day's real rows — the shared
+  // `staffedSeats()` the validator's coverage rule runs (coverage.ts) — never
+  // by matching the rendered time LABEL. A real row sliced differently from
+  // the template staffs it all the same: the officers run כרמל חטיבה's night
+  // as one 22:00→06:00 row, and a template that splits the night into two 4h
+  // slots used to make the tab shout "לא מאויש" over a fully manned shift
+  // while the validator (judging by overlap) saw nothing wrong.
+  const rowsByDayPos = new Map<string, CoverRow[]>();
+  for (const r of rowsRes.rows) {
+    const key = `${r.day}|${r.position_id}`;
+    let rows = rowsByDayPos.get(key);
+    if (!rows) rowsByDayPos.set(key, rows = []);
+    rows.push({
+      start: new Date(r.p_start).getTime(), end: new Date(r.p_end).getTime(),
+      subName: (r.sub_name as string | null) ?? null,
+    });
+  }
   for (const sl of slotsRes.rows) {
     const day = days.get(sl.day);
     if (!day || day.status === 'draft') continue;   // never-generated days stay empty
-    const time = labelSlot(sl.day, new Date(sl.p_start), new Date(sl.p_end), sl.pos_config);
-    const station = sl.pos_name as string;
-    const sug = (sl.sub_name as string | null) ?? station;
-    const gKey = `${sl.day}|${station}`;
-    const bySug = grouping.get(gKey) ?? new Map<string, Map<string, string[]>>();
-    grouping.set(gKey, bySug);
-    // rows matching this slot: exact sub + pooled null-sub rows (import data)
-    let n = countAt(bySug, sug, time);
-    if (sl.sub_name !== null) n += countAt(bySug, station, time);
+    const n = staffedSeats(
+      new Date(sl.p_start).getTime(), new Date(sl.p_end).getTime(),
+      (sl.sub_name as string | null) ?? null,
+      rowsByDayPos.get(`${sl.day}|${sl.position_id}`) ?? []);
     // flex positions (מגן 10-12, סיור 3-4/shift) may legitimately staff below
     // the template seat count down to the flex minimum — same rule as the
     // validator's coverage check (shared helper)
     const required = requiredSeats(Number(sl.seats), sl.pos_config);
     const missing = required - n;
     if (missing <= 0) continue;
+    const time = labelSlot(sl.day, new Date(sl.p_start), new Date(sl.p_end), sl.pos_config);
+    const station = sl.pos_name as string;
+    const sug = (sl.sub_name as string | null) ?? station;
+    const gKey = `${sl.day}|${station}`;
+    const bySug = grouping.get(gKey) ?? new Map<string, Map<string, string[]>>();
+    grouping.set(gKey, bySug);
     const byTime = bySug.get(sug) ?? new Map<string, string[]>();
     bySug.set(sug, byTime);
     const soldiers = byTime.get(time) ?? [];

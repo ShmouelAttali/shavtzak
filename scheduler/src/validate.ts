@@ -8,6 +8,7 @@ import { isFullRestExempt, isCountedNight } from './rest.js';
 import { loadTunables, effectiveConfig, isShiftPosition, isNightExitWindows, requiredSeats } from './config.js';
 import { roleFlags } from './load.js';
 import { partialWindow } from './pairs.js';
+import { staffedSeats } from './coverage.js';
 import type { SeatRule } from './model.js';
 
 export interface Finding {
@@ -579,21 +580,12 @@ export async function validateDay(day: string): Promise<Finding[]> {
     if (!p || !p.is_scheduled || p.mission_class === 'rest') continue;
     if (p.config?.staff_all_roles) continue;   // variable crew — seats is a cap, not demand
     const period = parseRange(ds.period);
-    // draft rows carry the sub-position; imported history rows don't — count
-    // null-sub rows toward any sub-slot they overlap so published days aren't
-    // falsely flagged. A seat may be covered by a replacement PAIR (H1) — two
-    // rows splitting the slot at the handover — so staffing is the MINIMUM
-    // concurrent row count over the slot window (a split-covered seat counts
-    // as staffed; a partially-covered one does not).
-    const covering = today
-      .filter((r) => r.positionId === ds.position_id
-        && overlaps(r.period, period)
-        && (r.subName === null || nrm(r.subName) === nrm(ds.sub_name ?? '') || ds.sub_name === null))
-      .map((r) => [Math.max(r.period[0], period[0]), Math.min(r.period[1], period[1])] as [Minutes, Minutes]);
-    const points = [...new Set([period[0], ...covering.flat()])]
-      .filter((t) => t >= period[0] && t < period[1]);
-    const n = Math.min(...points.map((t) =>
-      covering.filter((c) => c[0] <= t && t < c[1]).length));
+    // Staffing is counted by the shared helper (coverage.ts) — api/draft.ts's
+    // לא-מאויש markers call the very same code, so the tab and this rule can
+    // never disagree about an empty seat.
+    const n = staffedSeats(period[0], period[1], ds.sub_name ?? null,
+      today.filter((r) => r.positionId === ds.position_id)
+        .map((r) => ({ start: r.period[0], end: r.period[1], subName: r.subName })));
     // flex positions (config.flex_seats, e.g. מגן 10-12, סיור 3-4/shift):
     // the generator may staff below the template seat count down to the flex
     // minimum — coverage is judged against that minimum (shared helper)
