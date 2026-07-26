@@ -20,7 +20,7 @@ import { TAB_STORAGE_KEY, resolveInitialTab, withTabParam } from './lib/tabParam
 
 const COMPANY_ROLES = new Set(['מ"פ', 'סמ"פ', 'מ"מ', 'סמל', 'מ"כ']);
 
-// restricted levels: 'company' = command roles only (sheet role);
+// restricted levels: 'company' = command roles (sheet role) OR shavtzak_admins;
 // 'scheduler' = shavtzak_admins (scheduler DB table) only — NOT command roles;
 // 'hamal' = shavtzak_admins OR a חמל-role soldier matched by email (the dedicated חמל tab)
 const TABS: { id: TabId; label: string; restricted?: 'company' | 'scheduler' | 'hamal' }[] = [
@@ -114,8 +114,8 @@ function AppContent({ data }: { data: SheetData }) {
   const mySoldier = data.soldiers.find(s => s.email.toLowerCase() === myEmail) ?? null;
   const myRole = mySoldier?.role ?? '';
   const mySoldierName = mySoldier?.fullName ?? '';
-  const canSeeCompany = COMPANY_ROLES.has(myRole);
   const { isShavtzakAdmin, isHamalMember, loaded: accessLoaded } = useShavtzakAccess(myEmail);
+  const canSeeCompany = COMPANY_ROLES.has(myRole) || isShavtzakAdmin;
   const canSeeScheduler = isShavtzakAdmin;
   const canSeeHamal = isShavtzakAdmin || isHamalMember;
 
