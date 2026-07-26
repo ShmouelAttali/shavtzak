@@ -1,6 +1,6 @@
 import { normalizeName, hasQualification } from '../../scheduler/src/text';
 import { isCommanderRole } from '../../scheduler/src/crewOrder';
-import type { RosterSoldier } from '../../api/roster';
+import type { RosterSoldier } from '../../api/_handlers/roster';
 
 // Pure filtering for the מצבת חיילים tab — no DB, no React, unit-tested in
 // tests/roster-filter.test.ts.

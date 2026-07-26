@@ -39,7 +39,7 @@ History shows 39 distinct position names over 20 days; templates change mid-depl
 | תורנים | 2 seats, **14:00–14:00** | full schedule day; class `other` — outside T2/T3 rotation; **soft T5**: at most one תורנות per soldier per schedule week (the count resets on Sunday — §6.1 fairness week); **`night_exit_ok`** — the one position a night-exit soldier may additionally hold on his exit day (H9 night-exit relaxation) |
 | כונן גשש | chained to סיור — see T4c | windows: 22–07, 07–14, 14–22; **only the night window counts as load** (R3) |
 | קצין מוצב | 1 seat, **14:00–14:00** | full schedule day; manned **only from a fixed candidate pool** — see H6-pool; **`no_rest_floor`** — internally-scheduled, may be entered with any rest (H8) |
-| חמל | **manual-only, per-shift** | MANUAL-ONLY (`is_scheduled=false`) — the generator NEVER auto-fills חמל; shifts start empty until the dedicated חמל tab places them. readiness class (rest-transparent); role-חמל members are still restricted to חמל only via the derived H6c whitelist (`staff_all_roles` kept — it drives that whitelist + the חמל-tab auth in api/admins.ts), so an unplaced role-חמל soldier is simply unassigned. **Per-shift picks**: the חמל runs on its own **10:00→10:00** cycle (NOT the 14:00 schedule day). The tab tiles the day into **contiguous** shift windows (3 defaults 10:00-18:00 / 18:00-02:00 / 02:00-10:00) that ALWAYS cover the whole day with no gaps or overlaps — the first starts at 10:00, the last ends at 10:00, and every internal boundary is shared, so editing a shift's end moves the adjacent shift's start (shrink one → the neighbor grows), adding a window re-tiles around it, and removing one merges its span into the neighbor. **One soldier per shift**, from the **role-חמל soldiers only** (the חמל position's `staff_all_roles`; not the whole roster, and not filtered by presence). **On-demand shifts = day-scoped `slot_templates`** (`valid_from = valid_to = the day`; the generic "add a shift on this one day" mechanism, reused later for מגן) — the tab always sends the full contiguous window list, so the tiling is enforced client-side, not in the DB. A pick RESERVES the soldier for the whole day (one locked `day_assignments` bucket per picked soldier), so they are seated nowhere else; picks are `shift_assignments` rows with `blocks_overlap=false` (readiness) |
+| חמל | **manual-only, per-shift** | MANUAL-ONLY (`is_scheduled=false`) — the generator NEVER auto-fills חמל; shifts start empty until the dedicated חמל tab places them. readiness class (rest-transparent); role-חמל members are still restricted to חמל only via the derived H6c whitelist (`staff_all_roles` kept — it drives that whitelist + the חמל-tab auth in api/_handlers/admins.ts), so an unplaced role-חמל soldier is simply unassigned. **Per-shift picks**: the חמל runs on its own **10:00→10:00** cycle (NOT the 14:00 schedule day). The tab tiles the day into **contiguous** shift windows (3 defaults 10:00-18:00 / 18:00-02:00 / 02:00-10:00) that ALWAYS cover the whole day with no gaps or overlaps — the first starts at 10:00, the last ends at 10:00, and every internal boundary is shared, so editing a shift's end moves the adjacent shift's start (shrink one → the neighbor grows), adding a window re-tiles around it, and removing one merges its span into the neighbor. **One soldier per shift**, from the **role-חמל soldiers only** (the חמל position's `staff_all_roles`; not the whole roster, and not filtered by presence). **On-demand shifts = day-scoped `slot_templates`** (`valid_from = valid_to = the day`; the generic "add a shift on this one day" mechanism, reused later for מגן) — the tab always sends the full contiguous window list, so the tiling is enforced client-side, not in the DB. A pick RESERVES the soldier for the whole day (one locked `day_assignments` bucket per picked soldier), so they are seated nowhere else; picks are `shift_assignments` rows with `blocks_overlap=false` (readiness) |
 | מפלג | **14:00–14:00**, variable staff crew | the רס"פ/סרס"פ/מנהלה staff do **no shifts**; they appear in the שבצק in this dedicated daily position whenever present on base and are restricted to it (`staff_all_roles`, like חמל). Presence follows the sheet's מפלג tab (סטטוס מגיע/לא מגיע → the soldier's schedulable flag — see Import) |
 | כרמל חטיבה / מפקד כרמל חטיבה | 3+1 × 14,18,22,06,10 | 4h on the עמדות הגנה grid, except the night: **22:00 is ONE 8h window** (22:00→06:00) — no 02:00 window. Commander seat: prefer a real מפקד from the descending crew, else highest רובאי (T4a) |
 
@@ -848,7 +848,7 @@ warning path is unchanged.
 
 Results snapshot stored on `schedule_days.validation` (jsonb) — written
 automatically after every generation (`persist`) and available via CLI
-`validate <day>`. The viewer endpoints (`api/draft.ts`, `api/fairness.ts`) do
+`validate <day>`. The viewer endpoints (`api/_handlers/draft.ts`, `api/_handlers/fairness.ts`) do
 NOT read the snapshot — they run `validateDay` live per requested day, since
 manual edits make the stored snapshot stale; the snapshot remains a
 generation-time record.
@@ -1121,25 +1121,25 @@ React viewer:
   default day stores none and shows the empty defaults. The picks themselves are
   ordinary `shift_assignments` rows whose `period` is the concrete shift window
   (computed like the `day_slots` lateral). The default windows come from the
-  `hamal_default_shifts` config row or the `api/hamal.ts` fallback. An empty
+  `hamal_default_shifts` config row or the `api/_handlers/hamal.ts` fallback. An empty
   custom window persists (its template row) even with no picks; a legacy
   full-day row surfaces as a derived 14:00-14:00 window. Backed by
-  `api/hamal.ts` (GET picks+structure+roster / PUT replace a day's shifts /
+  `api/_handlers/hamal.ts` (GET picks+structure+roster / PUT replace a day's shifts /
   DELETE virgin-reset).
 
-Data flows through the Vercel serverless endpoints `api/draft.ts`,
-`api/fairness.ts`, `api/exit-requests.ts` (GET list / POST create /
+Data flows through the Vercel serverless endpoints `api/_handlers/draft.ts`,
+`api/_handlers/fairness.ts`, `api/_handlers/exit-requests.ts` (GET list / POST create /
 PATCH edit / DELETE cancel over `exit_requests`; admin mutations are
 parameter-gated, free-form-time variants of the same handlers),
-`api/report.ts` (GET the stored generation report), `api/publish.ts` /
-`api/unpublish.ts` (POST the publish/unpublish transitions), and
-`api/hamal.ts` (GET חמל per-shift picks + structure + roster / PUT replace a
+`api/_handlers/report.ts` (GET the stored generation report), `api/_handlers/publish.ts` /
+`api/_handlers/unpublish.ts` (POST the publish/unpublish transitions), and
+`api/_handlers/hamal.ts` (GET חמל per-shift picks + structure + roster / PUT replace a
 day's shifts / DELETE virgin-reset),
 reading the scheduler DB via `SCHEDULER_DATABASE_URL`; endpoints are open like the
 existing sheet endpoints (no server-side auth) per current app security model —
 the publish flow trusts the officer email supplied by the client.
 
-- **מבנה יומי tab** (`api/day-structure.ts`, admin-only) — overrides the SHIFT
+- **מבנה יומי tab** (`api/_handlers/day-structure.ts`, admin-only) — overrides the SHIFT
   STRUCTURE of **one specific schedule day** without hand-written SQL: add /
   remove / rename a position group (= `positions` row) and its positions
   (= `sub_positions`), and change a shift's start/end/seats — **no cross-shift
@@ -1170,7 +1170,7 @@ the publish flow trusts the officer email supplied by the client.
   the default (wipe only). The tab has NO autosave: an explicit Save (top +
   bottom) PUTs; leaving the tab / reloading / changing the date while there are
   unsaved edits prompts save/discard/cancel (an `App`-level leave guard).
-- **נוכחות tab** (`api/presence.ts`, admin-only) — the presence matrix
+- **נוכחות tab** (`api/_handlers/presence.ts`, admin-only) — the presence matrix
   (soldier × **calendar** day) and its editor; since 2026-07-26 the DB is the
   source of truth for `unavailability` (§11). Editable states = the
   `unavailability` kind CHECK constraint ∩ the **full-day** kinds

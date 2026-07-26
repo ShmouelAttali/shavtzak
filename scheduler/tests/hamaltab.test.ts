@@ -59,7 +59,7 @@ test('חמל slot_templates present on a day are STILL not auto-filled', async (
 });
 
 test('manual PER-SHIFT rows are authoritative and survive regen; the soldier is reserved', async () => {
-  // pick a regular לוחם manually across TWO shift windows (mimics api/hamal.ts):
+  // pick a regular לוחם manually across TWO shift windows (mimics api/_handlers/hamal.ts):
   // per-shift locked/manual חמל rows + one locked/manual day_assignments bucket
   const picked = await soldierId('חייל 40');
   const hamalId = (await query<{ id: number }>(`select id from positions where name = 'חמל'`))[0].id;

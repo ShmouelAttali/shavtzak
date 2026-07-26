@@ -5,7 +5,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { driverQual, isCommanderSlot, replacementOptions } from '../src/components/ReplaceSoldierPopup';
-import type { DraftAssignmentMeta, DraftRosterEntry } from '../api/draft';
+import type { DraftAssignmentMeta, DraftRosterEntry } from '../api/_handlers/draft';
 
 const meta = (...rationale: DraftAssignmentMeta['rationale']): DraftAssignmentMeta =>
   ({ source: 'auto', locked: false, blocksOverlap: true, violations: [], rationale });

@@ -9,7 +9,7 @@
 // `force`, and api/draft.ts re-finds the overlapping rows itself (a conflict
 // this file cannot see — e.g. a row belonging to the adjacent schedule day —
 // is caught there, either as an eviction or as the usual 409).
-import type { DraftDay } from '../../api/draft';
+import type { DraftDay } from '../../api/_handlers/draft';
 
 /** Minutes from the schedule day's 14:00 anchor (SPEC: day = 14:00 → 14:00). */
 export interface SlotSpan { start: number; end: number }

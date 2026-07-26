@@ -1,6 +1,6 @@
 // validateDay()'s day_slots SCOPE: the validator judges the same slots the
 // צור שבצק / מבנה יומי tabs render — `is_scheduled and mission_class <> 'rest'
-// and not (config ? 'staff_all_roles')`, mirroring api/day-structure.ts's SCOPE
+// and not (config ? 'staff_all_roles')`, mirroring api/_handlers/day-structure.ts's SCOPE
 // constant. A staff_all_roles crew (חמל/מפלג) sizes itself, so its `seats` is a
 // cap and not a demand; a non-scheduled position is staffed by hand or not at
 // all. Neither may produce a coverage or commander-seat finding.

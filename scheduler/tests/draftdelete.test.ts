@@ -1,4 +1,4 @@
-// Handler-level tests for api/draft.ts's DELETE (the "מחק טיוטה" button of the
+// Handler-level tests for api/_handlers/draft.ts's DELETE (the "מחק טיוטה" button of the
 // צור שבצק tab): a day's whole draft is thrown away — auto/chain rows AND the
 // officer's manual/locked edits — so what stands is the published schedule.
 // Survivors: source='import' history and rows of manual-only positions
@@ -8,9 +8,9 @@ import './env.js';
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { freshSchema, seedSoldiers, soldierId, closePool, query } from './helpers.js';
-import draftHandler from '../../api/draft.js';
+import draftHandler from '../../api/_handlers/draft.js';
 import { getPool } from '../../api/_db.js';
-import type { DeleteDraftResponse } from '../../api/draft.js';
+import type { DeleteDraftResponse } from '../../api/_handlers/draft.js';
 
 const DAY = '2026-07-20';
 

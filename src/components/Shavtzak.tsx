@@ -1,7 +1,7 @@
 import {createContext, useContext, useEffect, useMemo, useRef, useState} from 'react';
 import {todayShavtzakStr} from '../hooks/useShavtzak';
-import type {ShavtzakAllData, StationGroup, SubType} from '../../api/shavtzak';
-import type {DraftAssignmentMeta} from '../../api/draft';
+import type {ShavtzakAllData, StationGroup, SubType} from '../../api/_handlers/shavtzak';
+import type {DraftAssignmentMeta} from '../../api/_handlers/draft';
 import type {Soldier} from '../types';
 import type {PopupState} from './SoldierPopup';
 import {SoldierPopup} from './SoldierPopup';

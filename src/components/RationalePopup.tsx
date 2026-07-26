@@ -1,4 +1,4 @@
-import type {DraftAssignmentMeta} from '../../api/draft';
+import type {DraftAssignmentMeta} from '../../api/_handlers/draft';
 import {isCaveat, renderRationale, violationCoveredByRationale} from '../../scheduler/src/rationale';
 
 export interface RationalePopupState {

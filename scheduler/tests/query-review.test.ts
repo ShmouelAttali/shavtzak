@@ -11,7 +11,7 @@ import { normalizeName } from '../src/text.js';
 // db/schema.sql + db/query-review-2026-07-26.sql carries its rendered output
 // verbatim — the equality-lookup test below proves the two still parse to the
 // same tree (an EXPLAIN that stops using the index means they diverged).
-import { NORMALIZE_SQL } from '../../api/exit-requests.js';
+import { NORMALIZE_SQL } from '../../api/_handlers/exit-requests.js';
 
 const NORM_SQL = NORMALIZE_SQL('full_name');
 const normOf = NORMALIZE_SQL;
@@ -130,7 +130,7 @@ test('soldiers_name_normalized is usable for an equality lookup', async () => {
   assert.match(plan, /soldiers_name_normalized/,
     `expected an index scan on soldiers_name_normalized, got:\n${plan}`);
 
-  // and it actually resolves a quote-variant spelling (the api/exit-requests.ts
+  // and it actually resolves a quote-variant spelling (the api/_handlers/exit-requests.ts
   // fallback, which used to read the whole roster and compare in JS)
   const hit = await query<{ full_name: string }>(
     `select full_name from soldiers where ${NORM_SQL} = $1`,

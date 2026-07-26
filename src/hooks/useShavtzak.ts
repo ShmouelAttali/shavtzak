@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import type { ShavtzakAllData } from '../../api/shavtzak';
+import type { ShavtzakAllData } from '../../api/_handlers/shavtzak';
 
 export function useShavtzak() {
   const [data, setData] = useState<ShavtzakAllData | null>(null);

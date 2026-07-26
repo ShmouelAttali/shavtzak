@@ -1,4 +1,4 @@
-// Handler-level tests for api/presence.ts (the נוכחות presence editor).
+// Handler-level tests for api/_handlers/presence.ts (the נוכחות presence editor).
 // GET returns the roster document + the selectable states DERIVED from the
 // `unavailability` kind CHECK constraint + the per-soldier × per-day matrix.
 // PUT is a declarative per-day replace for ONE soldier: consecutive same-kind
@@ -10,9 +10,9 @@ import './env.js';
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { freshSchema, seedSoldiers, closePool, query, soldierId } from './helpers.js';
-import presenceHandler from '../../api/presence.js';
+import presenceHandler from '../../api/_handlers/presence.js';
 import { getPool } from '../../api/_db.js';
-import type { PresenceResponse } from '../../api/presence.js';
+import type { PresenceResponse } from '../../api/_handlers/presence.js';
 
 // 2026-07-19 Sunday … 2026-07-26 Sunday
 const SUN = '2026-07-19', MON = '2026-07-20', TUE = '2026-07-21', WED = '2026-07-22',

@@ -105,7 +105,7 @@ docker exec -i shavtzak-pg psql -U postgres \
 4. ~~Validator~~ (SPEC §8 — `src/validate.ts`, runs after every generation and via
    `npx tsx src/cli.ts validate <day>`; results in `schedule_days.validation`).
 5. ~~Operational UI~~ (SPEC §12 — draft + fairness tabs in the viewer app;
-   `api/draft.ts`, `api/fairness.ts`). Deployment note: set
+   `api/_handlers/draft.ts`, `api/_handlers/fairness.ts`). Deployment note: set
    `SCHEDULER_DATABASE_URL` in the Vercel project env (Dashboard → Settings →
    Environment Variables, for the Production + Preview environments, then
    redeploy) — locally it lives in `.env.local`. Use a **pooler** URI, not the

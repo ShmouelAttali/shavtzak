@@ -1,10 +1,10 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { getPool, DATE_RE } from './_db.js';
-import { dayStatus, positionScope, soldierNamesById, type Queryable } from './_sql.js';
+import { getPool, DATE_RE } from '../_db.js';
+import { dayStatus, positionScope, soldierNamesById, type Queryable } from '../_sql.js';
 import type { StationGroup, SubType, TimeSlot } from './shavtzak.js';
-import type { RationaleEntry } from '../scheduler/src/rationale.js';
-import { requiredSeats } from '../scheduler/src/config.js';
-import { staffedSeats, type CoverRow } from '../scheduler/src/coverage.js';
+import type { RationaleEntry } from '../../scheduler/src/rationale.js';
+import { requiredSeats } from '../../scheduler/src/config.js';
+import { staffedSeats, type CoverRow } from '../../scheduler/src/coverage.js';
 
 // ── Types (imported by the frontend as ../../api/draft) ────────────────────
 export type { RationaleEntry };
@@ -206,7 +206,7 @@ async function getDrafts(from: string, to: string): Promise<DraftResponse> {
   // schedule_days.validation snapshot goes stale after manual edits, so each
   // generated day is re-validated on read. The snapshot is still written at
   // persist time (scheduler/src/persist.ts) as a historical record.
-  const { validateDay } = await import('../scheduler/src/validate.js');
+  const { validateDay } = await import('../../scheduler/src/validate.js');
   const liveValidation = new Map(await Promise.all(
     daysRes.rows.filter((d: any) => d.status !== 'draft').map(async (d: any) =>
       [d.day as string, await validateDay(d.day) as DraftFinding[]] as const)));
@@ -632,7 +632,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         return res.status(409).json({ error: 'היום פורסם — יש לבטל פרסום לפני חילול מחדש' });
       }
       // One day per request (Vercel time limit); the UI iterates ranges.
-      const { generate, persist } = await import('../scheduler/src/generate.js');
+      const { generate, persist } = await import('../../scheduler/src/generate.js');
       const result = await generate(day);
       const validation = await persist(result);
       const out: GenerateResponse = {

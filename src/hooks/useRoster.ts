@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import type { RosterInput, RosterResponse } from '../../api/roster';
+import type { RosterInput, RosterResponse } from '../../api/_handlers/roster';
 
 // Data hook for the מצבת חיילים tab. Unlike useDayStructure (a whole-day
 // document with page-level dirty state), edits here are per-soldier: the

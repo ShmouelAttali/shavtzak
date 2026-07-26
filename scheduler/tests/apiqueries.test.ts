@@ -19,14 +19,14 @@ import './env.js';
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { freshSchema, seedSoldiers, closePool, query, soldierId } from './helpers.js';
-import exitRequestsHandler, { NORMALIZE_SQL } from '../../api/exit-requests.js';
-import draftHandler from '../../api/draft.js';
-import presenceHandler from '../../api/presence.js';
-import publishHandler from '../../api/publish.js';
-import unpublishHandler from '../../api/unpublish.js';
+import exitRequestsHandler, { NORMALIZE_SQL } from '../../api/_handlers/exit-requests.js';
+import draftHandler from '../../api/_handlers/draft.js';
+import presenceHandler from '../../api/_handlers/presence.js';
+import publishHandler from '../../api/_handlers/publish.js';
+import unpublishHandler from '../../api/_handlers/unpublish.js';
 import { getPool } from '../../api/_db.js';
 import { normalizeName } from '../src/text.js';
-import type { PublishResponse } from '../../api/publish.js';
+import type { PublishResponse } from '../../api/_handlers/publish.js';
 
 const PREV = '2026-07-19';      // Sunday
 const DAY = '2026-07-20';       // Monday

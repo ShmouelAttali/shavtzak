@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { DraftResponse, GenerateResponse } from '../../api/draft';
+import type { DraftResponse, GenerateResponse } from '../../api/_handlers/draft';
 
 /** URL of the stored generation report for a day (or a range). */
 export function reportUrl(from: string, to?: string): string {

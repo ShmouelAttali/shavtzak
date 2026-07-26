@@ -1,4 +1,4 @@
-// Handler-level test for api/admins.ts against the local test database
+// Handler-level test for api/_handlers/admins.ts against the local test database
 // (same shavtzak_test DB the scheduler suite uses — never Supabase).
 process.env.SCHEDULER_DATABASE_URL =
   process.env.SCHEDULER_TEST_DATABASE_URL
@@ -7,7 +7,7 @@ process.env.SCHEDULER_DATABASE_URL =
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { getPool } from '../api/_db.js';
-import handler from '../api/admins.js';
+import handler from '../api/_handlers/admins.js';
 
 function mockRes() {
   const res: any = {
@@ -30,7 +30,7 @@ const call = async (method: string, query: Record<string, string>) => {
 // Self-contained fixtures so the hamal-membership derivation (soldier with a
 // חמל staff role, matched by email) is exercised without touching real rows.
 // The חמל position is identified by the 'חמל' marker INSIDE staff_all_roles
-// (same resolution as api/hamal.ts), so the fixture position must carry it.
+// (same resolution as api/_handlers/hamal.ts), so the fixture position must carry it.
 // The second pair mirrors מפלג — another position with staff_all_roles — and
 // must NOT unlock the חמל tab.
 const TEST_POS_ID = 900;
@@ -45,7 +45,7 @@ before(async () => {
     delete from shavtzak_admins;
     insert into shavtzak_admins (email) values ('admin@example.com');`);
   // A position whose staff_all_roles includes our test role, and a soldier in
-  // that role with an email — this is exactly what api/admins.ts joins on.
+  // that role with an email — this is exactly what api/_handlers/admins.ts joins on.
   await getPool().query(
     `insert into positions (id, name, mission_class, config)
      values ($1::smallint, 'חמל-authtest', 'readiness', jsonb_build_object('staff_all_roles', jsonb_build_array($2::text)))

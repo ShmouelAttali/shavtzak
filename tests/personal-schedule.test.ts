@@ -7,7 +7,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { findMissions } from '../src/components/PersonalSchedule';
-import type { ShavtzakData } from '../api/shavtzak';
+import type { ShavtzakData } from '../api/_handlers/shavtzak';
 
 function shavtzak(groups: ShavtzakData['groups']): ShavtzakData {
   return { date: '21/07/2026', groups };

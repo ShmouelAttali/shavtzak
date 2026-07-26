@@ -1,4 +1,4 @@
-// Handler-level tests for api/hamal.ts (manual-only, per-shift חמל staffing):
+// Handler-level tests for api/_handlers/hamal.ts (manual-only, per-shift חמל staffing):
 // GET materializes the default shift windows + full roster; PUT persists
 // manual/locked חמל rows per shift with the right tsranges + per-shift seat
 // indexes; the day's shift STRUCTURE is stored as DAY-SCOPED slot_templates
@@ -8,9 +8,9 @@ import './env.js';
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { freshSchema, seedSoldiers, soldierId, closePool, query } from './helpers.js';
-import hamalHandler from '../../api/hamal.js';
+import hamalHandler from '../../api/_handlers/hamal.js';
 import { getPool } from '../../api/_db.js';
-import type { HamalResponse, HamalWriteResponse } from '../../api/hamal.js';
+import type { HamalResponse, HamalWriteResponse } from '../../api/_handlers/hamal.js';
 
 const DEFAULTS = [
   { start: '10:00', end: '18:00' },

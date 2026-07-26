@@ -1,5 +1,5 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { getPool, DATE_RE } from './_db.js';
+import { getPool, DATE_RE } from '../_db.js';
 
 // Draft lifecycle — publish flow (Task 7A). No server-side auth by design
 // (officer-gated on the client, like the rest of the draft surface); the

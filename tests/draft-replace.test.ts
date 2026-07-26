@@ -1,4 +1,4 @@
-// Handler-level tests for the manual replacement in api/draft.ts (PUT):
+// Handler-level tests for the manual replacement in api/_handlers/draft.ts (PUT):
 // the officer clicks a soldier in the צור שבצק tab and swaps him for another.
 // The swap must (a) hit exactly the clicked slot (identified by day + soldier
 // + the slot's rendered time label), (b) leave a locked/manual row so
@@ -13,8 +13,8 @@ import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { freshSchema, seedSoldiers, closePool, query } from '../scheduler/tests/helpers.js';
 import { getPool } from '../api/_db.js';
-import draftHandler from '../api/draft.js';
-import type { DraftResponse, ReplaceResponse } from '../api/draft.js';
+import draftHandler from '../api/_handlers/draft.js';
+import type { DraftResponse, ReplaceResponse } from '../api/_handlers/draft.js';
 
 const D = '2026-09-08';
 
