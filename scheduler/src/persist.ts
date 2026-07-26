@@ -66,7 +66,11 @@ export async function persist(res: GenerateResult): Promise<Finding[]> {
          values ${sTuples.join(',')}`, sv);
     }
     await client.query(
-      `update schedule_days set status = 'generated', generated_at = now() where day = $1`, [day]);
+      // naive LOCAL wall-clock, like every other timestamp in the schema
+      // (Supabase's server TZ is UTC — a bare now() would store UTC and skew
+      // 2-3h against the shift times; see schema.sql's exit_requests.created_at)
+      `update schedule_days set status = 'generated',
+              generated_at = timezone('Asia/Jerusalem', now()) where day = $1`, [day]);
     await client.query('commit');
   } catch (e) {
     await client.query('rollback');
