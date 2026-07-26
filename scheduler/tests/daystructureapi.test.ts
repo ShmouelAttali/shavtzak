@@ -1,4 +1,4 @@
-// Handler-level tests for api/day-structure.ts (the מבנה יומי per-day shift-
+// Handler-level tests for api/_handlers/day-structure.ts (the מבנה יומי per-day shift-
 // structure editor). GET returns the day's shift structure grouped by position;
 // PUT is a declarative whole-day replace (seat change → template-targeted single-
 // day seat_override; time/duration change or add → day-scoped slot_templates;
@@ -9,9 +9,9 @@ import './env.js';
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { freshSchema, seedSoldiers, closePool, query } from './helpers.js';
-import dsHandler from '../../api/day-structure.js';
+import dsHandler from '../../api/_handlers/day-structure.js';
 import { getPool } from '../../api/_db.js';
-import type { DsResponse, DsGroup } from '../../api/day-structure.js';
+import type { DsResponse, DsGroup } from '../../api/_handlers/day-structure.js';
 
 function mockRes() {
   const out: { status: number; body: any } = { status: 0, body: null };

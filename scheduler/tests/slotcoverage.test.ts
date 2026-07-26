@@ -13,15 +13,15 @@ import assert from 'node:assert/strict';
 import { freshSchema, seedSoldiers, soldierId, closePool, query } from './helpers.js';
 import { staffedSeats, rowFeedsSlot } from '../src/coverage.js';
 import { validateDay } from '../src/validate.js';
-import draftHandler from '../../api/draft.js';
+import draftHandler from '../../api/_handlers/draft.js';
 import { getPool } from '../../api/_db.js';
-import type { DraftResponse } from '../../api/draft.js';
+import type { DraftResponse } from '../../api/_handlers/draft.js';
 
 const DAY = '2026-07-20';
 const UNFILLED = 'לא מאויש';
 
 // ── pure helper ────────────────────────────────────────────────────────────
-// minutes-since-anchor scale (the validator's); api/draft.ts feeds epoch ms.
+// minutes-since-anchor scale (the validator's); api/_handlers/draft.ts feeds epoch ms.
 
 test('staffedSeats: one long row staffs every slot it spans', () => {
   const night = [{ start: 480, end: 960, subName: null }];   // 8h

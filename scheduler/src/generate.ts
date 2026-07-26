@@ -9,7 +9,7 @@
 //                בדוחק fallback) + buildRationale
 //   rank.ts / rest.ts / pairs.ts — the shared decision primitives
 //   persist.ts — the only write-path SQL
-import { loadContext } from './load.js';
+import { loadStatic, loadDay, StaticContext } from './load.js';
 import { GenerateResult, ReportMeta } from './model.js';
 import { buildGen, fullyBlocked, Gen } from './state.js';
 import { runLevel1, reserveSeatCandidates, demand, Level1Plan } from './level1.js';
@@ -22,6 +22,8 @@ import { overlaps } from './time.js';
 // trackerPickOrder is re-exported for its unit tests.
 export { persist } from './persist.js';
 export { trackerPickOrder } from './chains.js';
+export { loadStatic } from './load.js';
+export type { StaticContext } from './load.js';
 export type { GenerateResult } from './model.js';
 
 /** Max seats per shift, per position (flex sizing mutates Slot.seats in
@@ -135,8 +137,20 @@ export function retractCoveredShortages(issues: string[]): string[] {
   });
 }
 
-export async function generate(day: string): Promise<GenerateResult> {
-  const ctx = await loadContext(day);
+/**
+ * Generate one schedule day.
+ *
+ * `staticCtx` is the day-INDEPENDENT half of the load (roster, positions,
+ * closed lists, chain rules, tunables — see load.ts's StaticContext). Omit it
+ * and the day loads its own; a caller building a RANGE should call
+ * `loadStatic()` once and pass the same bundle for every day, which turns 6
+ * identical statements per day into 6 for the whole run. It must be a local of
+ * that run — never a module-level cache (a stale roster is a real risk on the
+ * long-lived API lambda).
+ */
+export async function generate(day: string, staticCtx?: StaticContext): Promise<GenerateResult> {
+  const base = staticCtx ?? await loadStatic();
+  const ctx = await loadDay(day, base);
   const g = buildGen(ctx);
   const seatsBefore = maxSeatsByPosition(g);
   const demandBefore = baselineDemand(g);
@@ -191,5 +205,8 @@ export async function generate(day: string): Promise<GenerateResult> {
   return {
     day, assignments: g.assignments, level1: g.level1, issues: g.issues,
     report: buildReportMeta(g, plan, seatsBefore, demandBefore),
+    // rows persist() hands to validateDay() so the post-write validation does
+    // not re-read what this load already fetched (see load.ts's ValidateRefs)
+    validateRefs: base.refs,
   };
 }

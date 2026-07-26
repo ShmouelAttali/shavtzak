@@ -1,5 +1,6 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { getPool, DATE_RE } from '../_db.js';
+import { ensureScheduleDay, soldierNamesById, type Queryable } from '../_sql.js';
 
 // ── חמל tab API (per-shift, fully MANUAL, 2026-07-24) ────────────────────────
 // חמל is manual-only (positions.is_scheduled=false) — the generator NEVER
@@ -120,6 +121,16 @@ function shiftWindow(day: string, start: string, end: string): { startTs: string
   };
 }
 
+/** Drop everything this tab owns for the day: the picks, their day buckets and
+ *  the day's own on-demand (day-scoped) חמל templates. Shared by the PUT
+ *  (before rewriting) and the DELETE (virgin reset). */
+async function wipeHamalDay(client: Queryable, day: string, pid: number): Promise<void> {
+  await client.query(`delete from shift_assignments where day = $1 and position_id = $2`, [day, pid]);
+  await client.query(`delete from day_assignments where day = $1 and position_id = $2`, [day, pid]);
+  await client.query(
+    `delete from slot_templates where position_id = $1 and valid_from = $2 and valid_to = $2`, [pid, day]);
+}
+
 /** Order-insensitive equality of two window lists (by start+end). */
 function sameWindows(a: HamalWindow[], b: HamalWindow[]): boolean {
   if (a.length !== b.length) return false;
@@ -133,8 +144,8 @@ function sameWindows(a: HamalWindow[], b: HamalWindow[]): boolean {
 
 async function getHamal(from: string, to: string): Promise<HamalResponse> {
   const pool = getPool();
-  const pid = await hamalPositionId();
-  const defaults = await defaultShifts();
+  // independent of each other — one round trip's latency, not two
+  const [pid, defaults] = await Promise.all([hamalPositionId(), defaultShifts()]);
   const [picksRes, structRes, rosterRes] = await Promise.all([
     pool.query(
       `select sa.day::text as day, sa.soldier_id, s.full_name, sa.seat_index,
@@ -233,8 +244,7 @@ interface ShiftInput { start: string; end: string; soldierIds: number[] }
 /** Replace a day's חמל shift structure + picks atomically. */
 async function setHamal(day: string, shiftsIn: ShiftInput[]): Promise<HamalWriteResponse> {
   const pool = getPool();
-  const pid = await hamalPositionId();
-  const defaults = await defaultShifts();
+  const [pid, defaults] = await Promise.all([hamalPositionId(), defaultShifts()]);
 
   // normalize + validate windows
   const windows: HamalWindow[] = shiftsIn.map((s) => ({ start: String(s.start), end: String(s.end) }));
@@ -263,13 +273,9 @@ async function setHamal(day: string, shiftsIn: ShiftInput[]): Promise<HamalWrite
   const client = await pool.connect();
   try {
     await client.query('begin');
-    await client.query(`insert into schedule_days (day) values ($1) on conflict do nothing`, [day]);
+    await ensureScheduleDay(client, day);
     // this tab fully owns the חמל position for the day
-    await client.query(`delete from shift_assignments where day = $1 and position_id = $2`, [day, pid]);
-    await client.query(`delete from day_assignments where day = $1 and position_id = $2`, [day, pid]);
-    // clear the day's own on-demand (day-scoped) חמל templates only
-    await client.query(
-      `delete from slot_templates where position_id = $1 and valid_from = $2 and valid_to = $2`, [pid, day]);
+    await wipeHamalDay(client, day, pid);
 
     // Write day-scoped slot_templates for the shown windows UNLESS the day is
     // the untouched default (default windows AND no picks) — then leave none and
@@ -328,7 +334,9 @@ async function setHamal(day: string, shiftsIn: ShiftInput[]): Promise<HamalWrite
     }
     await client.query('commit');
   } catch (e) {
-    await client.query('rollback');
+    // .catch: a rollback on a dead connection throws and would mask the real
+    // error (the one that got us into this catch block).
+    await client.query('rollback').catch(() => {});
     throw e;
   } finally {
     client.release();
@@ -337,12 +345,7 @@ async function setHamal(day: string, shiftsIn: ShiftInput[]): Promise<HamalWrite
   // (which would re-query picks + structure + the whole roster — ~4 extra
   // round-trips over the WAN pooler). After a full replace the day's state IS
   // exactly `windows` + `perShift`; only soldier NAMES need one lookup.
-  const allIds = [...new Set(perShift.flat())];
-  const nameById = new Map<number, string>();
-  if (allIds.length) {
-    const { rows } = await pool.query(`select id, full_name from soldiers where id = any($1)`, [allIds]);
-    for (const r of rows) nameById.set(Number(r.id), r.full_name as string);
-  }
+  const nameById = await soldierNamesById([...new Set(perShift.flat())]);
   return {
     day,
     custom: !sameWindows(windows, defaults),
@@ -356,24 +359,27 @@ async function setHamal(day: string, shiftsIn: ShiftInput[]): Promise<HamalWrite
 /** Virgin reset: clear picks AND the day-scoped structure for the day. */
 async function clearHamal(day: string): Promise<HamalWriteResponse> {
   const pool = getPool();
-  const pid = await hamalPositionId();
+  const [pid, defaults] = await Promise.all([hamalPositionId(), defaultShifts()]);
   const client = await pool.connect();
   try {
     await client.query('begin');
-    await client.query(`insert into schedule_days (day) values ($1) on conflict do nothing`, [day]);
-    await client.query(`delete from shift_assignments where day = $1 and position_id = $2`, [day, pid]);
-    await client.query(`delete from day_assignments where day = $1 and position_id = $2`, [day, pid]);
-    await client.query(
-      `delete from slot_templates where position_id = $1 and valid_from = $2 and valid_to = $2`, [pid, day]);
+    await ensureScheduleDay(client, day);
+    await wipeHamalDay(client, day, pid);
     await client.query('commit');
   } catch (e) {
-    await client.query('rollback');
+    await client.query('rollback').catch(() => {});
     throw e;
   } finally {
     client.release();
   }
-  const { days } = await getHamal(day, day);
-  return days[0];
+  // A virgin day's HamalDay is fully determined — no re-read needed. With the
+  // structure rows gone getHamal() finds none for the day, so it falls back to
+  // `defaults`; with the picks gone every window is empty and no "extras"
+  // window can be derived. custom is therefore false by construction
+  // (sameWindows(defaults, defaults)). This is the same object the old
+  // getHamal(day, day) round trip returned, minus 3 queries — one of which
+  // pulled the entire roster the response never carries.
+  return { day, custom: false, shifts: defaults.map((w) => ({ start: w.start, end: w.end, picks: [] })) };
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {

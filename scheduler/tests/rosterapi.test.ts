@@ -1,4 +1,4 @@
-// Handler-level tests for api/roster.ts (the מצבת חיילים roster editor).
+// Handler-level tests for api/_handlers/roster.ts (the מצבת חיילים roster editor).
 // GET returns every soldier — active AND archived — with quals, the H6c
 // whitelist, closed-list candidacies and the shavtzak_admins grant, plus the
 // catalogs the editor needs. POST creates, PUT is a declarative whole-soldier
@@ -8,9 +8,9 @@ import './env.js';
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { freshSchema, seedSoldiers, addCandidates, closePool, query } from './helpers.js';
-import rosterHandler, { mergeRoleCatalog } from '../../api/roster.js';
+import rosterHandler, { mergeRoleCatalog } from '../../api/_handlers/roster.js';
 import { getPool } from '../../api/_db.js';
-import type { RosterInput, RosterResponse, RosterSoldier } from '../../api/roster.js';
+import type { RosterInput, RosterResponse, RosterSoldier } from '../../api/_handlers/roster.js';
 import { loadContext } from '../src/load.js';
 
 function mockRes() {
@@ -244,7 +244,7 @@ test('an archived soldier keeps their name and personal number reserved', async 
 
 test('mergeRoleCatalog: observed spelling wins, declared roles are added', () => {
   // רספ and רס"פ normalize the same — the observed spelling must survive, since
-  // that is what api/admins.ts / api/hamal.ts match on EXACTLY.
+  // that is what api/_handlers/admins.ts / api/_handlers/hamal.ts match on EXACTLY.
   const merged = mergeRoleCatalog(['רספ', 'לוחם'], ['רס"פ', 'חמל', 'לוחם']);
   assert.ok(merged.includes('רספ'));
   assert.ok(!merged.includes('רס"פ'), 'no visual duplicate of the same role');

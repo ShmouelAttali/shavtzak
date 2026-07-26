@@ -1,4 +1,4 @@
-import { multiQuery, query } from './db.js';
+import { multiQuery, query, litDate } from './db.js';
 import {
   Minutes, DAY, parseRange, dayStart, dayEnd, addDays, slotStart, scheduleDayStart,
   overlaps, hours, fmtHM, nightRange, nightRangeAt,
@@ -7,6 +7,7 @@ import { normalizeName as nrm, hasQualification } from './text.js';
 import { isFullRestExempt, isCountedNight } from './rest.js';
 import { loadTunables, effectiveConfig, isShiftPosition, isNightExitWindows, requiredSeats } from './config.js';
 import { roleFlags } from './load.js';
+import type { ValidateRefs } from './load.js';
 import { partialWindow } from './pairs.js';
 import { staffedSeats } from './coverage.js';
 import type { SeatRule } from './model.js';
@@ -37,58 +38,105 @@ interface Row {
  * < 4h gap = error, 4–8h = warning (the generation regime; a hard-8h error rule
  * would flag every legal short-task pick).
  */
-export async function validateDay(day: string): Promise<Finding[]> {
+export async function validateDay(day: string, preloaded?: ValidateRefs): Promise<Finding[]> {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) throw new Error(`bad day: ${day}`);
   const yesterday = addDays(day, -1);
-  const [rows, prevRows, unavailRows, dayAssignRows, soldierRows, allowedRows, candRows, subPosRows, chainRows, seatRulePosRows, daySlotRows, posRows, historyRows, configRows, qualRows, exitRows] = await multiQuery([
-    ...[day, yesterday].map((d) => `
+
+  // The batch is assembled dynamically rather than destructured positionally:
+  // four of its reads are day-INDEPENDENT and character-for-character the ones
+  // load.ts already ran, so when the caller hands them over (persist() forwards
+  // GenerateResult.validateRefs) those statements are dropped from the batch
+  // entirely — validate stops re-reading the roster-side tables once per day of
+  // a generated range. `at()` keeps each statement addressable by name.
+  const stmts: string[] = [];
+  const at = (sql: string): number => stmts.push(sql) - 1;
+  const NOT_QUERIED = -1;
+
+  const assignmentsOf = (d: string) => `
       select sa.soldier_id, s.full_name, sa.position_id, p.name pos_name, p.mission_class,
              sp.name sub_name, sa.period::text, sa.blocks_overlap, sa.is_commander_seat, sa.source, sa.rationale
       from shift_assignments sa
       join positions p on p.id = sa.position_id
       left join sub_positions sp on sp.id = sa.sub_position_id
       left join soldiers s on s.id = sa.soldier_id
-      where sa.day = '${d}'`),
-    `select soldier_id, period::text, kind from unavailability
-     where period && tsrange(day_start('${day}'), day_start('${day}') + interval '1 day')`,
-    `select da.soldier_id, p.name pos_name from day_assignments da
-     join positions p on p.id = da.position_id where da.day = '${day}'`,
-    `select id, full_name, is_schedulable, coalesce(role,'') role from soldiers
-     where archived_at is null`,
-    // H6c whitelist (soldier_allowed_positions), as position NAMES per soldier
-    `select sap.soldier_id, array_agg(p.name) as names
-     from soldier_allowed_positions sap join positions p on p.id = sap.position_id
-     group by sap.soldier_id`,
-    // id-based closed lists: position-level pools (sub null) + named seats
-    `select pc.position_id, pc.sub_position_id, pc.soldier_id, pc.priority
+      where sa.day = ${litDate(d)}`;
+
+  const iToday = at(assignmentsOf(day));
+  const iPrev = at(assignmentsOf(yesterday));
+  const iUnavail = at(`select soldier_id, period::text, kind from unavailability
+     where period && tsrange(day_start(${litDate(day)}), day_start(${litDate(day)}) + interval '1 day')`);
+  const iDayAssign = at(`select da.soldier_id, p.name pos_name from day_assignments da
+     join positions p on p.id = da.position_id where da.day = ${litDate(day)}`);
+  // NB: NOT load.ts's roster — the validator needs the non-schedulable soldiers
+  // too (rule `unknown_soldier`) and no qualification aggregate, so this one
+  // stays in the batch even when a bundle is supplied.
+  const iSoldiers = at(`select id, full_name, is_schedulable, coalesce(role,'') role from soldiers
+     where archived_at is null`);
+  // id-based closed lists: position-level pools (sub null) + named seats.
+  // Also NOT load.ts's: that one drops archived members, this one judges every
+  // stored row.
+  const iCand = at(`select pc.position_id, pc.sub_position_id, pc.soldier_id, pc.priority
      from position_candidates pc
-     order by pc.position_id, pc.priority nulls last, pc.id`,
-    `select id, position_id, name from sub_positions`,
-    `select cr.*, tp.name target_name, sp2.name source_name from chain_rules cr
-     join positions tp on tp.id = cr.target_position
-     join positions sp2 on sp2.id = cr.source_position order by cr.id`,
-    `select id, name, config from positions where config ? 'seat_rules'`,
-    `select ds.position_id, sp.name sub_name, ds.period::text, ds.seats, ds.commander_first_seat
+     order by pc.position_id, pc.priority nulls last, pc.id`);
+  const iSubPos = at(`select id, position_id, name from sub_positions`);
+  // SCOPE: the slots the officers actually see. Mirrors api/day-structure.ts's
+  // SCOPE constant verbatim — the predicate the מבנה יומי editor and the
+  // צור שבצק tab render by — so the validator stops judging rows no surface
+  // shows: a staff_all_roles crew (חמל/מפלג) sizes itself, and a non-scheduled
+  // position is staffed by hand or not at all. Duplicated as TEXT rather than
+  // imported: api/ and scheduler/src/ are separate deployables. Change one,
+  // change the other.
+  const iDaySlots = at(`select ds.position_id, sp.name sub_name, ds.period::text, ds.seats, ds.commander_first_seat
      from day_slots ds
-     left join sub_positions sp on sp.id = ds.sub_position_id where ds.day = '${day}'`,
-    `select id, name, is_scheduled, mission_class, config from positions`,
-    // 7-day lookback for streak rules (consecutive nights R6, static streak
-    // T3, weekly תורנות T5)
-    `select sa.soldier_id, s.full_name, sa.period::text, p.mission_class, p.name pos_name,
+     join positions p on p.id = ds.position_id
+     left join sub_positions sp on sp.id = ds.sub_position_id
+     where ds.day = ${litDate(day)}
+       and p.is_scheduled and p.mission_class <> 'rest'
+       and not (p.config ? 'staff_all_roles')`);
+  // 7-day lookback for streak rules (consecutive nights R6, static streak
+  // T3, weekly תורנות T5)
+  const iHistory = at(`select sa.soldier_id, s.full_name, sa.period::text, p.mission_class, p.name pos_name,
             coalesce((p.config->>'night_exempt')::boolean,
                      (p.config->>'daily')::boolean, false) night_exempt
      from shift_assignments sa
      join positions p on p.id = sa.position_id
      left join soldiers s on s.id = sa.soldier_id
-     where sa.period && tsrange(day_start('${addDays(day, -7)}'), day_start('${day}') + interval '1 day')
-       and p.mission_class <> 'rest'`,
-    `select key, value from config`,
-    `select soldier_id, qualification from soldier_qualifications`,
-    // H9: exit windows ±1 day, so boundary rest gaps can be attributed to the
-    // exit day on either side of the 14:00 anchor
-    `select soldier_id, period::text from exit_requests
-     where period && tsrange(day_start('${addDays(day, -1)}'), day_start('${day}') + interval '1 day')`,
-  ]);
+     where sa.period && tsrange(day_start(${litDate(addDays(day, -7))}), day_start(${litDate(day)}) + interval '1 day')
+       and p.mission_class <> 'rest'`);
+  const iQuals = at(`select soldier_id, qualification from soldier_qualifications`);
+  // H9: exit windows ±1 day, so boundary rest gaps can be attributed to the
+  // exit day on either side of the 14:00 anchor
+  const iExits = at(`select soldier_id, period::text from exit_requests
+     where period && tsrange(day_start(${litDate(addDays(day, -1))}), day_start(${litDate(day)}) + interval '1 day')`);
+
+  // ── the four the caller may have already fetched (load.ts's ValidateRefs) ──
+  const iPos = preloaded ? NOT_QUERIED
+    : at(`select id, name, is_scheduled, mission_class, config from positions`);
+  // H6c whitelist (soldier_allowed_positions), as position NAMES per soldier
+  const iAllowed = preloaded ? NOT_QUERIED
+    : at(`select sap.soldier_id, array_agg(p.name) as names
+     from soldier_allowed_positions sap join positions p on p.id = sap.position_id
+     group by sap.soldier_id`);
+  const iChain = preloaded ? NOT_QUERIED
+    : at(`select cr.*, tp.name target_name, sp2.name source_name from chain_rules cr
+     join positions tp on tp.id = cr.target_position
+     join positions sp2 on sp2.id = cr.source_position order by cr.id`);
+  const iConfig = preloaded ? NOT_QUERIED : at(`select key, value from config`);
+
+  const res = await multiQuery(stmts);
+
+  const rows = res[iToday], prevRows = res[iPrev], unavailRows = res[iUnavail];
+  const dayAssignRows = res[iDayAssign], soldierRows = res[iSoldiers];
+  const candRows = res[iCand], subPosRows = res[iSubPos], daySlotRows = res[iDaySlots];
+  const historyRows = res[iHistory], qualRows = res[iQuals], exitRows = res[iExits];
+  const posRows = preloaded?.positions ?? res[iPos];
+  const allowedRows = preloaded?.allowedPositions ?? res[iAllowed];
+  const chainRows = preloaded?.chainRules ?? res[iChain];
+  const configRows = preloaded?.config ?? res[iConfig];
+  // the seat-rule subset is a FILTER of the positions read, not a query of its
+  // own — `config ? 'seat_rules'` in SQL is this predicate in JS
+  const seatRulePosRows = (posRows as any[])
+    .filter((p) => p.config != null && 'seat_rules' in p.config);
 
   const config: Record<string, any> = {};
   for (const c of configRows as any[]) config[c.key] = c.value;
@@ -576,9 +624,12 @@ export async function validateDay(day: string): Promise<Finding[]> {
   // ── 10: slot coverage — empty seats are errors (visible at the top) ──────
   const posInfo = new Map((posRows as any[]).map((p) => [p.id, p]));
   for (const ds of daySlotRows as any[]) {
+    // is_scheduled / non-rest / non-staff_all_roles are already the day_slots
+    // read's SCOPE (see the query above), so every row here is a slot the tab
+    // renders. A staff_all_roles crew never reaches this loop — its `seats` is
+    // a cap on a self-sizing crew, not a demand.
     const p = posInfo.get(ds.position_id);
-    if (!p || !p.is_scheduled || p.mission_class === 'rest') continue;
-    if (p.config?.staff_all_roles) continue;   // variable crew — seats is a cap, not demand
+    if (!p) continue;
     const period = parseRange(ds.period);
     // Staffing is counted by the shared helper (coverage.ts) — api/draft.ts's
     // לא-מאויש markers call the very same code, so the tab and this rule can

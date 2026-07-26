@@ -45,6 +45,22 @@ function affectedDays(s: Minutes, e: Minutes): string[] {
 
 // ── DB helpers ───────────────────────────────────────────────────────────────
 
+/** The exact set JS `\s` matches. Postgres's `\s` is NOT the same — it leaves
+ *  the non-breaking spaces (U+00A0, U+2007, U+202F) and the BOM (U+FEFF)
+ *  alone, and those are precisely what a Google-Sheets copy-paste injects into
+ *  a roster name. Spelled out so the mirror below is faithful. */
+const JS_SPACE_CLASS =
+  '\\f\\n\\r\\t\\v \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff';
+
+/** SQL mirror of normalizeName() (scheduler/src/text.ts):
+ *    strip ״ " ׳ ' `  →  collapse whitespace runs to one space  →  trim.
+ *  Order matters (collapse before trim). MUST match both that function and the
+ *  `soldiers_name_normalized` expression index, or the index goes unused
+ *  (verified equivalent over every codepoint JS `\s` matches). */
+export const NORMALIZE_SQL = (col: string) =>
+  `btrim(regexp_replace(regexp_replace(${col}, '[״"׳''\`]', '', 'g'),`
+  + ` '[${JS_SPACE_CLASS}]+', ' ', 'g'), ' ')`;
+
 /** Resolve a soldier by full name: exact match first, then normalized
  *  (quote-variant / whitespace tolerant — mirrors scheduler/src/text.ts). */
 async function resolveSoldier(
@@ -56,25 +72,49 @@ async function resolveSoldier(
     `select id, full_name from soldiers
      where full_name = $1 and archived_at is null ${cond}`, [name]);
   if (exact.rows[0]) return { id: Number(exact.rows[0].id), fullName: exact.rows[0].full_name };
+
+  // Normalized retry as an INDEXED lookup rather than dragging the whole roster
+  // into Node. NORMALIZE_SQL must stay character-for-character equivalent to
+  // normalizeName() in scheduler/src/text.ts AND to the expression of the
+  // soldiers_name_normalized index — an index on a different expression is
+  // simply not used (correctness is unaffected, the query just goes seq).
+  const wanted = normalizeName(name);
+  const norm = await pool.query(
+    `select id, full_name from soldiers
+     where ${NORMALIZE_SQL('full_name')} = $1 and archived_at is null ${cond}
+     limit 1`, [wanted]);
+  if (norm.rows[0]) return { id: Number(norm.rows[0].id), fullName: norm.rows[0].full_name };
+
+  // Belt and braces while the SQL mirror is young: if it missed, fall back to
+  // the JS scan that has always been correct. Remove once the two are proven
+  // to agree (a hit HERE and not above means the expressions have drifted).
   const all = await pool.query(
     `select id, full_name from soldiers where archived_at is null ${cond}`);
-  const wanted = normalizeName(name);
   const hit = all.rows.find((r: any) => normalizeName(r.full_name) === wanted);
-  return hit ? { id: Number(hit.id), fullName: hit.full_name } : null;
-}
-
-/** First affected schedule day whose שבצ"ק is already generated, else null. */
-async function generatedDay(days: string[]): Promise<string | null> {
-  const pool = getPool();
-  for (const d of days) {
-    const rows = await pool.query(
-      `select 1 from shift_assignments where day = $1 limit 1`, [d]);
-    if (rows.rowCount) return d;
-    const st = await pool.query(
-      `select 1 from schedule_days where day = $1 and coalesce(status, 'draft') <> 'draft'`, [d]);
-    if (st.rowCount) return d;
+  if (hit) {
+    console.warn('resolveSoldier: NORMALIZE_SQL missed a name the JS fallback found —',
+      'the SQL mirror has drifted from normalizeName()', { name });
+    return { id: Number(hit.id), fullName: hit.full_name };
   }
   return null;
+}
+
+/** First affected schedule day whose שבצ"ק is already generated, else null.
+ *  One set-based round trip over all the days (was: two serial probes PER
+ *  day). Same predicate REQUEST_COLS uses: a day counts as generated when it
+ *  holds any shift_assignments row, or its schedule_days status is past
+ *  'draft'. */
+async function generatedDay(days: string[]): Promise<string | null> {
+  if (!days.length) return null;
+  const { rows } = await getPool().query(
+    `select d::text as day
+       from unnest($1::date[]) as d
+      where exists (select 1 from shift_assignments sa where sa.day = d)
+         or exists (select 1 from schedule_days sd
+                     where sd.day = d and coalesce(sd.status, 'draft') <> 'draft')
+      order by d
+      limit 1`, [days]);
+  return rows[0]?.day ?? null;
 }
 
 // `generated` mirrors generatedDay() in SQL over every schedule day the
@@ -193,18 +233,20 @@ async function handlePost(req: VercelRequest, res: VercelResponse) {
   // 5. collisions with recorded absences / other exit requests
   const pool = getPool();
   const range = [sqlTs(s), sqlTs(e)];
-  const unavail = await pool.query(
-    `select 1 from unavailability
-     where soldier_id = $1 and period && tsrange($2::timestamp, $3::timestamp, '[)') limit 1`,
+  // both probes in ONE round trip — same soldier, same window, independent
+  const { rows: [clash] } = await pool.query(
+    `select
+       exists (select 1 from unavailability
+               where soldier_id = $1
+                 and period && tsrange($2::timestamp, $3::timestamp, '[)')) as unavail,
+       exists (select 1 from exit_requests
+               where soldier_id = $1
+                 and period && tsrange($2::timestamp, $3::timestamp, '[)')) as dup`,
     [soldier.id, ...range]);
-  if (unavail.rowCount) {
+  if (clash.unavail) {
     return res.status(400).json({ error: 'קיימת כבר היעדרות רשומה בתאריכים אלה' });
   }
-  const dup = await pool.query(
-    `select 1 from exit_requests
-     where soldier_id = $1 and period && tsrange($2::timestamp, $3::timestamp, '[)') limit 1`,
-    [soldier.id, ...range]);
-  if (dup.rowCount) {
+  if (clash.dup) {
     return res.status(409).json({ error: OVERLAP_ERR });
   }
 

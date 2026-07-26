@@ -19,18 +19,23 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const email = String(req.query.email ?? '').trim().toLowerCase();
   if (!email) return res.status(400).json({ error: 'email required' });
   try {
-    const [admin, hamal] = await Promise.all([
-      getPool().query(`select 1 from shavtzak_admins where email = $1`, [email]),
-      getPool().query(
-        `select 1 from soldiers s
-         join positions p on (p.config -> 'staff_all_roles') ? s.role
-                         and (p.config -> 'staff_all_roles') ? 'חמל'
-         where lower(s.email) = $1 and s.archived_at is null limit 1`, [email]),
-    ]);
+    // Both checks in ONE round trip — two exists() subqueries over the same
+    // lowercased email. lower() on BOTH sides: api/roster.ts writes
+    // shavtzak_admins lowercased, but a hand-inserted row need not be. That
+    // forfeits the email PK index — irrelevant on a table of a few admins, and
+    // the soldiers side already had to use the soldiers(lower(email)) index.
+    const { rows } = await getPool().query(
+      `select
+         exists (select 1 from shavtzak_admins a where lower(a.email) = $1) as is_admin,
+         exists (select 1 from soldiers s
+                 join positions p on (p.config -> 'staff_all_roles') ? s.role
+                                 and (p.config -> 'staff_all_roles') ? 'חמל'
+                 where lower(s.email) = $1 and s.archived_at is null) as is_hamal`,
+      [email]);
     res.setHeader('Cache-Control', 's-maxage=60, stale-while-revalidate=300');
     const out: AdminResponse = {
-      isShavtzakAdmin: (admin.rowCount ?? 0) > 0,
-      isHamalMember: (hamal.rowCount ?? 0) > 0,
+      isShavtzakAdmin: rows[0].is_admin === true,
+      isHamalMember: rows[0].is_hamal === true,
     };
     return res.status(200).json(out);
   } catch (e) {
