@@ -8,7 +8,7 @@ import './env.js';
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { freshSchema, seedSoldiers, addCandidates, closePool, query } from './helpers.js';
-import rosterHandler from '../../api/roster.js';
+import rosterHandler, { mergeRoleCatalog } from '../../api/roster.js';
 import { getPool } from '../../api/_db.js';
 import type { RosterInput, RosterResponse, RosterSoldier } from '../../api/roster.js';
 import { loadContext } from '../src/load.js';
@@ -88,6 +88,14 @@ test('GET returns the roster with quals, catalogs and closed lists', async () =>
   // catalogs
   assert.ok(b.qualifications.includes('נהג דוד') && b.qualifications.includes('רחפן'));
   assert.ok(b.roles.includes('מ"כ') && b.roles.includes('לוחם'));
+  // תפקיד is a closed list, so the roles the DB DECLARES must be offered even
+  // when no soldier holds them — otherwise nobody could ever be put in
+  // חמל / מפלג, whose only entry point is setting תפקיד.
+  assert.ok(!b.soldiers.some((s) => s.role === 'חמל'), 'fixture has no חמל soldier');
+  for (const r of ['חמל', 'רס"פ', 'סרס"פ', 'מנהלה'])   // positions.config.staff_all_roles
+    assert.ok(b.roles.includes(r), `staff role ${r} missing from the catalog: ${b.roles.join(', ')}`);
+  for (const r of ['מ"פ', 'סמ"פ'])                      // חפק's seat_rules[].roles
+    assert.ok(b.roles.includes(r), `seat-rule role ${r} missing from the catalog`);
   assert.ok(b.platoons.includes('1') && b.platoons.includes('לא ידוע'));
   assert.ok(b.positions.some((p) => p.name === 'סיור' && p.isScheduled));
   assert.ok(b.positions.some((p) => p.name === 'מנוחה' && p.missionClass === 'rest'));
@@ -232,6 +240,41 @@ test('an archived soldier keeps their name and personal number reserved', async 
   const dup = await post({ ...NEW, personalNumber: 'X999', fullName: 'חייל 40' });
   assert.equal(dup.status, 409);
   await put({ ...toInput(s), archived: false });
+});
+
+test('mergeRoleCatalog: observed spelling wins, declared roles are added', () => {
+  // רספ and רס"פ normalize the same — the observed spelling must survive, since
+  // that is what api/admins.ts / api/hamal.ts match on EXACTLY.
+  const merged = mergeRoleCatalog(['רספ', 'לוחם'], ['רס"פ', 'חמל', 'לוחם']);
+  assert.ok(merged.includes('רספ'));
+  assert.ok(!merged.includes('רס"פ'), 'no visual duplicate of the same role');
+  assert.ok(merged.includes('חמל'), 'a declared role nobody holds is still offered');
+  assert.equal(merged.filter((r) => r === 'לוחם').length, 1);
+  assert.deepEqual(merged, [...merged].sort((a, b) => a.localeCompare(b, 'he')));
+  assert.deepEqual(mergeRoleCatalog(['', '  '], []), [], 'blanks are dropped');
+});
+
+test('PUT rejects a תפקיד / מחלקה outside the closed lists', async () => {
+  const s = soldier((await get()).body as RosterResponse, 'חייל 33');
+
+  const badRole = await put({ ...toInput(s), role: 'זבנג' });
+  assert.equal(badRole.status, 400);
+  assert.match(badRole.body.error, /תפקיד לא מוכר/);
+
+  const badPlatoon = await put({ ...toInput(s), platoon: '9' });
+  assert.equal(badPlatoon.status, 400);
+  assert.match(badPlatoon.body.error, /מחלקה לא מוכרת/);
+
+  assert.equal((await post({ ...NEW, personalNumber: 'N009', fullName: 'חדש רול', role: 'זבנג' })).status, 400);
+
+  // a declared-but-unheld role IS accepted (this is how מפלג gets staffed)
+  const ok = await put({ ...toInput(s), role: 'רס"פ' });
+  assert.equal(ok.status, 200);
+  assert.equal(soldier(ok.body as RosterResponse, 'חייל 33').role, 'רס"פ');
+  // ...and an empty platoon still falls back to לא ידוע
+  const blank = await put({ ...toInput(soldier(ok.body as RosterResponse, 'חייל 33')), platoon: '' });
+  assert.equal(blank.status, 200);
+  assert.equal(soldier(blank.body as RosterResponse, 'חייל 33').platoon, 'לא ידוע');
 });
 
 test('unsupported methods are rejected', async () => {

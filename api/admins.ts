@@ -8,6 +8,9 @@ import { getPool } from './_db.js';
 // table, no hardcoded role literal). A חמל member is NOT a scheduler admin: this
 // only unlocks the חמל tab. Requires soldiers.email to be populated (from the
 // roster sheet) and the soldiers(lower(email)) index for the lookup.
+// The join must be pinned to THE חמל position — resolved by the same
+// `staff_all_roles ? 'חמל'` marker api/hamal.ts uses — because מפלג declares
+// staff_all_roles too, so an unscoped join handed the חמל tab to רס"פ/סרס"פ/מנהלה.
 export interface AdminResponse { isShavtzakAdmin: boolean; isHamalMember: boolean }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -21,6 +24,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       getPool().query(
         `select 1 from soldiers s
          join positions p on (p.config -> 'staff_all_roles') ? s.role
+                         and (p.config -> 'staff_all_roles') ? 'חמל'
          where lower(s.email) = $1 and s.archived_at is null limit 1`, [email]),
     ]);
     res.setHeader('Cache-Control', 's-maxage=60, stale-while-revalidate=300');

@@ -27,10 +27,16 @@ const call = async (method: string, query: Record<string, string>) => {
   return res;
 };
 
-// Distinctive fixtures so the hamal-membership derivation (soldier with a
+// Self-contained fixtures so the hamal-membership derivation (soldier with a
 // חמל staff role, matched by email) is exercised without touching real rows.
+// The חמל position is identified by the 'חמל' marker INSIDE staff_all_roles
+// (same resolution as api/hamal.ts), so the fixture position must carry it.
+// The second pair mirrors מפלג — another position with staff_all_roles — and
+// must NOT unlock the חמל tab.
 const TEST_POS_ID = 900;
-const TEST_ROLE = 'חמלטסט';
+const TEST_ROLE = 'חמל';
+const STAFF_POS_ID = 901;
+const STAFF_ROLE = 'רספטסט';
 
 before(async () => {
   await getPool().query(`
@@ -50,10 +56,21 @@ before(async () => {
      values ('AUTHTEST1', 'בודק חמל authtest', 'חמ"ל', $1, 'hamal@example.com')
      on conflict (personal_number) do update set role = excluded.role, email = excluded.email`,
     [TEST_ROLE]);
+  // …and a מפלג-style staff position + member: staff_all_roles, but not חמל's.
+  await getPool().query(
+    `insert into positions (id, name, mission_class, config)
+     values ($1::smallint, 'מפלג-authtest', 'other', jsonb_build_object('staff_all_roles', jsonb_build_array($2::text)))
+     on conflict (id) do update set config = excluded.config`,
+    [STAFF_POS_ID, STAFF_ROLE]);
+  await getPool().query(
+    `insert into soldiers (personal_number, full_name, platoon, role, email)
+     values ('AUTHTEST2', 'בודק מפלג authtest', 'מפלג', $1, 'miflag@example.com')
+     on conflict (personal_number) do update set role = excluded.role, email = excluded.email`,
+    [STAFF_ROLE]);
 });
 after(async () => {
-  await getPool().query(`delete from soldiers where personal_number = 'AUTHTEST1'`);
-  await getPool().query(`delete from positions where id = ${TEST_POS_ID}`);
+  await getPool().query(`delete from soldiers where personal_number in ('AUTHTEST1', 'AUTHTEST2')`);
+  await getPool().query(`delete from positions where id in (${TEST_POS_ID}, ${STAFF_POS_ID})`);
   await getPool().end();
 });
 
@@ -83,6 +100,13 @@ test('חמל member (soldier with a חמל role, matched by email) -> isHamalMem
 test('חמל lookup is case-insensitive on email', async () => {
   const res = await call('GET', { email: 'Hamal@Example.COM' });
   assert.deepEqual(res.body, { isShavtzakAdmin: false, isHamalMember: true });
+});
+
+test('a מפלג staff role does NOT unlock the חמל tab', async () => {
+  // regression: the join used to match ANY position declaring staff_all_roles,
+  // so רס"פ/סרס"פ/מנהלה (מפלג) were reported as חמל members.
+  const res = await call('GET', { email: 'miflag@example.com' });
+  assert.deepEqual(res.body, { isShavtzakAdmin: false, isHamalMember: false });
 });
 
 test('missing email -> 400', async () => {

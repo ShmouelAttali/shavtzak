@@ -57,6 +57,16 @@ the numbered steps of the day page's ניתוח התהליך (process) section. 
 - **מפלג position** (id 14): רס"פ/סרס"פ/מנהלה staff — daily 14:00–14:00 row,
   restricted to it (staff_all_roles); presence follows the sheet's מפלג tab
   סטטוס (לא מגיע → `is_schedulable=false`; that was the בנימין קיי bug).
+- **Staffing the two role-crews** (there is NO מפלג tab and no members table):
+  **מפלג** = set תפקיד to רס"פ/סרס"פ/מנהלה in מצבת חיילים + keep
+  משובץ בשבצ"ק → the generator seats them daily and NOWHERE else; out for one
+  day = נוכחות, permanently = uncheck משובץ בשבצ"ק, one-off swap = click the
+  name in צור שבצק. **חמל** = תפקיד `חמל` (that alone puts them in the חמל
+  tab's picker AND grants the tab via `api/admins.ts`), then pick them per
+  shift in the חמל tab. `api/admins.ts` must pin its join to THE חמל position
+  (marker `staff_all_roles ? 'חמל'`, as `api/hamal.ts` does) — unscoped, it
+  handed the חמל tab to מפלג's staff too (fixed 2026-07-26,
+  `tests/admins.test.ts`).
 - **מגן commander**: weekly decision persisted in `magen_commander_history`
   (latest valid_from ≤ day wins; was `config.magen_commander` until the
   2026-07-19 FK migration); generator reserves him + anchors the crew's
@@ -184,6 +194,19 @@ and live against the shared Supabase project:
   soldier's `position_candidates` rows, plus an `אדמין שבצ"ק` checkbox writing
   `shavtzak_admins` by email (replaces hand-editing it in the dashboard).
   POST/PUT are a declarative whole-soldier replace echoing the full GET.
+  **תפקיד and מחלקה are CLOSED dropdowns** (owner 2026-07-26) — free text let a
+  typo silently break role/platoon matching in the generator (`staff_all_roles`
+  restriction, seat rules, `isCommanderRole`, and the two EXACT-match SQL paths
+  `api/admins.ts` / `api/hamal.ts`). The API enforces it: PUT/POST 400 on a
+  role/platoon outside the payload's own catalog ('' role stays legal → NULL).
+  `roles` = observed ∪ `ROLE_CATALOG` (the commander spellings, which can't be
+  derived — `crewOrder.ts`'s `DEFAULT_COMMANDER_ROLES` are *normalized*) ∪ the
+  roles the DB declares (`staff_all_roles` + `seat_rules[].roles`, same sources
+  as validate.ts's `config_roles` lint), deduped by `normalizeName` with the
+  OBSERVED spelling winning (`mergeRoleCatalog`). That union is load-bearing:
+  **setting תפקיד is the only way into חמל / מפלג**, so an observed-only list
+  would make them unassignable whenever nobody holds the role. `platoons` has no
+  catalog — a genuinely NEW מחלקה needs SQL (stated in the popup).
   Filters: active/removed, free text (name/מס' אישי/mail), תפקיד (+ מפקדים
   pseudo-option), הסמכה (+ closed-list and מוגבלי-עמדות pseudo-options) —
   the qualification filter reuses `hasQualification()` so a qual spelled only

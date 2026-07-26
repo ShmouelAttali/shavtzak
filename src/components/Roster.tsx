@@ -11,7 +11,9 @@ import { heDate } from './DateRangePicker';
 // מצבת חיילים tab (admin): the DB roster with every scheduler-relevant field —
 // roster columns, הסמכות + רובאי, the H6c whitelist and the closed candidate
 // lists. Read-only table + per-row edit popup; removal is soft (archive) and
-// reversible from the חיילים שהוסרו view.
+// reversible from the חיילים שהוסרו view. תפקיד and מחלקה are CLOSED dropdowns
+// over the GET payload's catalogs (the API rejects anything else) — a typo in
+// either used to break generator role/platoon matching silently.
 
 const inputCls = 'rounded-lg border border-gray-300 bg-white px-2 py-1.5 text-sm text-slate-800 focus:border-blue-500 focus:outline-none';
 const saveBtnCls = 'rounded-lg bg-blue-600 hover:bg-blue-500 disabled:opacity-40 text-white px-4 py-1.5 text-sm font-semibold';
@@ -72,11 +74,19 @@ function SoldierEditPopup({ draft, setDraft, meta, saving, error, onSave, onClos
     set('candidacies', draft.candidacies.map((c) =>
       candKey(c.positionId, c.subPositionId) === candKey(positionId, subPositionId) ? { ...c, priority } : c));
 
-  // הסמכה that is also spelled inside the free-text תפקיד: unchecking it has no
+  // הסמכה that is also spelled inside the תפקיד string: unchecking it has no
   // effect, because the generator's hasQualification() reads the role too.
   const stuck = meta.qualifications.filter((q) => !draft.quals.includes(q) && qualStuckInRole(draft.role, q));
 
   const whitelistable = meta.positions.filter((p) => p.isScheduled && p.missionClass !== 'rest');
+
+  // תפקיד/מחלקה are closed lists (the API rejects anything else). The stored
+  // value is always in the payload's catalog, but keep it as an option anyway so
+  // a select can never silently render blank over a real value.
+  const withCurrent = (options: string[], current: string) =>
+    current && !options.includes(current) ? [current, ...options] : options;
+  const roleOptions = withCurrent(meta.roles, draft.role);
+  const platoonOptions = withCurrent(meta.platoons, draft.platoon);
 
   return (
     <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/40 px-4 py-8" onClick={onClose}>
@@ -104,13 +114,21 @@ function SoldierEditPopup({ draft, setDraft, meta, saving, error, onSave, onClos
           </label>
           <label className="space-y-1">
             <div className="text-xs text-gray-500 font-medium">מחלקה</div>
-            <input className={`${inputCls} w-full`} value={draft.platoon} list="roster-platoons"
-              onChange={(e) => set('platoon', e.target.value)} />
+            <select className={`${inputCls} w-full`} value={draft.platoon}
+              onChange={(e) => set('platoon', e.target.value)}>
+              {/* a new soldier starts unset; the API falls back to לא ידוע */}
+              {!draft.platoon && <option value="">— בחר מחלקה —</option>}
+              {platoonOptions.map((p) => <option key={p} value={p}>{p}</option>)}
+            </select>
+            <div className="text-xs text-gray-400">מחלקה חדשה נוספת מול הדאטהבייס</div>
           </label>
           <label className="space-y-1">
             <div className="text-xs text-gray-500 font-medium">תפקיד</div>
-            <input className={`${inputCls} w-full`} value={draft.role} list="roster-roles"
-              onChange={(e) => set('role', e.target.value)} />
+            <select className={`${inputCls} w-full`} value={draft.role}
+              onChange={(e) => set('role', e.target.value)}>
+              <option value="">— ללא תפקיד —</option>
+              {roleOptions.map((r) => <option key={r} value={r}>{r}</option>)}
+            </select>
           </label>
           <label className="space-y-1">
             <div className="text-xs text-gray-500 font-medium">רובאי</div>
@@ -380,9 +398,6 @@ export function Roster({ guardRef }: { guardRef: MutableRefObject<TabLeaveGuard 
           </tbody>
         </table>
       </div>
-
-      <datalist id="roster-roles">{data?.roles.map((r) => <option key={r} value={r} />)}</datalist>
-      <datalist id="roster-platoons">{data?.platoons.map((p) => <option key={p} value={p} />)}</datalist>
 
       {draft && data && (
         <SoldierEditPopup draft={draft} setDraft={setDraft} meta={data} saving={saving}
