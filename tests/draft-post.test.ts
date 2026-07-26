@@ -71,7 +71,9 @@ test('GET /api/draft without valid from/to → 400', async () => {
 });
 
 test('unsupported method on /api/draft → 405', async () => {
-  const res = await call(draftHandler, { method: 'DELETE', query: {}, body: {} });
+  // DELETE became a supported method with מחק טיוטה (b91c589) — PATCH is the
+  // stand-in for "something the handler really does not implement".
+  const res = await call(draftHandler, { method: 'PATCH', query: {}, body: {} });
   assert.equal(res.statusCode, 405);
 });
 
