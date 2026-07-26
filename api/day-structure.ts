@@ -129,7 +129,7 @@ async function getDayStructure(day: string): Promise<DsResponse> {
 
 // ── PUT (declarative whole-day replace) ──────────────────────────────────────
 
-function validate(day: string, groups: unknown): DsGroupInput[] {
+function validate(groups: unknown): DsGroupInput[] {
   if (!Array.isArray(groups)) throw err('groups array required', 400);
   const out: DsGroupInput[] = [];
   for (const g of groups as any[]) {
@@ -157,7 +157,7 @@ function validate(day: string, groups: unknown): DsGroupInput[] {
 }
 
 async function setDayStructure(day: string, groupsIn: unknown): Promise<DsResponse> {
-  const groups = validate(day, groupsIn);
+  const groups = validate(groupsIn);
   const pool = getPool();
   const dayEnd = dayEndTs(day);
   const client = await pool.connect();

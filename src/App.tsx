@@ -1,6 +1,6 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { SignIn, SignedIn, SignedOut, UserButton, useUser, useClerk } from '@clerk/clerk-react';
-import type { TabId, SheetData } from './types';
+import type { TabId, SheetData, TabLeaveGuard } from './types';
 import { useSoldiers } from './hooks/useSoldiers';
 import { useShavtzak } from './hooks/useShavtzak';
 import { useShavtzakAccess } from './hooks/useIsShavtzakAdmin';
@@ -13,6 +13,7 @@ import { FairnessView } from './components/FairnessView';
 import { ExitRequests } from './components/ExitRequests';
 import { AdminExits } from './components/AdminExits';
 import { HamalSchedule } from './components/HamalSchedule';
+import { DayStructure } from './components/DayStructure';
 
 const COMPANY_ROLES = new Set(['מ"פ', 'סמ"פ', 'מ"מ', 'סמל', 'מ"כ']);
 
@@ -27,6 +28,7 @@ const TABS: { id: TabId; label: string; restricted?: 'company' | 'scheduler' | '
   { id: 'exitreq',   label: 'יציאה קצרה' },
   { id: 'draft',     label: 'צור שבצק', restricted: 'scheduler' },
   { id: 'fairness',  label: 'הוגנות', restricted: 'scheduler' },
+  { id: 'daystructure', label: 'מבנה יומי', restricted: 'scheduler' },
   { id: 'exitadmin', label: 'ניהול יציאות', restricted: 'scheduler' },
   { id: 'hamal',     label: 'חמל', restricted: 'hamal' },
 ];
@@ -51,9 +53,36 @@ function AboutPopup({ onClose }: { onClose: () => void }) {
   );
 }
 
+// Prompt shown when leaving a tab with unsaved edits (the מבנה יומי guard).
+function LeaveGuardPopup({ onSave, onDiscard, onCancel, saving }: {
+  onSave: () => void; onDiscard: () => void; onCancel: () => void; saving: boolean;
+}) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4" onClick={onCancel}>
+      <div className="bg-white rounded-2xl shadow-2xl p-6 space-y-4 max-w-xs w-full" onClick={e => e.stopPropagation()} dir="rtl">
+        <div className="text-lg font-bold text-slate-800">יש שינויים שלא נשמרו</div>
+        <div className="text-sm text-gray-500">לשמור את השינויים לפני המעבר?</div>
+        <div className="flex flex-col gap-2">
+          <button onClick={onSave} disabled={saving}
+            className="w-full rounded-xl bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white py-2 text-sm font-semibold">שמור ועבור</button>
+          <button onClick={onDiscard} disabled={saving}
+            className="w-full rounded-xl border border-gray-200 py-2 text-sm text-gray-600 hover:bg-gray-50">התעלם מהשינויים</button>
+          <button onClick={onCancel} disabled={saving}
+            className="w-full rounded-xl py-2 text-sm text-gray-400 hover:bg-gray-50">ביטול</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function AppContent({ data }: { data: SheetData }) {
   const [activeTab, setActiveTab] = useState<TabId>('personal');
   const [showAbout, setShowAbout] = useState(false);
+  // Leave guard: a tab may register {isDirty, save}; switching away while dirty
+  // opens a save/discard/cancel popup (used by מבנה יומי).
+  const tabLeaveGuardRef = useRef<TabLeaveGuard | null>(null);
+  const [pendingTab, setPendingTab] = useState<TabId | null>(null);
+  const [guardSaving, setGuardSaving] = useState(false);
   const { user } = useUser();
 
   const myEmail = user?.primaryEmailAddress?.emailAddress?.toLowerCase() ?? '';
@@ -68,10 +97,27 @@ function AppContent({ data }: { data: SheetData }) {
   // If a restricted tab becomes inaccessible, fall back to personal
   useEffect(() => {
     if (activeTab === 'company' && !canSeeCompany) setActiveTab('personal');
-    if (['draft', 'fairness', 'exitadmin'].includes(activeTab) && !canSeeScheduler) setActiveTab('personal');
+    if (['draft', 'fairness', 'daystructure', 'exitadmin'].includes(activeTab) && !canSeeScheduler) setActiveTab('personal');
     if (activeTab === 'hamal' && !canSeeHamal) setActiveTab('personal');
   }, [activeTab, canSeeCompany, canSeeScheduler, canSeeHamal]);
   const { data: shavtzakAll, loading: shavtzakLoading, error: shavtzakError, reload: reloadShavtzak } = useShavtzak();
+
+  // Switch tabs, but if the current tab has unsaved edits open the leave guard.
+  const requestTab = (id: TabId) => {
+    if (id === activeTab) return;
+    const guard = tabLeaveGuardRef.current;
+    if (guard && guard.isDirty()) { setPendingTab(id); return; }
+    setActiveTab(id);
+  };
+  const guardSaveAndGo = async () => {
+    const guard = tabLeaveGuardRef.current;
+    setGuardSaving(true);
+    const ok = guard ? await guard.save() : true;
+    setGuardSaving(false);
+    if (ok && pendingTab) setActiveTab(pendingTab);
+    if (ok) setPendingTab(null);
+  };
+  const guardDiscardAndGo = () => { if (pendingTab) setActiveTab(pendingTab); setPendingTab(null); };
 
   return (
     <div className="min-h-screen bg-gray-50" dir="rtl">
@@ -116,14 +162,14 @@ function AppContent({ data }: { data: SheetData }) {
               || (tab.restricted === 'hamal' && canSeeHamal)).map((tab) => (
               <button
                 key={tab.id}
-                onClick={() => setActiveTab(tab.id)}
+                onClick={() => requestTab(tab.id)}
                 className={`flex-shrink-0 border-b-2 px-4 py-3 text-sm font-medium whitespace-nowrap transition-colors ${
                   activeTab === tab.id
                     ? 'border-blue-600 text-blue-600'
                     : 'border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700'
                 }`}
               >
-                {tab.label}
+                {tab.label}{tab.restricted && <span className="mr-1 text-xs opacity-60">🔒</span>}
               </button>
             ))}
           </nav>
@@ -131,6 +177,10 @@ function AppContent({ data }: { data: SheetData }) {
       </div>
 
       {showAbout && <AboutPopup onClose={() => setShowAbout(false)} />}
+      {pendingTab && (
+        <LeaveGuardPopup saving={guardSaving}
+          onSave={guardSaveAndGo} onDiscard={guardDiscardAndGo} onCancel={() => setPendingTab(null)} />
+      )}
 
       {/* Content */}
       <main className="mx-auto max-w-6xl px-4 py-6">
@@ -140,6 +190,7 @@ function AppContent({ data }: { data: SheetData }) {
         {activeTab === 'shavtzak' && <Shavtzak soldiers={data.soldiers} shavtzakAll={shavtzakAll} loading={shavtzakLoading} error={shavtzakError} mySoldierName={mySoldierName} />}
         {activeTab === 'draft' && <DraftSchedule soldiers={data.soldiers} mySoldierName={mySoldierName} email={myEmail} />}
         {activeTab === 'fairness' && <FairnessView />}
+        {activeTab === 'daystructure' && <DayStructure guardRef={tabLeaveGuardRef} />}
         {activeTab === 'exitreq' && <ExitRequests soldierName={mySoldierName} email={myEmail} />}
         {activeTab === 'exitadmin' && <AdminExits soldiers={data.soldiers} email={myEmail} />}
         {activeTab === 'hamal' && <HamalSchedule />}
