@@ -3,7 +3,7 @@
 // level2/chains modules) touches no queries. The read path is src/load.ts.
 
 import { pool } from './db.js';
-import { validateAndStore, Finding } from './validate.js';
+import { validateDay, Finding } from './validate.js';
 import { GenerateResult } from './model.js';
 import { minToIso } from './time.js';
 import { buildDayInput, buildDayReportHtml } from './report.js';
@@ -88,17 +88,31 @@ export async function persist(res: GenerateResult, opts: PersistOptions = {}): P
   } finally {
     client.release();
   }
-  const findings = await validateAndStore(day);
-  // Persist the self-contained generation report so the draft UI can re-open
-  // it (GET /api/report). report.ts builders are pure (no fs); best-effort —
-  // a report-build hiccup must never fail the generation itself.
+  // ONE post-commit update for both snapshots. validateDay() (not
+  // validateAndStore) so the validation row and the report ride the same
+  // statement — validateAndStore keeps its own update for the `cli validate`
+  // path, which has no report to store.
+  const findings = await validateDay(day);
+  // The self-contained generation report, so the draft UI can re-open it
+  // (GET /api/report). report.ts builders are pure (no fs); best-effort — a
+  // report-build hiccup must never fail the generation, so a throw here only
+  // drops the report and the validation snapshot is still written.
+  let html: string | null = null;
   if (storeReport && res.report) {
     try {
-      const html = buildDayReportHtml(buildDayInput(res, findings, false));
-      await pool.query(`update schedule_days set report_html = $2 where day = $1`, [day, html]);
+      html = buildDayReportHtml(buildDayInput(res, findings, false));
     } catch (e) {
-      console.error(`report_html build/store failed for ${day}:`, e);
+      console.error(`report_html build failed for ${day}:`, e);
     }
+  }
+  if (html !== null) {
+    await pool.query(
+      `update schedule_days set validation = $2, report_html = $3 where day = $1`,
+      [day, JSON.stringify(findings), html]);
+  } else {
+    // no report asked for (or its build threw) — leave report_html as it was
+    await pool.query(`update schedule_days set validation = $2 where day = $1`,
+      [day, JSON.stringify(findings)]);
   }
   return findings;
 }
