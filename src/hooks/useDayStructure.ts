@@ -133,11 +133,16 @@ export function useDayStructure(day: string) {
 
   const renameGroup = (guid: string, name: string) => mapGroup(guid, (g) => ({ ...g, name }));
   const removeGroup = (guid: string) => setDraft((prev) => prev.filter((g) => g.uid !== guid));
-  const addGroup = () => setDraft((prev) => [...prev, {
-    uid: uid(), positionId: null, name: '', originalName: null,
-    positions: [{ uid: uid(), subId: null, name: null, originalName: null,
-      shifts: [{ uid: uid(), templateId: null, start: '14:00', end: '22:00', seats: 1, origin: 'new' }] }],
-  }]);
+  /** returns the new group's uid — the tab expands it (groups start collapsed). */
+  const addGroup = (): string => {
+    const guid = uid();
+    setDraft((prev) => [...prev, {
+      uid: guid, positionId: null, name: '', originalName: null,
+      positions: [{ uid: uid(), subId: null, name: null, originalName: null,
+        shifts: [{ uid: uid(), templateId: null, start: '14:00', end: '22:00', seats: 1, origin: 'new' }] }],
+    }]);
+    return guid;
+  };
 
   const renamePosition = (guid: string, puid: string, name: string) =>
     mapPos(guid, puid, (p) => ({ ...p, name: name.trim() === '' ? null : name }));

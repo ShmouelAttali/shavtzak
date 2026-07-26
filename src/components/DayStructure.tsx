@@ -10,6 +10,10 @@ import { heDate } from './DateRangePicker';
 // autosave: an explicit Save (top + bottom, enabled only when dirty) PUTs the
 // whole day; "אפס ליום רגיל" resets it. Leaving the tab / reloading / changing the
 // date while dirty prompts save/discard/cancel.
+// Groups are COLLAPSED BY DEFAULT (the day has many of them) — click a card's
+// header to open it; כווץ הכל / הרחב הכל toggles them all. Every "add" button
+// (קבוצה / תפקיד / משמרת) sits ABOVE the list it appends to, so it stays reachable
+// without scrolling past the content.
 
 /** Current schedule day (14:00→14:00): before 14:00 it's still yesterday's. */
 function currentScheduleDay(): string {
@@ -72,6 +76,8 @@ function PositionBlock({ pos, actions }: {
         <input value={pos.name ?? ''} onChange={(e) => actions.rename(e.target.value)}
           placeholder="תפקיד (ריק = ללא)"
           className="rounded border border-gray-200 px-2 py-1 text-sm font-semibold text-slate-700 flex-1 min-w-0" />
+        <button onClick={actions.addShift}
+          className="rounded-lg bg-blue-50 hover:bg-blue-100 text-blue-700 px-2.5 py-1 text-xs font-medium whitespace-nowrap">+ משמרת</button>
         <button onClick={actions.remove} title="הסר תפקיד"
           className="rounded px-2 py-1 text-xs text-red-500 hover:bg-red-50">הסר תפקיד</button>
       </div>
@@ -82,35 +88,48 @@ function PositionBlock({ pos, actions }: {
             onRemove={() => actions.removeShift(s.uid)} />
         ))}
       </div>
-      <button onClick={actions.addShift}
-        className="rounded-lg bg-blue-50 hover:bg-blue-100 text-blue-700 px-2.5 py-1 text-xs font-medium">+ משמרת</button>
     </div>
   );
 }
 
-function GroupCard({ group, ds }: { group: DraftGroup; ds: ReturnType<typeof useDayStructure> }) {
+/** One-line summary shown on a collapsed group: how much is folded away. */
+function groupSummary(group: DraftGroup): string {
+  const shifts = group.positions.reduce((n, p) => n + p.shifts.length, 0);
+  const seats = group.positions.reduce((n, p) => n + p.shifts.reduce((m, s) => m + s.seats, 0), 0);
+  return `${group.positions.length} תפקידים · ${shifts} משמרות · ${seats} עמדות`;
+}
+
+function GroupCard({ group, ds, open, onToggle }: {
+  group: DraftGroup; ds: ReturnType<typeof useDayStructure>; open: boolean; onToggle: () => void;
+}) {
   return (
     <section className="rounded-xl border border-gray-200 bg-white p-4 space-y-3">
-      <div className="flex items-center gap-2">
+      {/* header doubles as the collapse toggle — the inner controls stop the bubble */}
+      <div className="flex items-center gap-2 cursor-pointer" onClick={onToggle}>
+        <span className="text-gray-400 text-sm w-4 text-center select-none" aria-hidden>{open ? '▾' : '◂'}</span>
         <input value={group.name} onChange={(e) => ds.renameGroup(group.uid, e.target.value)}
+          onClick={(e) => e.stopPropagation()}
           placeholder="שם קבוצה"
           className="rounded-lg border border-gray-200 px-2.5 py-1.5 text-base font-bold text-slate-800 flex-1 min-w-0" />
-        <button onClick={() => ds.removeGroup(group.uid)} title="הסר קבוצה"
-          className="rounded-lg px-2.5 py-1.5 text-xs text-red-500 hover:bg-red-50 font-medium">הסר קבוצה</button>
+        {!open && <span className="text-xs text-gray-400 whitespace-nowrap">{groupSummary(group)}</span>}
+        <button onClick={(e) => { e.stopPropagation(); ds.addPosition(group.uid); if (!open) onToggle(); }}
+          className="rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-700 px-3 py-1 text-sm font-medium whitespace-nowrap">+ תפקיד</button>
+        <button onClick={(e) => { e.stopPropagation(); ds.removeGroup(group.uid); }} title="הסר קבוצה"
+          className="rounded-lg px-2.5 py-1.5 text-xs text-red-500 hover:bg-red-50 font-medium whitespace-nowrap">הסר קבוצה</button>
       </div>
-      <div className="space-y-2">
-        {group.positions.map((p) => (
-          <PositionBlock key={p.uid} pos={p} actions={{
-            rename: (name) => ds.renamePosition(group.uid, p.uid, name),
-            remove: () => ds.removePosition(group.uid, p.uid),
-            addShift: () => ds.addShift(group.uid, p.uid),
-            removeShift: (suid) => ds.removeShift(group.uid, p.uid, suid),
-            updateShift: (suid, patch) => ds.updateShift(group.uid, p.uid, suid, patch),
-          }} />
-        ))}
-      </div>
-      <button onClick={() => ds.addPosition(group.uid)}
-        className="rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-700 px-3 py-1 text-sm font-medium">+ תפקיד</button>
+      {open && (
+        <div className="space-y-2">
+          {group.positions.map((p) => (
+            <PositionBlock key={p.uid} pos={p} actions={{
+              rename: (name) => ds.renamePosition(group.uid, p.uid, name),
+              remove: () => ds.removePosition(group.uid, p.uid),
+              addShift: () => ds.addShift(group.uid, p.uid),
+              removeShift: (suid) => ds.removeShift(group.uid, p.uid, suid),
+              updateShift: (suid, patch) => ds.updateShift(group.uid, p.uid, suid, patch),
+            }} />
+          ))}
+        </div>
+      )}
     </section>
   );
 }
@@ -139,11 +158,29 @@ function ConfirmLeavePopup({ onSave, onDiscard, onCancel, saving }: {
 
 const saveBtnCls = 'rounded-lg bg-blue-600 hover:bg-blue-500 disabled:opacity-40 disabled:hover:bg-blue-600 text-white px-4 py-1.5 text-sm font-semibold';
 
+/** Is any of the CURRENT groups open? (the expanded set may hold stale uids from
+ *  a previous load — a reload re-mints every uid, i.e. collapses everything.) */
+export function anyExpanded(groups: { uid: string }[], expanded: Set<string>): boolean {
+  return groups.some((g) => expanded.has(g.uid));
+}
+
+/** כווץ הכל / הרחב הכל: anything open → collapse all, else open all. */
+export function toggleAll(groups: { uid: string }[], expanded: Set<string>): Set<string> {
+  return anyExpanded(groups, expanded) ? new Set<string>() : new Set(groups.map((g) => g.uid));
+}
+
 export function DayStructure({ guardRef }: { guardRef: MutableRefObject<TabLeaveGuard | null> }) {
   const [day, setDay] = useState(currentScheduleDay());
   const [pendingDay, setPendingDay] = useState<string | null>(null);   // date change awaiting confirm
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());    // group uids open; default = all collapsed
   const ds = useDayStructure(day);
   const { isDirty, save } = ds;
+
+  const toggleGroup = (guid: string) => setExpanded((prev) => {
+    const next = new Set(prev);
+    if (!next.delete(guid)) next.add(guid);
+    return next;
+  });
 
   // register the leave guard for App's tab-switch interception
   useEffect(() => {
@@ -201,16 +238,25 @@ export function DayStructure({ guardRef }: { guardRef: MutableRefObject<TabLeave
         {ds.loading && <span className="text-sm text-gray-400"><span className="animate-spin inline-block">↺</span></span>}
       </div>
 
-      <SaveBar />
+      <div className="flex items-center gap-2 flex-wrap" dir="rtl">
+        <SaveBar />
+        <span className="mx-1 h-6 w-px bg-gray-200" />
+        <button onClick={() => setExpanded((prev) => new Set([...prev, ds.addGroup()]))}
+          className="rounded-lg border-2 border-dashed border-gray-300 hover:border-blue-400 hover:text-blue-600 text-gray-500 px-4 py-1 text-sm font-medium">
+          + קבוצה חדשה
+        </button>
+        <button onClick={() => setExpanded((prev) => toggleAll(ds.draft, prev))} disabled={ds.draft.length === 0}
+          className="rounded-lg bg-gray-100 hover:bg-gray-200 disabled:opacity-40 text-gray-700 px-4 py-1.5 text-sm font-medium">
+          {anyExpanded(ds.draft, expanded) ? 'כווץ הכל' : 'הרחב הכל'}
+        </button>
+      </div>
 
       {ds.error && <div className="rounded-xl bg-red-50 p-4 text-center text-red-700 text-sm">{ds.error}</div>}
 
-      {ds.draft.map((g) => <GroupCard key={g.uid} group={g} ds={ds} />)}
-
-      <button onClick={ds.addGroup}
-        className="rounded-xl border-2 border-dashed border-gray-300 hover:border-blue-400 hover:text-blue-600 text-gray-500 w-full py-3 text-sm font-medium">
-        + קבוצה חדשה
-      </button>
+      {ds.draft.map((g) => (
+        <GroupCard key={g.uid} group={g} ds={ds}
+          open={expanded.has(g.uid)} onToggle={() => toggleGroup(g.uid)} />
+      ))}
 
       <SaveBar />
 

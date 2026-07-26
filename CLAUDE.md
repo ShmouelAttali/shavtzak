@@ -141,7 +141,11 @@ and live against the shared Supabase project:
   added/moved/duration-changed → day-scoped `slot_templates`; new group →
   `positions` row (static, is_scheduled); rename = day-scoped delete+create
   (collision → 409). Scope excludes חמל / מפלג / rest. Explicit save (no
-  autosave) + leave guard. Schema delta `db/day-structure-2026-07-26.sql`
+  autosave) + leave guard. UI: groups are **collapsed by default** (click a card
+  header to open; כווץ הכל/הרחב הכל toggles all — pure `anyExpanded`/`toggleAll`,
+  `tests/day-structure-collapse.test.ts`; a reload re-mints uids, re-collapsing
+  everything) and every add button (קבוצה/תפקיד/משמרת) sits at the TOP of what it
+  appends to. Schema delta `db/day-structure-2026-07-26.sql`
   (seat_overrides.slot_template_id + day-scoped exemption on
   slot_templates_no_overlap) — mirrored in schema.sql and applied to Supabase.
   Its "remove a shift" path (a `seats=0` override) was **rejected in
