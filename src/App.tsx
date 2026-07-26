@@ -15,6 +15,7 @@ import { AdminExits } from './components/AdminExits';
 import { HamalSchedule } from './components/HamalSchedule';
 import { DayStructure } from './components/DayStructure';
 import { Roster } from './components/Roster';
+import { Presence } from './components/Presence';
 import { TAB_STORAGE_KEY, resolveInitialTab, withTabParam } from './lib/tabParam';
 
 const COMPANY_ROLES = new Set(['מ"פ', 'סמ"פ', 'מ"מ', 'סמל', 'מ"כ']);
@@ -33,6 +34,7 @@ const TABS: { id: TabId; label: string; restricted?: 'company' | 'scheduler' | '
   { id: 'daystructure', label: 'מבנה יומי', restricted: 'scheduler' },
   { id: 'exitadmin', label: 'ניהול יציאות', restricted: 'scheduler' },
   { id: 'roster',    label: 'מצבת חיילים', restricted: 'scheduler' },
+  { id: 'presence',  label: 'נוכחות', restricted: 'scheduler' },
   { id: 'hamal',     label: 'חמל', restricted: 'hamal' },
 ];
 
@@ -234,6 +236,7 @@ function AppContent({ data }: { data: SheetData }) {
           {activeTab === 'exitreq' && <ExitRequests soldierName={mySoldierName} email={myEmail} />}
           {activeTab === 'exitadmin' && <AdminExits soldiers={data.soldiers} email={myEmail} />}
           {activeTab === 'roster' && <Roster guardRef={tabLeaveGuardRef} />}
+          {activeTab === 'presence' && <Presence guardRef={tabLeaveGuardRef} />}
           {activeTab === 'hamal' && <HamalSchedule />}
         </>)}
       </main>

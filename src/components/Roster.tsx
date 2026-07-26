@@ -3,11 +3,9 @@ import type { MutableRefObject } from 'react';
 import type { TabLeaveGuard } from '../types';
 import type { RosterInput, RosterResponse, RosterSoldier } from '../../api/roster';
 import { useRoster } from '../hooks/useRoster';
-import {
-  filterRoster, qualStuckInRole, EMPTY_FILTERS,
-  ROLE_COMMANDERS, QUAL_RESTRICTED, QUAL_POOL_PREFIX,
-} from '../lib/rosterFilter';
+import { filterRoster, qualStuckInRole, EMPTY_FILTERS } from '../lib/rosterFilter';
 import type { RosterFilters } from '../lib/rosterFilter';
+import { RosterFilterBar } from './RosterFilters';
 import { heDate } from './DateRangePicker';
 
 // מצבת חיילים tab (admin): the DB roster with every scheduler-relevant field —
@@ -16,7 +14,6 @@ import { heDate } from './DateRangePicker';
 // reversible from the חיילים שהוסרו view.
 
 const inputCls = 'rounded-lg border border-gray-300 bg-white px-2 py-1.5 text-sm text-slate-800 focus:border-blue-500 focus:outline-none';
-const selectCls = `${inputCls} font-medium`;
 const saveBtnCls = 'rounded-lg bg-blue-600 hover:bg-blue-500 disabled:opacity-40 text-white px-4 py-1.5 text-sm font-semibold';
 const ghostBtnCls = 'rounded-lg border border-gray-200 hover:bg-gray-50 text-gray-600 px-4 py-1.5 text-sm font-medium';
 
@@ -277,9 +274,6 @@ export function Roster({ guardRef }: { guardRef: MutableRefObject<TabLeaveGuard 
     await saveSoldier({ ...toInput(s), archived });
   };
 
-  const poolPositionIds = useMemo(
-    () => [...new Set((data?.closedLists ?? []).map((l) => l.positionId))],
-    [data]);
   const posName = (id: number) => data?.positions.find((p) => p.id === id)?.name ?? String(id);
 
   return (
@@ -290,32 +284,7 @@ export function Roster({ guardRef }: { guardRef: MutableRefObject<TabLeaveGuard 
         להוסיף בחזרה הסמכות שמופיעות בטקסט התפקיד או ההערות.
       </div>
 
-      <div className="flex flex-wrap items-center gap-2" dir="rtl">
-        <select className={selectCls} value={filters.archived ? 'archived' : 'active'}
-          onChange={(e) => setFilters({ ...filters, archived: e.target.value === 'archived' })}>
-          <option value="active">חיילים פעילים</option>
-          <option value="archived">חיילים שהוסרו</option>
-        </select>
-        <input className={`${inputCls} w-48`} placeholder="חיפוש שם / מס' אישי / מייל"
-          value={filters.text} onChange={(e) => setFilters({ ...filters, text: e.target.value })} />
-        <select className={selectCls} value={filters.role}
-          onChange={(e) => setFilters({ ...filters, role: e.target.value })}>
-          <option value="">כל התפקידים</option>
-          <option value={ROLE_COMMANDERS}>מפקדים</option>
-          {data?.roles.map((r) => <option key={r} value={r}>{r}</option>)}
-        </select>
-        <select className={selectCls} value={filters.qual}
-          onChange={(e) => setFilters({ ...filters, qual: e.target.value })}>
-          <option value="">כל ההסמכות</option>
-          {data?.qualifications.map((q) => <option key={q} value={q}>{q}</option>)}
-          {poolPositionIds.map((id) => (
-            <option key={id} value={`${QUAL_POOL_PREFIX}${id}`}>ברשימת {posName(id)}</option>
-          ))}
-          <option value={QUAL_RESTRICTED}>מוגבלי עמדות</option>
-        </select>
-
-        <div className="flex-1" />
-
+      <RosterFilterBar filters={filters} setFilters={setFilters} meta={data}>
         {!filters.archived && (
           <>
             <button className={saveBtnCls} onClick={() => openEditor({ ...EMPTY_SOLDIER })}>+ חייל חדש</button>
@@ -328,7 +297,7 @@ export function Roster({ guardRef }: { guardRef: MutableRefObject<TabLeaveGuard 
           </>
         )}
         {loading && <span className="text-sm text-gray-400"><span className="animate-spin inline-block">↺</span></span>}
-      </div>
+      </RosterFilterBar>
 
       {removeMode && !filters.archived && (
         <div className="rounded-xl bg-amber-50 border border-amber-100 px-4 py-2 text-sm text-amber-800" dir="rtl">

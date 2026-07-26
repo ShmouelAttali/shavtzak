@@ -73,9 +73,16 @@ infer the answers, do not widen the scope you were given:
      presence matrix. **Only on explicit request** — see the נוכחות warning
      below.
    - **everything**: also roster fields, qualifications, dedupe (`cleanup.py`
-     parts 2 & 3). Rare; confirm the blast radius first.
+     part 2). Rare; confirm the blast radius first.
 
-> **נוכחות (`נוכח`/`חופש`) is NOT reliably in sync with the שבצק**
+> **נוכחות is DB-OWNED as of 2026-07-26** — the **נוכחות tab** (`/api/presence`)
+> is the source of truth for `unavailability`, not the sheet. `cleanup.py`'s
+> part 3 (truncate + rebuild) is now behind `--rebuild-presence` and is
+> **default OFF**: it exists for the initial import of a fresh database only.
+> Never pass it on a refresh — it would wipe every hand edit and every
+> reconciled boundary.
+>
+> **נוכחות in the sheet is also NOT reliably in sync with the שבצק**
 > (owner, 2026-07-26). The officers keep scheduling from the שבצק tab while the
 > presence matrix lags. Take the שבצק rows **as-is** and do not "fix" them
 > against the roster. Expect leftover `availability` validator errors on
@@ -195,13 +202,15 @@ around a convention change is the fingerprint, not missing data.
    group by u.soldier_id, u.period;
   ```
 
-- **NEVER run `cleanup.py`'s Part 3 (`truncate unavailability`) to refresh
-  presence.** The rebuild is naive-bus-hour and would wipe every hand-reconciled
-  boundary across all past months (a 2026-07-26 diff was 220 adds / 211 removes,
-  almost all of them boundary hours being reset from 09:00/10:00 back to 08:00).
-  When נוכחות really is in scope, do **interval surgery clipped to the requested
-  schedule days**: delete the overlapping row, re-insert the pieces outside the
-  window, leaving every out-of-window boundary untouched.
+- **NEVER pass `cleanup.py --rebuild-presence` to refresh presence** (the flag
+  is default-OFF since 2026-07-26; without it part 3 is skipped and only logs a
+  notice). The rebuild is naive-bus-hour and would wipe every hand edit made in
+  the נוכחות tab plus every reconciled boundary across all past months (a
+  2026-07-26 diff was 220 adds / 211 removes, almost all of them boundary hours
+  being reset from 09:00/10:00 back to 08:00). When נוכחות really is in scope,
+  either edit it in the **נוכחות tab** or do **interval surgery clipped to the
+  requested schedule days**: delete the overlapping row, re-insert the pieces
+  outside the window, leaving every out-of-window boundary untouched.
 
 - **כונן גשש 8h windows (sheet format since 19/07)**: rows now come as
   סוג=`נוספים` with a single time (14:00/22:00/06:00) meaning an 8-hour

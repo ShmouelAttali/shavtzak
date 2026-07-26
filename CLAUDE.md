@@ -105,8 +105,9 @@ and live against the shared Supabase project:
   cards → `api/fairness.ts`). Tab visibility also
   granted by the `shavtzak_admins` DB table (`api/admins.ts`). Plus a חמל tab
   (per-shift manual staffing, 10:00-cycle tiling), a **מבנה יומי** tab (admin,
-  per-DAY shift-structure editor) and a **מצבת חיילים** tab (admin, roster
-  editor) — both below. All restricted tabs carry a 🔒.
+  per-DAY shift-structure editor), a **מצבת חיילים** tab (admin, roster editor)
+  and a **נוכחות** tab (admin, presence editor) — all below. All restricted tabs
+  carry a 🔒.
 - **מבנה יומי tab** (2026-07-26, `api/day-structure.ts` +
   `src/components/DayStructure.tsx` + `useDayStructure`): admin-only editor for
   ONE schedule day's shift structure (add/remove/rename position group =
@@ -158,7 +159,35 @@ and live against the shared Supabase project:
   `db/roster-tab-2026-07-26.sql` (`soldiers.archived_at` + `presence()` /
   `soldier_fairness()` filtered) — mirrored in schema.sql and **applied to
   Supabase 2026-07-26**.
-  Unavailability is deliberately NOT editable here (`cleanup.py` truncates it).
+  Unavailability is deliberately NOT edited here — it has its own **נוכחות**
+  tab (below).
+- **נוכחות tab** (2026-07-26, `api/presence.ts` → `/api/presence` +
+  `src/components/Presence.tsx` + `usePresence` + pure
+  `src/lib/presencePlan.ts`): admin-only presence editor over `unavailability`.
+  **Source-of-truth decision (owner, 2026-07-26): presence is DB-OWNED** — sheet
+  re-imports must not rebuild it, so `import/cleanup.py` part 3 is now behind
+  `--rebuild-presence`, default OFF (initial imports only; the flag is also
+  documented in the `supabase-access` skill). No schema change.
+  Editable states are **full-day only** and DERIVED FROM THE DB: the
+  `unavailability` kind CHECK constraint ∩ the full-day kinds
+  (חופש/מחלה/לא מגויס/שחרור/גיוס, the two מגויס spellings collapsed onto the
+  canonical one), prefixed by נוכח. The partial kinds (יציאה בבוקר / ב14:00 /
+  בערב, חזרה ב14:00 / בערב, short-exit יציאה) are display-only — shown greyed,
+  and replaced wholesale when their day is edited. `exit_requests` is untouched.
+  **PUT is a declarative per-day replace for ONE soldier** (`{soldier_id, days:
+  [{day,status}]}`, 400 on a partial/unknown status): consecutive same-kind days
+  become ONE row `[firstDay bus, lastDay+1 bus)` with `bus(d)` = 08:00 on Sunday
+  / 06:00 otherwise (cleanup.py's mapping, per the boundary's OWN day); rows
+  covering a touched day are deleted and re-emitted, so runs merge with adjacent
+  untouched same-kind rows and a נוכח day splits a block in two — all in one
+  transaction, all computed by the pure `planPresenceWrite()`.
+  Two views (per-soldier with a "מ־X עד־Y סמן כ־" bulk action, per-date matrix
+  with a click-a-cell popup), the מצבת חיילים filter bar reused verbatim
+  (extracted to `src/components/RosterFilters.tsx`), explicit save + leave guard.
+  **CALENDAR-day semantics**: the read direction is `presenceMatrix()` in the
+  same pure module, NOT the `presence()` DB function — that one buckets by
+  `day_range()` (the 14:00→14:00 SCHEDULE day), so a one-day block would light
+  up two cells. `presence()` has no other caller.
 - **Level-1 load-order independence** (2026-07-26, found via the tab above):
   adding `and archived_at is null` to `load.ts`'s roster query — a predicate
   removing ZERO rows — changed generated schedules, because the query had no

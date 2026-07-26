@@ -7,8 +7,11 @@ Post-import data cleanup (SPEC §11) — emits SQL on stdout. Three parts:
    Found by recomputing the full import and diffing against what the DB holds.
 2. Name dedupe: soldiers created from history-only spellings (personal_number
    IMP*) that fuzzy-match a roster soldier are merged into the roster row.
-3. Unavailability: the roster's per-date status matrix is compressed into
-   sparse `unavailability` periods (consecutive blocking runs merged).
+3. Unavailability (OPT-IN, --rebuild-presence): the roster's per-date status
+   matrix is compressed into sparse `unavailability` periods (consecutive
+   blocking runs merged). OFF by default since 2026-07-26 — presence is owned by
+   the DB and edited in the נוכחות tab, so a re-import must not truncate it.
+   The flag is for the INITIAL import of a fresh database only.
 
 Inputs:
   --history        'כל השבצק.values.csv'      (sheet export)
@@ -17,6 +20,7 @@ Inputs:
   --db-assignments CSV of `select s.full_name, p.name, lower(a.period), upper(a.period)
                            from shift_assignments a join soldiers s ... join positions p ...
                            where a.source='import'`
+  --rebuild-presence  emit part 3 (truncate + rebuild `unavailability`)
 
 Status → unavailability mapping (calendar-day semantics; see SPEC §11):
   full-day block: חופש, לא מגויס, שחרור, גיוס, מחלה   -> [X bus, X+1 bus)
@@ -64,6 +68,9 @@ def main():
     ap.add_argument('--roster', required=True)
     ap.add_argument('--db-soldiers', required=True)
     ap.add_argument('--db-assignments', required=True)
+    ap.add_argument('--rebuild-presence', action='store_true',
+                    help='rebuild unavailability from the roster matrix '
+                         '(initial import only — presence is DB-owned)')
     args = ap.parse_args()
     out = sys.stdout
     log = sys.stderr
@@ -144,7 +151,12 @@ def main():
               f" {sid}, tsrange('{ts(period[0])}','{ts(period[1])}'), 'import', false;", file=out)
     log.write(f'OVERLAP ROWS RE-ADDED (blocks_overlap=false): {missing}\n')
 
-    # ── Part 3: unavailability from roster matrix ───────────────────────────
+    # ── Part 3: unavailability from roster matrix (opt-in) ──────────────────
+    if not args.rebuild_presence:
+        log.write('UNAVAILABILITY: skipped — presence is DB-owned (edited in the '
+                  'נוכחות tab). Pass --rebuild-presence for an initial import.\n')
+        return
+
     rows = list(csv.reader(open(args.roster)))
     hdr_i = next(i for i, r in enumerate(rows) if any(norm(c) == 'שם מלא' for c in r))
     hh = [norm(c) for c in rows[hdr_i]]

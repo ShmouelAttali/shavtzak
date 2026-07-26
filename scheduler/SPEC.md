@@ -993,8 +993,12 @@ stored rows are **data facts** and are not rewritten:
   normalized-name match (quotes stripped, spaces collapsed, single-letter edit
   distance within the same platoon); the roster spelling is kept and history rows
   re-pointed. Every merge is logged.
-- `unavailability` is built from the roster's date-status matrix: consecutive
-  non-נוכח runs become one period row anchored to 14:00 day boundaries.
+- **Presence is DB-owned (2026-07-26)**: `unavailability` is maintained in the
+  **נוכחות tab** (§12), not by the sheet. Building it from the roster's
+  date-status matrix (consecutive non-נוכח runs → one period row, boundaries at
+  the bus hour of each boundary's own calendar day: 08:00 on Sunday, 06:00
+  otherwise) is `cleanup.py --rebuild-presence`, opt-in and for the initial
+  import of a fresh database only.
 
 ## 12. Operational UI (viewer app)
 
@@ -1145,3 +1149,19 @@ the publish flow trusts the officer email supplied by the client.
   the default (wipe only). The tab has NO autosave: an explicit Save (top +
   bottom) PUTs; leaving the tab / reloading / changing the date while there are
   unsaved edits prompts save/discard/cancel (an `App`-level leave guard).
+- **נוכחות tab** (`api/presence.ts`, admin-only) — the presence matrix
+  (soldier × **calendar** day) and its editor; since 2026-07-26 the DB is the
+  source of truth for `unavailability` (§11). Editable states = the
+  `unavailability` kind CHECK constraint ∩ the **full-day** kinds
+  (חופש/מחלה/לא מגויס/שחרור/גיוס, both מגויס spellings collapsed onto the
+  canonical one) + נוכח; the partial kinds are display-only and are replaced
+  whole when their day is edited. `exit_requests` (§9/H9) is out of scope.
+  `PUT {soldier_id, days:[{day,status}]}` is a **declarative per-day replace**
+  over the touched range: consecutive same-kind days become ONE row
+  `[firstDay bus, lastDay+1 bus)` (bus = 08:00 Sunday / 06:00 otherwise, per the
+  boundary's own day), rows covering a touched day are deleted and re-emitted so
+  runs merge with adjacent same-kind rows and a נוכח day splits a block — one
+  transaction, pure `planPresenceWrite()` (`src/lib/presencePlan.ts`). Reading
+  is the inverse `presenceMatrix()` in the same module: a full-day row occupies
+  `lower.date .. upper.date - 1`, a partial row its `lower.date`, ties by
+  overlap. Explicit save + leave guard.

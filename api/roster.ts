@@ -102,7 +102,9 @@ const str = (v: unknown): string => (typeof v === 'string' ? v.trim() : '');
 
 // ── read ─────────────────────────────────────────────────────────────────────
 
-async function getRoster(): Promise<RosterResponse> {
+/** Exported for the נוכחות tab (api/presence.ts): its filter bar is the very
+ *  same one, so it serves the very same roster document. */
+export async function getRoster(): Promise<RosterResponse> {
   const pool = getPool();
   const [soldiers, quals, allowed, cands, positions, subs] = await Promise.all([
     pool.query(
