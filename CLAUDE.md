@@ -69,7 +69,7 @@ the numbered steps of the day page's ניתוח התהליך (process) section. 
 
 ## Current state (2026-07-17)
 
-Everything below is implemented, tested (375 tests: `scheduler/` 271 + root 104),
+Everything below is implemented, tested (both suites — see Testing policy),
 and live against the shared Supabase project:
 
 - **Scheduler DB** on Supabase (schema in `scheduler/db/schema.sql`, template
