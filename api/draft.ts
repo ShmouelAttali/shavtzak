@@ -1,5 +1,6 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { getPool, DATE_RE } from './_db.js';
+import { dayStatus, positionScope, soldierNamesById, type Queryable } from './_sql.js';
 import type { StationGroup, SubType, TimeSlot } from './shavtzak.js';
 import type { RationaleEntry } from '../scheduler/src/rationale.js';
 import { requiredSeats } from '../scheduler/src/config.js';
@@ -71,13 +72,30 @@ export interface ReplaceResponse { day: string; updated: number; evicted: Evicte
 const hm = (d: Date) =>
   `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
 
+/** Calendar-date arithmetic on a YYYY-MM-DD string (UTC math, no tz drift). */
+function addDaysIso(iso: string, n: number): string {
+  const [y, m, d] = iso.split('-').map(Number);
+  return new Date(Date.UTC(y, m - 1, d + n)).toISOString().slice(0, 10);
+}
+
+/** Guard rail on the GET window: every non-draft day in the range fans out a
+ *  full validateDay() (~16 statements), so an unbounded range is a DoS on the
+ *  pooler. Same limit the נוכחות tab uses (api/presence.ts MAX_DAYS). */
+const MAX_DAYS = 62;
+
+/** SQL for labelSlot's `yomi` argument: `daily: true` implies yomi_display and
+ *  an explicit yomi_display wins (scheduler/src/config.ts). Computed in the
+ *  query so the rows don't have to carry the whole `positions.config` jsonb —
+ *  this is the only thing the assignment rows ever read out of it. */
+const YOMI_SQL = (alias: string) =>
+  `coalesce((${alias}.config->>'yomi_display')::boolean, (${alias}.config->>'daily')::boolean, false)`;
+
 /** Time label for an assignment/slot row. yomi_display positions (מגן/חפק)
  *  are daily crews — no shift times on the card; a shift starting on the next
  *  calendar day (tail of the 14:00→14:00 schedule day) is marked למחרת so the
  *  card reads unambiguously. */
-function labelSlot(day: string, pStart: Date, pEnd: Date, posConfig: Record<string, any> | null): string {
-  // daily:true implies yomi_display (scheduler/src/config.ts); explicit key wins
-  if (posConfig?.yomi_display ?? posConfig?.daily) return 'יומי';
+function labelSlot(day: string, pStart: Date, pEnd: Date, yomi: boolean): string {
+  if (yomi) return 'יומי';
   const startDay = `${pStart.getFullYear()}-${String(pStart.getMonth() + 1).padStart(2, '0')}-${String(pStart.getDate()).padStart(2, '0')}`;
   return `${hm(pStart)}-${hm(pEnd)}${startDay !== day ? ' (למחרת)' : ''}`;
 }
@@ -104,18 +122,31 @@ async function cleanupStaleDrafts(from: string, to: string): Promise<void> {
                    where p.status = 'published' and p.day >= d.day)`, [from, to]);
   if (!stale.rowCount) return;
   const days = stale.rows.map((r) => r.day);
-  await pool.query(
-    `delete from shift_assignments where day = any($1::date[])
-       and source in ('auto','chain') and not locked`, [days]);
-  await pool.query(
-    `delete from day_assignments where day = any($1::date[])
-       and source in ('auto','chain') and not locked`, [days]);
-  // Days left with nothing human revert to an empty draft.
-  await pool.query(
-    `update schedule_days d set status = 'draft'
-     where d.day = any($1::date[])
-       and not exists (select 1 from shift_assignments sa where sa.day = d.day)
-       and not exists (select 1 from day_assignments da where da.day = d.day)`, [days]);
+  // All three writes in ONE transaction: the status flip is only correct if it
+  // sees the two deletes, and a failure between them used to leave a day
+  // half-cleaned (rows gone, status still 'generated') on every later read.
+  const client = await pool.connect();
+  try {
+    await client.query('begin');
+    await client.query(
+      `delete from shift_assignments where day = any($1::date[])
+         and source in ('auto','chain') and not locked`, [days]);
+    await client.query(
+      `delete from day_assignments where day = any($1::date[])
+         and source in ('auto','chain') and not locked`, [days]);
+    // Days left with nothing human revert to an empty draft.
+    await client.query(
+      `update schedule_days d set status = 'draft'
+       where d.day = any($1::date[])
+         and not exists (select 1 from shift_assignments sa where sa.day = d.day)
+         and not exists (select 1 from day_assignments da where da.day = d.day)`, [days]);
+    await client.query('commit');
+  } catch (e) {
+    await client.query('rollback').catch(() => {});
+    throw e;
+  } finally {
+    client.release();
+  }
 }
 
 async function getDrafts(from: string, to: string): Promise<DraftResponse> {
@@ -127,7 +158,8 @@ async function getDrafts(from: string, to: string): Promise<DraftResponse> {
               (report_html is not null) has_report
        from schedule_days where day between $1 and $2 order by day`, [from, to]),
     pool.query(
-      `select sa.day::text, sa.position_id, p.name pos_name, p.config pos_config, sp.name sub_name, s.full_name,
+      `select sa.day::text, sa.position_id, p.name pos_name, ${YOMI_SQL('p')} yomi,
+              sp.name sub_name, s.full_name,
               lower(sa.period) p_start, upper(sa.period) p_end,
               sa.source, sa.locked, sa.violations, sa.rationale, sa.seat_index,
               sa.blocks_overlap
@@ -145,13 +177,16 @@ async function getDrafts(from: string, to: string): Promise<DraftResponse> {
        where da.day between $1 and $2
        order by da.day, p.id, s.full_name`, [from, to]),
     pool.query(
-      `select ds.day::text, ds.position_id, p.name pos_name, p.config pos_config, sp.name sub_name,
+      // flex_seats is the ONLY part of config requiredSeats() reads, so the
+      // slot rows carry just that subobject (plus the yomi flag) rather than
+      // the whole jsonb — the helper stays the single authority on the math.
+      `select ds.day::text, ds.position_id, p.name pos_name, ${YOMI_SQL('p')} yomi,
+              p.config -> 'flex_seats' flex_seats, sp.name sub_name,
               lower(ds.period) p_start, upper(ds.period) p_end, ds.seats
        from day_slots ds
        join positions p on p.id = ds.position_id
        left join sub_positions sp on sp.id = ds.sub_position_id
-       where ds.day between $1 and $2 and p.is_scheduled
-         and p.mission_class <> 'rest' and not (p.config ? 'staff_all_roles')
+       where ds.day between $1 and $2 and ${positionScope('p')}
        order by ds.day, p.id, lower(ds.period)`, [from, to]),
     // full roster for the replacement picker (not date-scoped — a replacement
     // may come from anywhere, including soldiers the generator skipped)
@@ -193,7 +228,7 @@ async function getDrafts(from: string, to: string): Promise<DraftResponse> {
   for (const r of rowsRes.rows) {
     const day = days.get(r.day);
     if (!day) continue;
-    const time = labelSlot(r.day, new Date(r.p_start), new Date(r.p_end), r.pos_config);
+    const time = labelSlot(r.day, new Date(r.p_start), new Date(r.p_end), r.yomi === true);
     const station = r.pos_name as string;
     const sug = (r.sub_name as string | null) ?? station;
     const gKey = `${r.day}|${station}`;
@@ -252,10 +287,10 @@ async function getDrafts(from: string, to: string): Promise<DraftResponse> {
     // flex positions (מגן 10-12, סיור 3-4/shift) may legitimately staff below
     // the template seat count down to the flex minimum — same rule as the
     // validator's coverage check (shared helper)
-    const required = requiredSeats(Number(sl.seats), sl.pos_config);
+    const required = requiredSeats(Number(sl.seats), { flex_seats: sl.flex_seats });
     const missing = required - n;
     if (missing <= 0) continue;
-    const time = labelSlot(sl.day, new Date(sl.p_start), new Date(sl.p_end), sl.pos_config);
+    const time = labelSlot(sl.day, new Date(sl.p_start), new Date(sl.p_end), sl.yomi === true);
     const station = sl.pos_name as string;
     const sug = (sl.sub_name as string | null) ?? station;
     const gKey = `${sl.day}|${station}`;
@@ -330,15 +365,23 @@ const err = (status: number, message: string) =>
  *  the page — UNLOCKED, so a regeneration is free to plan him again (a locked
  *  rest bucket would pin him to מנוחה forever, ctx.lockedDay in level1.ts).
  *  With no rest position configured, his bucket row is dropped. */
-async function rebucket(client: { query: (q: string, p?: unknown[]) => Promise<any> },
-                        day: string, soldierId: number): Promise<void> {
+/** The rest (מנוחה) position id — a constant of the deployment, so it is looked
+ *  up once instead of on every rebucket() call (same pattern as hamal.ts's
+ *  cachedHamalPid). `undefined` = not looked up yet, `null` = none configured. */
+let cachedRestPid: number | null | undefined;
+async function restPositionId(client: Queryable): Promise<number | null> {
+  if (cachedRestPid !== undefined) return cachedRestPid;
+  const r = await client.query(
+    `select id from positions where mission_class = 'rest' order by id limit 1`);
+  return (cachedRestPid = r.rows[0]?.id ?? null);
+}
+
+async function rebucket(client: Queryable, day: string, soldierId: number): Promise<void> {
   const keep = await client.query(
     `select sa.position_id from shift_assignments sa
       where sa.day = $1 and sa.soldier_id = $2
       order by sa.blocks_overlap desc, lower(sa.period) limit 1`, [day, soldierId]);
-  const rest = keep.rowCount ? null : await client.query(
-    `select id from positions where mission_class = 'rest' order by id limit 1`);
-  const bucket = keep.rows[0]?.position_id ?? rest?.rows[0]?.id ?? null;
+  const bucket = keep.rows[0]?.position_id ?? (keep.rowCount ? null : await restPositionId(client));
   if (bucket === null) {
     await client.query(
       `delete from day_assignments where day = $1 and soldier_id = $2`, [day, soldierId]);
@@ -358,57 +401,75 @@ async function replaceSoldier(day: string, time: string, fromId: number, toId: n
   const pool = getPool();
   if (fromId === toId) throw err(400, 'אותו חייל — לא בוצע שינוי');
 
-  const st = await pool.query<{ status: string }>(
-    `select status from schedule_days where day = $1`, [day]);
-  if (!st.rows.length) throw err(404, 'אין טיוטה ליום זה');
-
-  const people = await pool.query<{ id: string; full_name: string }>(
-    `select id, full_name from soldiers where id = any($1::bigint[])`, [[fromId, toId]]);
-  const nameOf = new Map(people.rows.map((r) => [Number(r.id), r.full_name]));
+  // Three independent reads — day status, the two names, and the outgoing
+  // soldier's rows on the day. One round trip's latency instead of three.
+  const [st, nameOf, rows] = await Promise.all([
+    dayStatus(day),
+    soldierNamesById([fromId, toId]),
+    // candidate rows of the outgoing soldier on this day, narrowed to the
+    // clicked slot by its rendered time label. `lo`/`hi` serve double duty:
+    // the tsrange literals below AND (parsed as naive local) the label math,
+    // so the raw lower()/upper() columns are not selected as well.
+    pool.query(
+      `select sa.id, sa.position_id, p.name pos_name, ${YOMI_SQL('p')} yomi,
+              sa.blocks_overlap,
+              to_char(lower(sa.period), 'YYYY-MM-DD"T"HH24:MI:SS') lo,
+              to_char(upper(sa.period), 'YYYY-MM-DD"T"HH24:MI:SS') hi
+       from shift_assignments sa
+       join positions p on p.id = sa.position_id
+       where sa.day = $1 and sa.soldier_id = $2
+       order by sa.blocks_overlap desc, lower(sa.period)`, [day, fromId]),
+  ]);
+  if (st === null) throw err(404, 'אין טיוטה ליום זה');
   if (!nameOf.has(fromId) || !nameOf.has(toId)) throw err(404, 'חייל לא נמצא');
 
-  // candidate rows of the outgoing soldier on this day, narrowed to the
-  // clicked slot by its rendered time label
-  const rows = await pool.query(
-    `select sa.id, sa.position_id, p.name pos_name, p.config pos_config, sa.blocks_overlap,
-            lower(sa.period) p_start, upper(sa.period) p_end,
-            to_char(lower(sa.period), 'YYYY-MM-DD"T"HH24:MI:SS') lo,
-            to_char(upper(sa.period), 'YYYY-MM-DD"T"HH24:MI:SS') hi
-     from shift_assignments sa
-     join positions p on p.id = sa.position_id
-     where sa.day = $1 and sa.soldier_id = $2
-     order by sa.blocks_overlap desc, lower(sa.period)`, [day, fromId]);
   const targets = rows.rows.filter((r: any) =>
-    labelSlot(day, new Date(r.p_start), new Date(r.p_end), r.pos_config) === time);
+    labelSlot(day, new Date(r.lo), new Date(r.hi), r.yomi === true) === time);
   if (!targets.length) {
     throw err(404, 'השיבוץ לא נמצא — ייתכן שהטיוטה השתנתה בינתיים. רענן ונסה שוב');
   }
   const ranges = targets.map((r: any) => `[${r.lo},${r.hi})`);
-
-  // already in this very slot?
-  const dup = await pool.query(
-    `select 1 from shift_assignments sa
-     join unnest($3::bigint[], $4::tsrange[]) as t(pid, per)
-       on sa.position_id = t.pid and sa.period = t.per
-     where sa.soldier_id = $1 and sa.day = $2 limit 1`,
-    [toId, day, targets.map((r: any) => r.position_id), ranges]);
-  if (dup.rowCount) throw err(409, `${nameOf.get(toId)} כבר משובץ במשמרת זו`);
 
   // H3 / no_double_booking: a blocking row of the incoming soldier that
   // overlaps the window makes the swap impossible for the DB. Without `force`
   // that is a 409 naming WHERE he is (never a raw constraint error); with it,
   // those rows are the ones the officer agreed to vacate.
   const blocking = ranges.filter((_r, i) => targets[i].blocks_overlap);
+
+  // The clash scan is bounded by schedule day. A row whose PERIOD overlaps one
+  // of these windows can be filed under schedule day D-1 (a window that starts
+  // before 14:00 belongs to the previous day) or D, so ±1 around the span of
+  // the target periods is generous and cannot miss one. Unbounded, this query
+  // scanned the incoming soldier's ENTIRE assignment history on every swap.
+  const dates = targets.flatMap((r: any) => [String(r.lo).slice(0, 10), String(r.hi).slice(0, 10)]);
+  const fromDay = addDaysIso(dates.reduce((a, b) => (a < b ? a : b)), -1);
+  const toDay = addDaysIso(dates.reduce((a, b) => (a > b ? a : b)), 1);
+
+  // duplicate-seat probe and clash scan are independent of each other
+  const [dup, clash] = await Promise.all([
+    // already in this very slot?
+    pool.query(
+      `select 1 from shift_assignments sa
+       join unnest($3::bigint[], $4::tsrange[]) as t(pid, per)
+         on sa.position_id = t.pid and sa.period = t.per
+       where sa.soldier_id = $1 and sa.day = $2 limit 1`,
+      [toId, day, targets.map((r: any) => r.position_id), ranges]),
+    blocking.length
+      ? pool.query(
+        `select sa.id, sa.day::text, p.name pos_name, ${YOMI_SQL('p')} yomi,
+                lower(sa.period) p_start, upper(sa.period) p_end
+         from shift_assignments sa
+         join positions p on p.id = sa.position_id
+         where sa.soldier_id = $1 and sa.blocks_overlap
+           and sa.day between $3::date and $4::date
+           and sa.period && any($2::tsrange[])
+         order by sa.day, p.id, lower(sa.period)`, [toId, blocking, fromDay, toDay])
+      : null,
+  ]);
+  if (dup.rowCount) throw err(409, `${nameOf.get(toId)} כבר משובץ במשמרת זו`);
+
   const evict: { id: number; day: string; position: string; time: string }[] = [];
-  if (blocking.length) {
-    const clash = await pool.query(
-      `select sa.id, sa.day::text, p.name pos_name, p.config pos_config,
-              lower(sa.period) p_start, upper(sa.period) p_end
-       from shift_assignments sa
-       join positions p on p.id = sa.position_id
-       where sa.soldier_id = $1 and sa.blocks_overlap
-         and sa.period && any($2::tsrange[])
-       order by sa.day, p.id, lower(sa.period)`, [toId, blocking]);
+  if (clash) {
     if (clash.rowCount && !force) {
       const where = [...new Set(clash.rows.map((r: any) => r.pos_name as string))].join(', ');
       throw err(409, `${nameOf.get(toId)} כבר משובץ בשעות אלו (${where})`);
@@ -416,7 +477,7 @@ async function replaceSoldier(day: string, time: string, fromId: number, toId: n
     for (const r of clash.rows as any[]) {
       evict.push({
         id: Number(r.id), day: r.day, position: r.pos_name,
-        time: labelSlot(r.day, new Date(r.p_start), new Date(r.p_end), r.pos_config),
+        time: labelSlot(r.day, new Date(r.p_start), new Date(r.p_end), r.yomi === true),
       });
     }
   }
@@ -458,7 +519,7 @@ async function replaceSoldier(day: string, time: string, fromId: number, toId: n
     }
     await client.query('commit');
   } catch (e) {
-    await client.query('rollback');
+    await client.query('rollback').catch(() => {});
     if ((e as any)?.code === '23P01') {
       throw err(409, `${nameOf.get(toId)} כבר משובץ בשעות אלו`);
     }
@@ -491,16 +552,19 @@ async function replaceSoldier(day: string, time: string, fromId: number, toId: n
 // is frozen (409) — unpublish first, exactly like regenerating.
 async function deleteDraft(day: string): Promise<DeleteDraftResponse> {
   const pool = getPool();
-  const st = await pool.query<{ status: string }>(
-    `select status from schedule_days where day = $1`, [day]);
-  if (!st.rows.length) throw err(404, 'אין טיוטה ליום זה');
-  if (st.rows[0].status === 'published') {
-    throw err(409, 'היום פורסם — יש לבטל פרסום לפני מחיקת הטיוטה');
-  }
-
   const client = await pool.connect();
   try {
     await client.query('begin');
+    // The published-status guard reads INSIDE the transaction and locks the
+    // row: checking on the pool first left a window in which a concurrent
+    // publish could land between the check and the deletes, wiping an
+    // already-approved schedule.
+    const st = await client.query<{ status: string }>(
+      `select status from schedule_days where day = $1 for update`, [day]);
+    if (!st.rows.length) throw err(404, 'אין טיוטה ליום זה');
+    if (st.rows[0].status === 'published') {
+      throw err(409, 'היום פורסם — יש לבטל פרסום לפני מחיקת הטיוטה');
+    }
     const sa = await client.query(
       `delete from shift_assignments sa using positions p
         where p.id = sa.position_id and sa.day = $1
@@ -521,7 +585,7 @@ async function deleteDraft(day: string): Promise<DeleteDraftResponse> {
       shiftRows: sa.rowCount ?? 0, dayRows: da.rowCount ?? 0,
     };
   } catch (e) {
-    await client.query('rollback');
+    await client.query('rollback').catch(() => {});
     throw e;
   } finally {
     client.release();
@@ -541,6 +605,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (!DATE_RE.test(from) || !DATE_RE.test(to)) {
         return res.status(400).json({ error: 'from/to required (YYYY-MM-DD)' });
       }
+      if (to < from) {
+        return res.status(400).json({ error: 'תאריך הסיום קודם לתאריך ההתחלה' });
+      }
+      // days between, inclusive — 86400000 ms/day, both ends are pure dates
+      const span = (Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / 86_400_000 + 1;
+      if (span > MAX_DAYS) {
+        return res.status(400).json({ error: `טווח ארוך מדי (עד ${MAX_DAYS} ימים)` });
+      }
       res.setHeader('Cache-Control', 'no-store');
       return res.status(200).json(await getDrafts(from, to));
     }
@@ -552,9 +624,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }
       // Overwrite guard: a published day is frozen — regenerating it would
       // silently replace an approved schedule. Refuse until it is unpublished.
-      const st = await getPool().query<{ status: string }>(
-        `select status from schedule_days where day = $1`, [day]);
-      if (st.rows[0]?.status === 'published') {
+      if (await dayStatus(day) === 'published') {
         return res.status(409).json({ error: 'היום פורסם — יש לבטל פרסום לפני חילול מחדש' });
       }
       // One day per request (Vercel time limit); the UI iterates ranges.
