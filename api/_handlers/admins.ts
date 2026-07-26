@@ -1,5 +1,5 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { getPool } from './_db.js';
+import { getPool } from '../_db.js';
 
 // GET /api/admins?email=x -> { isShavtzakAdmin, isHamalMember }
 // isShavtzakAdmin: point lookup against shavtzak_admins (grants the scheduler tabs).

@@ -9,7 +9,7 @@ import {
   filterRoster, qualStuckInRole, EMPTY_FILTERS,
   ROLE_COMMANDERS, QUAL_RESTRICTED, QUAL_POOL_PREFIX,
 } from '../src/lib/rosterFilter';
-import type { RosterSoldier } from '../api/roster';
+import type { RosterSoldier } from '../api/_handlers/roster';
 
 const s = (over: Partial<RosterSoldier> & { id: number; fullName: string }): RosterSoldier => ({
   personalNumber: `900${over.id}`, platoon: '1', role: 'לוחם', rifleLevel: 70,

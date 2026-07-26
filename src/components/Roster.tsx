@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { MutableRefObject } from 'react';
 import type { TabLeaveGuard } from '../types';
-import type { RosterInput, RosterResponse, RosterSoldier } from '../../api/roster';
+import type { RosterInput, RosterResponse, RosterSoldier } from '../../api/_handlers/roster';
 import { useRoster } from '../hooks/useRoster';
 import { filterRoster, qualStuckInRole, EMPTY_FILTERS } from '../lib/rosterFilter';
 import type { RosterFilters } from '../lib/rosterFilter';

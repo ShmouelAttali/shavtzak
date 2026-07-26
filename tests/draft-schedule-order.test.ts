@@ -9,7 +9,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { orderStationGroups } from '../src/components/DraftSchedule';
 import type { SoldierInfo } from '../src/components/Shavtzak';
-import type { StationGroup } from '../api/shavtzak';
+import type { StationGroup } from '../api/_handlers/shavtzak';
 
 function group(name: string, sug: string, times: [string, string[]][]): StationGroup {
   return { name, subTypes: [{ sug, times: times.map(([time, soldiers]) => ({ time, soldiers })) }] };

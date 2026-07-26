@@ -1,4 +1,4 @@
-// Handler-level test for api/fairness.ts against the local test database
+// Handler-level test for api/_handlers/fairness.ts against the local test database
 // (same shavtzak_test DB the scheduler suite uses — never Supabase).
 process.env.SCHEDULER_DATABASE_URL =
   process.env.SCHEDULER_TEST_DATABASE_URL
@@ -9,8 +9,8 @@ import assert from 'node:assert/strict';
 import { freshSchema, seedSoldiers, soldierId, closePool, query } from '../scheduler/tests/helpers.js';
 import { generate, persist } from '../scheduler/src/generate.js';
 import { getPool } from '../api/_db.js';
-import handler from '../api/fairness.js';
-import type { FairnessResponse } from '../api/fairness.js';
+import handler from '../api/_handlers/fairness.js';
+import type { FairnessResponse } from '../api/_handlers/fairness.js';
 
 const D1 = '2026-09-01', D2 = '2026-09-02', D3 = '2026-09-03';
 

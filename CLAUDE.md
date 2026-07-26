@@ -62,9 +62,9 @@ the numbered steps of the day page's ניתוח התהליך (process) section. 
   משובץ בשבצ"ק → the generator seats them daily and NOWHERE else; out for one
   day = נוכחות, permanently = uncheck משובץ בשבצ"ק, one-off swap = click the
   name in צור שבצק. **חמל** = תפקיד `חמל` (that alone puts them in the חמל
-  tab's picker AND grants the tab via `api/admins.ts`), then pick them per
-  shift in the חמל tab. `api/admins.ts` must pin its join to THE חמל position
-  (marker `staff_all_roles ? 'חמל'`, as `api/hamal.ts` does) — unscoped, it
+  tab's picker AND grants the tab via `api/_handlers/admins.ts`), then pick them per
+  shift in the חמל tab. `api/_handlers/admins.ts` must pin its join to THE חמל position
+  (marker `staff_all_roles ? 'חמל'`, as `api/_handlers/hamal.ts` does) — unscoped, it
   handed the חמל tab to מפלג's staff too (fixed 2026-07-26,
   `tests/admins.test.ts`).
 - **מגן commander**: weekly decision persisted in `magen_commander_history`
@@ -105,7 +105,7 @@ and live against the shared Supabase project:
   primitives in `rank.ts` / `rest.ts` / `pairs.ts` / `text.ts` / `config.ts`.
   P5 driver-fit + מ"כ spread and R3 גשש effective-rest are implemented.
 - **Viewer app**: two officer-only tabs — צור שבצק (date range +
-  צור שבצ"ק button → `api/draft.ts`; clicking a name opens the manual
+  צור שבצ"ק button → `api/_handlers/draft.ts`; clicking a name opens the manual
   replacement picker — `PUT /api/draft` writes a manual+locked row the
   generator then re-seats verbatim. A **published day is editable** (owner
   2026-07-26): only the wholesale ops (regenerate, מחק טיוטה) stay frozen at
@@ -134,7 +134,7 @@ and live against the shared Supabase project:
   חריגות card) and הוגנות (Sunday-anchored week,
   compliance dashboard: one exceptions-only card per SPEC rule fed by running
   the validator over the window's days, plus fairness-spread / position-balance
-  cards → `api/fairness.ts`). **הוגנות draft scope** (owner 2026-07-26): the tab
+  cards → `api/_handlers/fairness.ts`). **הוגנות draft scope** (owner 2026-07-26): the tab
   counts the already-scheduled **published** work by default; a `כלול טיוטות`
   checkbox (`?drafts=1`) factors drafts in, where a day holding a draft
   contributes its draft INSTEAD of its published rows — never both, so nothing
@@ -144,12 +144,12 @@ and live against the shared Supabase project:
   and the generator on the draft-inclusive behaviour they need, and the old
   1-arg signature is DROPPED — leaving both makes a 1-arg call ambiguous
   ("function soldier_fairness(date) is not unique"). Tab visibility also
-  granted by the `shavtzak_admins` DB table (`api/admins.ts`). Plus a חמל tab
+  granted by the `shavtzak_admins` DB table (`api/_handlers/admins.ts`). Plus a חמל tab
   (per-shift manual staffing, 10:00-cycle tiling), a **מבנה יומי** tab (admin,
   per-DAY shift-structure editor), a **מצבת חיילים** tab (admin, roster editor)
   and a **נוכחות** tab (admin, presence editor) — all below. All restricted tabs
   carry a 🔒.
-- **מבנה יומי tab** (2026-07-26, `api/day-structure.ts` +
+- **מבנה יומי tab** (2026-07-26, `api/_handlers/day-structure.ts` +
   `src/components/DayStructure.tsx` + `useDayStructure`): admin-only editor for
   ONE schedule day's shift structure (add/remove/rename position group =
   `positions` row + its positions = `sub_positions`; change shift start/end/seats;
@@ -186,11 +186,11 @@ and live against the shared Supabase project:
   on GET (same findings as the report's חריגות card), and shared pure helpers
   keep the rest in lockstep: `requiredSeats()` (config.ts — flex coverage
   math), `staffedSeats()` (coverage.ts — how many of a slot's seats are
-  actually manned; both used by validate.ts §10 + api/draft.ts's לא-מאויש
+  actually manned; both used by validate.ts §10 + api/_handlers/draft.ts's לא-מאויש
   markers) and `violationCoveredByRationale()` (rationale.ts — the
   raw-violation↔caveat dedup, used by RationalePopup + report cells).
   **Coverage is counted by OVERLAP, never by the rendered time label**: a real
-  row sliced differently from its template still staffs it. api/draft.ts used
+  row sliced differently from its template still staffs it. api/_handlers/draft.ts used
   to match labels, so a כרמל/גשש night written as one 8h row against 4h
   template slots showed phantom "לא מאויש" over a fully manned shift while the
   validator saw nothing wrong (fixed 2026-07-26 — 87 false markers across
@@ -199,7 +199,7 @@ and live against the shared Supabase project:
   process narration and live only in the stored report (פתח דוח button). Any
   new rule belongs in validate.ts (message shown in both) or rationale.ts
   (rendered in both).
-- **מצבת חיילים tab** (2026-07-26, `api/roster.ts` → **`/api/roster`**
+- **מצבת חיילים tab** (2026-07-26, `api/_handlers/roster.ts` → **`/api/roster`**
   (`/api/soldiers` is the SHEET endpoint) + `src/components/Roster.tsx` +
   `useRoster` + pure `src/lib/rosterFilter.ts`): admin-only roster editor —
   read-only table + per-row edit popup + `+ חייל חדש`. Edits `soldiers`
@@ -211,7 +211,7 @@ and live against the shared Supabase project:
   **תפקיד and מחלקה are CLOSED dropdowns** (owner 2026-07-26) — free text let a
   typo silently break role/platoon matching in the generator (`staff_all_roles`
   restriction, seat rules, `isCommanderRole`, and the two EXACT-match SQL paths
-  `api/admins.ts` / `api/hamal.ts`). The API enforces it: PUT/POST 400 on a
+  `api/_handlers/admins.ts` / `api/_handlers/hamal.ts`). The API enforces it: PUT/POST 400 on a
   role/platoon outside the payload's own catalog ('' role stays legal → NULL).
   `roles` = observed ∪ `ROLE_CATALOG` (the commander spellings, which can't be
   derived — `crewOrder.ts`'s `DEFAULT_COMMANDER_ROLES` are *normalized*) ∪ the
@@ -247,7 +247,7 @@ and live against the shared Supabase project:
   Supabase 2026-07-26**.
   Unavailability is deliberately NOT edited here — it has its own **נוכחות**
   tab (below).
-- **נוכחות tab** (2026-07-26, `api/presence.ts` → `/api/presence` +
+- **נוכחות tab** (2026-07-26, `api/_handlers/presence.ts` → `/api/presence` +
   `src/components/Presence.tsx` + `usePresence` + pure
   `src/lib/presencePlan.ts`): admin-only presence editor over `unavailability`.
   **Source-of-truth decision (owner, 2026-07-26): presence is DB-OWNED** — sheet
@@ -306,7 +306,22 @@ Two parts in this repo:
 
 1. **Viewer app** (root): React + Vite + TS, RTL Hebrew, deployed on Vercel. Read-only
    dashboard over the company Google Sheet (roster, duty roster, exits). Serverless
-   endpoints in `api/` read the sheet via a Google service account. See root `README.md`.
+   endpoints read the sheet via a Google service account. See root `README.md`.
+
+   **The API is ONE Serverless Function** (2026-07-26): Vercel turns every file
+   directly under `api/` into its own function and the Hobby plan caps a
+   deployment at 12 — the 14 endpoints blew that. So the handlers live in
+   `api/_handlers/` (a leading underscore means Vercel does not route it — the
+   same reason `api/_db.ts` was never an endpoint) and the catch-all
+   `api/[...route].ts` dispatches to them through the `ROUTES` table in
+   `api/_routes.ts`, lazily, so a request only evaluates the handler it hits.
+   **Adding an endpoint = a file in `api/_handlers/` + one line in `ROUTES`** —
+   a handler with no `ROUTES` line is unreachable in production, which
+   `tests/api-routes.test.ts` turns into a failing test (it also asserts every
+   `/api/x` the client fetches is routable). `scripts/dev-api-server.ts` imports
+   the SAME table, so local dev cannot diverge from production routing, and
+   `vercel.json`'s `functions` config now targets `api/[...route].ts` (its
+   `maxDuration: 60`, needed by `draft`, therefore applies to every endpoint).
 2. **Scheduler** (`scheduler/`): automatic shift-schedule generator. Postgres is the
    source of truth; the Google Sheet becomes a synced output. Spec: `scheduler/SPEC.md`
    (read it before touching scheduling logic — all rules H/R/T/P are defined there).

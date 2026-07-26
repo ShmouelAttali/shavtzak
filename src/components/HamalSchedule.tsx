@@ -1,5 +1,5 @@
 import { memo, useMemo, useState } from 'react';
-import type { HamalDay, HamalRosterEntry, HamalWindow } from '../../api/hamal';
+import type { HamalDay, HamalRosterEntry, HamalWindow } from '../../api/_handlers/hamal';
 import { useHamal, type ShiftPayload } from '../hooks/useHamal';
 import { DateRangePicker, todayIso, addDaysIso, heDate } from './DateRangePicker';
 import { SoldierSelect } from './SoldierSelect';

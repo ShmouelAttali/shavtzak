@@ -1,5 +1,5 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { getPool, DATE_RE } from './_db.js';
+import { getPool, DATE_RE } from '../_db.js';
 
 // ── מבנה יומי tab API (per-DAY shift-structure editor, admin-only) ────────────
 // Overrides the SHIFT STRUCTURE of ONE specific schedule day: add/remove/rename

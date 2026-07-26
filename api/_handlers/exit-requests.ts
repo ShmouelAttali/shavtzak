@@ -1,7 +1,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { getPool, DATE_RE } from './_db.js';
-import { normalizeName } from '../scheduler/src/text.js';
-import { DAY, dayStart, minToDate, minToIso, scheduleDayStart, toMin, type Minutes } from '../scheduler/src/time.js';
+import { getPool, DATE_RE } from '../_db.js';
+import { normalizeName } from '../../scheduler/src/text.js';
+import { DAY, dayStart, minToDate, minToIso, scheduleDayStart, toMin, type Minutes } from '../../scheduler/src/time.js';
 
 // ── Types (imported by the frontend as ../../api/exit-requests) ─────────────
 
@@ -17,7 +17,7 @@ export interface ExitRequest {
   generated: boolean;
 }
 export interface ExitRequestsResponse { requests: ExitRequest[] }
-import { FROM_TIMES, TO_TIMES } from '../src/constants/exitRequests.js';
+import { FROM_TIMES, TO_TIMES } from '../../src/constants/exitRequests.js';
 export { FROM_TIMES, TO_TIMES };
 
 // ── Time math ───────────────────────────────────────────────────────────────

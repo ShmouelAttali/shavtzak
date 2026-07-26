@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import type { AdminResponse } from '../../api/admins';
+import type { AdminResponse } from '../../api/_handlers/admins';
 
 /** Scheduler access for an email (one /api/admins lookup). isShavtzakAdmin
  *  (shavtzak_admins table) gates the scheduler tabs; isHamalMember (a soldier

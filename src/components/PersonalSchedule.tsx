@@ -4,7 +4,7 @@ import { ScheduleGrid } from './ScheduleGrid';
 import { getStationBadgeColors } from '../utils/stationColors';
 import { todayShavtzakStr } from '../hooks/useShavtzak';
 import { timeOfDayMinutes } from './Shavtzak';
-import type { ShavtzakAllData, ShavtzakData } from '../../api/shavtzak';
+import type { ShavtzakAllData, ShavtzakData } from '../../api/_handlers/shavtzak';
 
 interface Mission {
   station: string;
@@ -294,7 +294,7 @@ function MissionsTimeline({
 }: {
   soldierName: string;
   filteredDates: string[];
-  shavtzakAll: import('../../api/shavtzak').ShavtzakAllData;
+  shavtzakAll: import('../../api/_handlers/shavtzak').ShavtzakAllData;
 }) {
   const days = filteredDates
     .map(d => ({ label: d, shavtzak: shavtzakAll.byDate[schedDateToShavtzakKey(d)] ?? null }))

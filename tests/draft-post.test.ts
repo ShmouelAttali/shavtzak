@@ -1,4 +1,4 @@
-// Handler-level tests for api/draft.ts POST (generation) and the input-
+// Handler-level tests for api/_handlers/draft.ts POST (generation) and the input-
 // validation branches of both scheduler endpoints — against the local test
 // database (never Supabase).
 process.env.SCHEDULER_DATABASE_URL =
@@ -9,9 +9,9 @@ import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { freshSchema, seedSoldiers, closePool, query } from '../scheduler/tests/helpers.js';
 import { getPool } from '../api/_db.js';
-import draftHandler from '../api/draft.js';
-import fairnessHandler from '../api/fairness.js';
-import type { GenerateResponse } from '../api/draft.js';
+import draftHandler from '../api/_handlers/draft.js';
+import fairnessHandler from '../api/_handlers/fairness.js';
+import type { GenerateResponse } from '../api/_handlers/draft.js';
 
 const D = '2026-09-05';
 

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import type { HamalDay, HamalResponse, HamalWriteResponse, HamalWindow } from '../../api/hamal';
+import type { HamalDay, HamalResponse, HamalWriteResponse, HamalWindow } from '../../api/_handlers/hamal';
 
 /** One shift's picks as sent to the server (whole-day atomic write). */
 export interface ShiftPayload { start: string; end: string; soldierIds: number[] }

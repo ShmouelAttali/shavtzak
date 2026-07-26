@@ -8,7 +8,7 @@ import {
   conflictLabel, conflictNotes, findSlotConflicts, parseSlotSpan, pendingSeatKeys, spansOverlap,
 } from '../src/lib/draftConflicts';
 import { seatKey, seatsForDay } from '../src/hooks/useDraft';
-import type { DraftAssignmentMeta, DraftDay } from '../api/draft';
+import type { DraftAssignmentMeta, DraftDay } from '../api/_handlers/draft';
 
 const span = (label: string) => {
   const s = parseSlotSpan(label);

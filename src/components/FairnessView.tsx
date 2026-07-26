@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import type { ComplianceFinding, FairnessRow, SpreadStat } from '../../api/fairness';
+import type { ComplianceFinding, FairnessRow, SpreadStat } from '../../api/_handlers/fairness';
 import { useFairness } from '../hooks/useFairness';
 
 function todayIso(): string {

@@ -1,5 +1,5 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { getPool, DATE_RE } from './_db.js';
+import { getPool, DATE_RE } from '../_db.js';
 
 // ── Types (imported by the frontend as ../../api/fairness) ─────────────────
 export interface FairnessRow {
@@ -59,7 +59,7 @@ async function collectCompliance(date: string, includeDrafts: boolean): Promise<
      order by day`, [date, includeDrafts]);
   const checkedDays: string[] = rows.map((r) => r.day);
   // validateDay reads through scheduler/src/db.js (same SCHEDULER_DATABASE_URL)
-  const { validateDay } = await import('../scheduler/src/validate.js');
+  const { validateDay } = await import('../../scheduler/src/validate.js');
   // parallel — each validateDay is a single multiQuery round trip
   const perDay = await Promise.all(checkedDays.map(async (day) =>
     (await validateDay(day)).map((f): ComplianceFinding => ({ day, ...f }))));

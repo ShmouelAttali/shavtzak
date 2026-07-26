@@ -13,7 +13,7 @@ import type { AddressInfo } from 'node:net';
 import { freshSchema, seedSoldiers, closePool } from '../scheduler/tests/helpers.js';
 import { getPool } from '../api/_db.js';
 import { createDevApiServer } from '../scripts/dev-api-server.js';
-import type { ExitRequest, ExitRequestsResponse } from '../api/exit-requests.js';
+import type { ExitRequest, ExitRequestsResponse } from '../api/_handlers/exit-requests.js';
 
 const D1 = '2026-11-01';   // admin POST over HTTP
 const D2 = '2026-11-02';   // soldier POST over HTTP

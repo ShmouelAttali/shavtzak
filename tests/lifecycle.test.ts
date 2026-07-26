@@ -9,10 +9,10 @@ import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { freshSchema, seedSoldiers, soldierId, closePool, query } from '../scheduler/tests/helpers.js';
 import { getPool } from '../api/_db.js';
-import draftHandler from '../api/draft.js';
-import reportHandler from '../api/report.js';
-import publishHandler from '../api/publish.js';
-import unpublishHandler from '../api/unpublish.js';
+import draftHandler from '../api/_handlers/draft.js';
+import reportHandler from '../api/_handlers/report.js';
+import publishHandler from '../api/_handlers/publish.js';
+import unpublishHandler from '../api/_handlers/unpublish.js';
 
 function mockRes() {
   const res: any = {

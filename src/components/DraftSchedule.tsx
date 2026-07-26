@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import type { Soldier } from '../types';
-import type { DraftAssignmentMeta, DraftDay, DraftFinding } from '../../api/draft';
-import type { StationGroup } from '../../api/shavtzak';
+import type { DraftAssignmentMeta, DraftDay, DraftFinding } from '../../api/_handlers/draft';
+import type { StationGroup } from '../../api/_handlers/shavtzak';
 import { seatsForDay, useDraft } from '../hooks/useDraft';
 import { GroupsView, buildDisplayGroups, SoldierCtx, NameClickCtx, MyNameCtx, DraftMetaCtx, PendingSeatsCtx, RationaleClickCtx, SoldierInfo } from './Shavtzak';
 import { ReplaceSoldierPopup, ReplaceState } from './ReplaceSoldierPopup';

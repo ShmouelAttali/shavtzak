@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { SheetData } from '../types';
-import type { ShavtzakAllData } from '../../api/shavtzak';
+import type { ShavtzakAllData } from '../../api/_handlers/shavtzak';
 import { useExits } from '../hooks/useExits';
 import { SoldierPopup } from './SoldierPopup';
 import type { PopupState } from './SoldierPopup';

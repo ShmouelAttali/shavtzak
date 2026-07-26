@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import type { RosterResponse } from '../../api/roster';
+import type { RosterResponse } from '../../api/_handlers/roster';
 import { ROLE_COMMANDERS, QUAL_RESTRICTED, QUAL_POOL_PREFIX } from '../lib/rosterFilter';
 import type { RosterFilters as Filters } from '../lib/rosterFilter';
 

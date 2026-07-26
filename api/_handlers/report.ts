@@ -1,5 +1,5 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { getPool, DATE_RE } from './_db.js';
+import { getPool, DATE_RE } from '../_db.js';
 
 // Serves the self-contained generation report HTML stored on schedule_days
 // (written at persist time — scheduler/src/persist.ts). Read-only, officer-

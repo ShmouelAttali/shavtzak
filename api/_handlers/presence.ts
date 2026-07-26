@@ -1,10 +1,10 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { getPool, DATE_RE } from './_db.js';
+import { getPool, DATE_RE } from '../_db.js';
 import { getRoster, type RosterResponse } from './roster.js';
 import {
   PRESENT, addDays, dayRange, isFullDayKind, offeredStates, planPresenceWrite,
   presenceMatrix, canonicalKind, type UnavailRow,
-} from '../src/lib/presencePlan.js';
+} from '../../src/lib/presencePlan.js';
 
 // ── נוכחות tab API (presence editor, admin-only) ──────────────────────────────
 // As of 2026-07-26 the DB is the SOURCE OF TRUTH for presence: the sheet import

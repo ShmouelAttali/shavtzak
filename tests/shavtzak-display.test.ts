@@ -14,7 +14,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { buildDisplayGroups, buildSheetDisplayGroups, computeTodayHeadcounts } from '../src/components/Shavtzak';
-import type { StationGroup } from '../api/shavtzak';
+import type { StationGroup } from '../api/_handlers/shavtzak';
 
 const SEL_DATE = '21/07/2026';
 

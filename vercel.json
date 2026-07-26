@@ -3,6 +3,6 @@
     { "source": "/api/(.*)", "destination": "/api/$1" }
   ],
   "functions": {
-    "api/draft.ts": { "maxDuration": 60 }
+    "api/[...route].ts": { "maxDuration": 60 }
   }
 }

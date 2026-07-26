@@ -1,4 +1,4 @@
-// Handler-level tests for api/exit-requests.ts (half-day exit requests) —
+// Handler-level tests for api/_handlers/exit-requests.ts (half-day exit requests) —
 // against the local test database (never Supabase).
 process.env.SCHEDULER_DATABASE_URL =
   process.env.SCHEDULER_TEST_DATABASE_URL
@@ -8,8 +8,8 @@ import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { freshSchema, seedSoldiers, soldierId, closePool, query } from '../scheduler/tests/helpers.js';
 import { getPool } from '../api/_db.js';
-import exitRequestsHandler from '../api/exit-requests.js';
-import type { ExitRequest, ExitRequestsResponse } from '../api/exit-requests.js';
+import exitRequestsHandler from '../api/_handlers/exit-requests.js';
+import type { ExitRequest, ExitRequestsResponse } from '../api/_handlers/exit-requests.js';
 
 // far-future days, never touched by generator suites
 const D1 = '2026-10-01';   // POST happy path

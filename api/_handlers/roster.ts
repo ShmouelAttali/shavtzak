@@ -1,6 +1,6 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { getPool } from './_db.js';
-import { normalizeName } from '../scheduler/src/text.js';
+import { getPool } from '../_db.js';
+import { normalizeName } from '../../scheduler/src/text.js';
 
 // ── מצבת חיילים tab API (roster editor, admin-only) ──────────────────────────
 // The scheduler DB is the source of truth for the roster, but until now only

@@ -1,4 +1,4 @@
-// Handler-level test for api/draft.ts GET meta against the local test database
+// Handler-level test for api/_handlers/draft.ts GET meta against the local test database
 // (same shavtzak_test DB the scheduler suite uses — never Supabase).
 process.env.SCHEDULER_DATABASE_URL =
   process.env.SCHEDULER_TEST_DATABASE_URL
@@ -9,8 +9,8 @@ import assert from 'node:assert/strict';
 import { freshSchema, seedSoldiers, closePool } from '../scheduler/tests/helpers.js';
 import { generate, persist } from '../scheduler/src/generate.js';
 import { getPool } from '../api/_db.js';
-import handler from '../api/draft.js';
-import type { DraftResponse } from '../api/draft.js';
+import handler from '../api/_handlers/draft.js';
+import type { DraftResponse } from '../api/_handlers/draft.js';
 
 const D1 = '2026-09-01', D2 = '2026-09-02';
 

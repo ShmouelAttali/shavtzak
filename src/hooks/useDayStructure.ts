@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import type { DsResponse, DsShift } from '../../api/day-structure';
+import type { DsResponse, DsShift } from '../../api/_handlers/day-structure';
 
 // ── מבנה יומי draft state (EXPLICIT save — no autosave, no cross-shift validation) ──
 // The tab edits ONE schedule day's shift structure locally, then PUTs the whole

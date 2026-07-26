@@ -1,5 +1,5 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { getPool, DATE_RE } from './_db.js';
+import { getPool, DATE_RE } from '../_db.js';
 
 // ── חמל tab API (per-shift, fully MANUAL, 2026-07-24) ────────────────────────
 // חמל is manual-only (positions.is_scheduled=false) — the generator NEVER

@@ -1,5 +1,5 @@
-// Display test: per-shift חמל rows written by api/hamal.ts surface in the draft
-// tab (api/draft.ts) as a multi-time card — real shift-time labels, sorted in
+// Display test: per-shift חמל rows written by api/_handlers/hamal.ts surface in the draft
+// tab (api/_handlers/draft.ts) as a multi-time card — real shift-time labels, sorted in
 // schedule-day order (14:00 first, pre-14:00 windows are the day's tail and
 // carry "(למחרת)").
 process.env.SCHEDULER_DATABASE_URL =
@@ -10,9 +10,9 @@ import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { freshSchema, seedSoldiers, soldierId, closePool } from '../scheduler/tests/helpers.js';
 import { getPool } from '../api/_db.js';
-import hamalHandler from '../api/hamal.js';
-import draftHandler from '../api/draft.js';
-import type { DraftResponse } from '../api/draft.js';
+import hamalHandler from '../api/_handlers/hamal.js';
+import draftHandler from '../api/_handlers/draft.js';
+import type { DraftResponse } from '../api/_handlers/draft.js';
 
 const D = '2026-09-20';
 

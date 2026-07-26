@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { MutableRefObject } from 'react';
 import type { TabLeaveGuard } from '../types';
-import type { PresenceDayInput } from '../../api/presence';
+import type { PresenceDayInput } from '../../api/_handlers/presence';
 import { usePresence } from '../hooks/usePresence';
 import { filterRoster, EMPTY_FILTERS } from '../lib/rosterFilter';
 import type { RosterFilters } from '../lib/rosterFilter';

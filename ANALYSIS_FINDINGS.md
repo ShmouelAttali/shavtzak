@@ -208,8 +208,8 @@ Expected prod row counts: `position_candidates` = 8 (pool) + 7 (seat rules:
 | `db/fk-migration-2026-07-19.sql` (new) | §2.3 live delta |
 | `scheduler/SPEC.md` §9 + CLAUDE.md | document new tables; mark the name-list convention as DONE. `LOGIC.he.md` unaffected (storage detail, not an officer rule) |
 
-Unaffected: `api/draft.ts` / `api/fairness.ts` / `api/exit-requests.ts` /
-`api/admins.ts` (they consume validator output or don't touch these configs;
+Unaffected: `api/_handlers/draft.ts` / `api/_handlers/fairness.ts` / `api/_handlers/exit-requests.ts` /
+`api/_handlers/admins.ts` (they consume validator output or don't touch these configs;
 `draft.ts:91`'s `config ? 'staff_all_roles'` stays), `import/import_history.py`,
 viewer components (render finding rule-names only).
 
@@ -327,8 +327,8 @@ slot_templates 70, seat_overrides 0, chain_rules 9, config 4.
 ## 5. Performance review — no new indexes
 
 Full query-shape catalog was extracted from `load.ts`, `validate.ts`,
-`persist.ts`, `api/draft.ts`, `api/fairness.ts`, `api/exit-requests.ts`,
-`api/admins.ts`, `cli.ts`. Conclusions:
+`persist.ts`, `api/_handlers/draft.ts`, `api/_handlers/fairness.ts`, `api/_handlers/exit-requests.ts`,
+`api/_handlers/admins.ts`, `cli.ts`. Conclusions:
 
 - Existing indexes already cover the id/day-keyed shapes:
   `shift_assignments(day)`, `(soldier_id)`, the `no_double_booking` gist
@@ -341,7 +341,7 @@ Full query-shape catalog was extracted from `load.ts`, `validate.ts`,
 - Period-only `&&` scans (`load.ts:43,48,50`, `validate.ts:49,64,76`,
   `persist.ts:43`) seq-scan tables of 5–3k rows — fine. If history ever grows:
   `create index … using gist (period)` on `shift_assignments` — **not now**.
-- `api/exit-requests.ts:130-135` filters by `schedule_day_of(lower(period))`
+- `api/_handlers/exit-requests.ts:130-135` filters by `schedule_day_of(lower(period))`
   (non-sargable) — 5 rows; code-side note only.
 - [cosmetic] the `presence()` DB function is defined but never invoked from
   any TS code — keep (handy for ad-hoc SQL) or note as dormant.

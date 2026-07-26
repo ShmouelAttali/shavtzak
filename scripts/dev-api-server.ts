@@ -5,28 +5,14 @@
 // and tests must keep their pinned SCHEDULER_DATABASE_URL.
 import http from 'node:http';
 import { parse } from 'node:url';
-
-const handlers: Record<string, () => Promise<{ default: Function }>> = {
-  '/api/soldiers': () => import('../api/soldiers.js'),
-  '/api/shavtzak': () => import('../api/shavtzak.js'),
-  '/api/exits': () => import('../api/exits.js'),
-  '/api/draft': () => import('../api/draft.js'),
-  '/api/fairness': () => import('../api/fairness.js'),
-  '/api/admins': () => import('../api/admins.js'),
-  '/api/exit-requests': () => import('../api/exit-requests.js'),
-  '/api/report': () => import('../api/report.js'),
-  '/api/publish': () => import('../api/publish.js'),
-  '/api/unpublish': () => import('../api/unpublish.js'),
-  '/api/hamal': () => import('../api/hamal.js'),
-  '/api/day-structure': () => import('../api/day-structure.js'),
-  '/api/roster': () => import('../api/roster.js'),
-  '/api/presence': () => import('../api/presence.js'),
-};
+import { ROUTES, routeKey } from '../api/_routes.js';
 
 export function createDevApiServer(): http.Server {
   return http.createServer(async (req, res) => {
     const url = parse(req.url ?? '', true);
-    const load = handlers[url.pathname ?? ''];
+    // Same table + same key derivation as the deployed api/[...route].ts, so a
+    // route that works locally cannot be missing in production.
+    const load = ROUTES[routeKey(url.pathname ?? '')];
     if (!load) { res.statusCode = 404; return res.end('not found'); }
     const chunks: Buffer[] = [];
     for await (const c of req) chunks.push(c as Buffer);

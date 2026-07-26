@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import type { FairnessResponse } from '../../api/fairness';
+import type { FairnessResponse } from '../../api/_handlers/fairness';
 
 /**
  * Per-soldier fairness counters for the 7-day window ending at `date`.
