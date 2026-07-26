@@ -115,7 +115,9 @@ export async function persist(res: GenerateResult, opts: PersistOptions = {}): P
   // validateAndStore) so the validation row and the report ride the same
   // statement — validateAndStore keeps its own update for the `cli validate`
   // path, which has no report to store.
-  const findings = await validateDay(day);
+  // res.validateRefs = the day-independent rows the generator's load already
+  // fetched (undefined for a hand-built result — validateDay reads them itself)
+  const findings = await validateDay(day, res.validateRefs);
   // The self-contained generation report, so the draft UI can re-open it
   // (GET /api/report). report.ts builders are pure (no fs); best-effort — a
   // report-build hiccup must never fail the generation, so a throw here only
