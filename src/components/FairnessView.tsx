@@ -215,8 +215,12 @@ function PositionBalanceCard({ rows }: { rows: FairnessRow[] }) {
 
 export function FairnessView() {
   const [date, setDate] = useState(todayIso());
+  // Default OFF: the baseline picture is the real, already-scheduled (published)
+  // work. Turning it on factors drafts in, a day's draft superseding its
+  // published rows so nothing is counted twice.
+  const [includeDrafts, setIncludeDrafts] = useState(false);
   const windowEnd = sundayEnd(date);
-  const { data, loading, error } = useFairness(windowEnd);
+  const { data, loading, error } = useFairness(windowEnd, includeDrafts);
   const [platoons, setPlatoons] = useState<Set<string>>(new Set());
 
   const allPlatoons = useMemo(
@@ -252,6 +256,14 @@ export function FairnessView() {
         <span className="rounded-lg bg-slate-100 px-3 py-2 text-sm font-semibold text-slate-700" dir="rtl">
           חלון נבדק: {windowLabel(windowEnd)}
         </span>
+        <label
+          className="flex items-center gap-2 rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 shadow-sm cursor-pointer select-none"
+          title="כברירת מחדל נספר רק מה שכבר פורסם. בהפעלה נכללות גם הטיוטות — ביום שיש לו טיוטה, הטיוטה מחליפה את מה שפורסם (ואינה נספרת בנוסף)."
+        >
+          <input type="checkbox" checked={includeDrafts}
+            onChange={(e) => setIncludeDrafts(e.target.checked)} />
+          כלול טיוטות
+        </label>
         {allPlatoons.map((p) => (
           <label key={p} className="flex items-center gap-1 text-sm text-gray-600 select-none">
             <input type="checkbox" checked={!platoons.size || platoons.has(p)}

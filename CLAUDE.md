@@ -107,7 +107,16 @@ and live against the shared Supabase project:
   חריגות card) and הוגנות (Sunday-anchored week,
   compliance dashboard: one exceptions-only card per SPEC rule fed by running
   the validator over the window's days, plus fairness-spread / position-balance
-  cards → `api/fairness.ts`). Tab visibility also
+  cards → `api/fairness.ts`). **הוגנות draft scope** (owner 2026-07-26): the tab
+  counts the already-scheduled **published** work by default; a `כלול טיוטות`
+  checkbox (`?drafts=1`) factors drafts in, where a day holding a draft
+  contributes its draft INSTEAD of its published rows — never both, so nothing
+  is double-counted. `locked` rows are human truth and count in either mode.
+  Implemented as `soldier_fairness(as_of, include_drafts boolean default true)`
+  (delta `db/fairness-draft-scope-2026-07-26.sql`); the default keeps `load.ts`
+  and the generator on the draft-inclusive behaviour they need, and the old
+  1-arg signature is DROPPED — leaving both makes a 1-arg call ambiguous
+  ("function soldier_fairness(date) is not unique"). Tab visibility also
   granted by the `shavtzak_admins` DB table (`api/admins.ts`). Plus a חמל tab
   (per-shift manual staffing, 10:00-cycle tiling), a **מבנה יומי** tab (admin,
   per-DAY shift-structure editor), a **מצבת חיילים** tab (admin, roster editor)

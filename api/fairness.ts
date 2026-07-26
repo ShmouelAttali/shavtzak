@@ -35,6 +35,12 @@ export interface FairnessResponse {
   compliance: ComplianceFinding[];
   /** window days that had assignments and were validated */
   checkedDays: string[];
+  /**
+   * false (default) = counters cover the already-scheduled PUBLISHED work only;
+   * true = drafts are factored in, a day's draft superseding its published rows.
+   * Echoed back so the UI can label which picture it is showing.
+   */
+  includeDrafts: boolean;
 }
 
 /**
@@ -42,10 +48,15 @@ export interface FairnessResponse {
  * Streak rules (consecutive_nights / static_streak) restate the same run on
  * every day it grows — keep only the worst (then latest) finding per soldier.
  */
-async function collectCompliance(date: string): Promise<{ compliance: ComplianceFinding[]; checkedDays: string[] }> {
+async function collectCompliance(date: string, includeDrafts: boolean): Promise<{ compliance: ComplianceFinding[]; checkedDays: string[] }> {
+  // With drafts excluded, a day whose only rows are drafts is not real work yet
+  // — it must not contribute findings. (validateDay always judges the day as it
+  // stands in the DB, so the scope is applied by choosing WHICH days to check.)
   const { rows } = await getPool().query(
     `select distinct day::text from shift_assignments
-     where day >= $1::date - 7 and day < $1::date order by day`, [date]);
+     where day >= $1::date - 7 and day < $1::date
+       and ($2 or source not in ('auto','chain') or locked)
+     order by day`, [date, includeDrafts]);
   const checkedDays: string[] = rows.map((r) => r.day);
   // validateDay reads through scheduler/src/db.js (same SCHEDULER_DATABASE_URL)
   const { validateDay } = await import('../scheduler/src/validate.js');
@@ -79,21 +90,24 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== 'GET') return res.status(405).json({ error: 'method not allowed' });
   const date = String(req.query.date ?? '');
   if (!DATE_RE.test(date)) return res.status(400).json({ error: 'date required (YYYY-MM-DD)' });
+  // default = published only: the tab's baseline is real, already-scheduled work
+  const includeDrafts = String(req.query.drafts ?? '') === '1';
 
   try {
-    const compliancePromise = collectCompliance(date);
+    const compliancePromise = collectCompliance(date, includeDrafts);
     const { rows } = await getPool().query(
       `select f.soldier_id, s.full_name, s.platoon, coalesce(s.role,'') role,
               f.night_count_7d, f.night_count_total, f.mission_hours_7d,
               f.weighted_hours_7d, f.readiness_hours_7d, f.tracker_hours_total,
               f.position_counts
-       from soldier_fairness($1) f
+       from soldier_fairness($1, $2) f
        join soldiers s on s.id = f.soldier_id
        where s.is_schedulable
-       order by s.full_name collate "C"`, [date]);
+       order by s.full_name collate "C"`, [date, includeDrafts]);
 
     const out: FairnessResponse = {
       date,
+      includeDrafts,
       rows: rows.map((r) => ({
         soldierId: Number(r.soldier_id), name: r.full_name, platoon: r.platoon, role: r.role,
         nightCount7d: Number(r.night_count_7d),

@@ -399,7 +399,11 @@ select * from (
 where s.seats > 0;
 
 -- Fairness counters as of a given day (rolling windows end at day_start(as_of)).
-create or replace function soldier_fairness(as_of date)
+-- include_drafts (owner 2026-07-26, הוגנות tab toggle): true = a day's DRAFT
+-- rows supersede its published rows (what the generator needs while building a
+-- week); false = count only real published work. Default true keeps every
+-- existing caller (load.ts, tests) on the old behaviour.
+create or replace function soldier_fairness(as_of date, include_drafts boolean default true)
 returns table (
   soldier_id          bigint,
   night_count_7d      bigint,
@@ -428,6 +432,18 @@ language sql stable as $$
     from shift_assignments sa
     join positions p on p.id = sa.position_id
     where p.mission_class <> 'rest'
+      -- draft scope: `locked` rows are human truth and always count (the
+      -- generator never deletes them either). Otherwise include_drafts decides
+      -- per DAY — a day holding drafts contributes its drafts instead of its
+      -- published rows, never both, so nothing is double-counted.
+      and (sa.locked
+           or case when include_drafts
+                     then sa.source in ('auto','chain')
+                          or not exists (select 1 from shift_assignments d
+                                          where d.day = sa.day
+                                            and d.source in ('auto','chain'))
+                     else sa.source not in ('auto','chain')
+                end)
   )
   select s.id,
     -- night_exempt positions (24h duties like תורנים/קצין מוצב — the soldier

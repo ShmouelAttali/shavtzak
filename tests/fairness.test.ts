@@ -61,8 +61,11 @@ after(async () => {
   await getPool().end();      // api pool
 });
 
+// D1..D3 are GENERATED days (drafts), so the tests below that mean "the whole
+// generated picture" pass drafts=1 explicitly — the handler's default is
+// published-only since 2026-07-26 (see the draft-scope tests at the bottom).
 test('GET returns compliance findings over the checked window days', async () => {
-  const res = await get({ date: '2026-09-04' });
+  const res = await get({ date: '2026-09-04', drafts: '1' });
   assert.equal(res.statusCode, 200);
   const body = res.body as FairnessResponse;
   assert.ok(body.rows.length > 0, 'fairness rows exist');
@@ -72,7 +75,7 @@ test('GET returns compliance findings over the checked window days', async () =>
 });
 
 test('consecutive_nights findings are deduped to one per soldier', async () => {
-  const res = await get({ date: '2026-09-04' });
+  const res = await get({ date: '2026-09-04', drafts: '1' });
   const body = res.body as FairnessResponse;
   const sid = await soldierId('חייל 51');
   const nights = body.compliance.filter((f) => f.rule === 'consecutive_nights' && f.soldierId === sid);
@@ -88,7 +91,7 @@ test('spread stats exclude soldiers with no service in the window', async () => 
     insert into soldiers (personal_number, full_name, platoon, is_schedulable)
     values ('9999999', 'חייל בבית', '1', true)
     on conflict (personal_number) do nothing`);
-  const res = await get({ date: '2026-09-04' });
+  const res = await get({ date: '2026-09-04', drafts: '1' });
   const body = res.body as FairnessResponse;
   const idle = body.rows.find((r) => r.name === 'חייל בבית');
   assert.ok(idle, 'idle soldier row is still returned');
@@ -102,4 +105,35 @@ test('empty window returns no checked days and no findings', async () => {
   const body = res.body as FairnessResponse;
   assert.deepEqual(body.checkedDays, []);
   assert.deepEqual(body.compliance, []);
+});
+
+// ── draft scope (owner 2026-07-26) ─────────────────────────────────────────
+// Default = the already-scheduled PUBLISHED work; drafts=1 factors the drafts
+// in, a day's draft superseding its published rows.
+
+test('default is published-only: generated draft hours are not counted', async () => {
+  const withDrafts = (await get({ date: '2026-09-04', drafts: '1' })).body as FairnessResponse;
+  const published = (await get({ date: '2026-09-04' })).body as FairnessResponse;
+  assert.equal(withDrafts.includeDrafts, true);
+  assert.equal(published.includeDrafts, false);
+
+  const sum = (b: FairnessResponse) => b.rows.reduce((a, r) => a + r.weightedHours7d, 0);
+  assert.ok(sum(withDrafts) > sum(published),
+    `drafts must add load: drafts=${sum(withDrafts)} published=${sum(published)}`);
+
+  // חייל 01 is a plain generated-only soldier — zero once drafts are excluded
+  const draftOnly = published.rows.find((r) => r.name === 'חייל 01');
+  assert.ok(draftOnly, 'the soldier is still listed');
+  assert.equal(draftOnly!.weightedHours7d, 0, 'auto rows must not count as published');
+  assert.ok((withDrafts.rows.find((r) => r.name === 'חייל 01')?.weightedHours7d ?? 0) > 0,
+    'the same soldier has load once drafts are included');
+});
+
+test('published-only still counts manual rows', async () => {
+  const body = (await get({ date: '2026-09-04' })).body as FairnessResponse;
+  // חייל 51 has 3 manual night rows; they are real work in either mode
+  const manual = body.rows.find((r) => r.name === 'חייל 51');
+  assert.ok(manual, 'manual-row soldier is listed');
+  assert.ok(manual!.weightedHours7d > 0, 'manual rows are published work');
+  assert.ok(body.checkedDays.includes(D2), 'a day with manual rows is still checked');
 });
