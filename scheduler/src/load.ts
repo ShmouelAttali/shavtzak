@@ -20,11 +20,22 @@ export async function loadContext(day: string): Promise<Context> {
   const yesterday = addDays(day, -1);
   const tomorrow = addDays(day, 1);
 
+  // The INCOMING week's מגן-commander decision is CONSUMED only when tomorrow
+  // is a Sunday (the Sunday-08:00 crew changeover falls inside today's —
+  // Saturday's — schedule day, and the arriving crew halves follow the incoming
+  // week's commander + מחלקה). Six days out of seven the statement was issued
+  // and thrown away, so it is appended conditionally and indexed off the end.
+  const wantNextMagen = isSunday(tomorrow);
+
   // ONE round trip for everything — per-query round trips (and per-connection
   // TLS handshakes) dominate wall-clock over the WAN pooler. Day literals are
   // regex-validated above; no user input reaches this SQL.
   const [, posRows, candRows, soldierRows, allowedRows, magenRows, fairRows, slotRows, existRows, ydayRows,
-    blockRows, exitRows, lockShiftRows, lockDayRows, chainRows, configRows, nextMagenRows] = await multiQuery([
+    blockRows, exitRows, lockShiftRows, lockDayRows, chainRows, configRows, nextMagenRows = []] = await multiQuery([
+    // ORDERING CONSTRAINT: this insert MUST stay ahead of the `day_slots` read
+    // below — day_slots is a VIEW over schedule_days, and multiQuery sends the
+    // whole batch as one simple-protocol string (= one implicit transaction),
+    // so a day with no schedule_days row yet would read zero slots.
     `insert into schedule_days (day) values ('${day}') on conflict do nothing`,
     `select id, name, mission_class, is_scheduled, config from positions`,
     // id-based closed lists (position_candidates); the name is joined for
@@ -81,14 +92,11 @@ export async function loadContext(day: string): Promise<Context> {
      where day = '${day}' and (locked or source = 'manual')`,
     `select * from chain_rules order by id`,
     `select key, value from config`,
-    // the INCOMING week's מגן-commander decision (effective for tomorrow) —
-    // used only when tomorrow is a Sunday: the Sunday-08:00 crew changeover
-    // falls inside today's (Saturday's) schedule day, and the arriving crew
-    // halves follow the incoming week's commander + מחלקה
-    `select h.soldier_id, s.full_name
+    // ...and LAST, only on a Saturday: the incoming week's מגן commander
+    ...(wantNextMagen ? [`select h.soldier_id, s.full_name
      from magen_commander_history h join soldiers s on s.id = h.soldier_id
      where h.valid_from <= '${tomorrow}'
-     order by h.valid_from desc limit 1`,
+     order by h.valid_from desc limit 1`] : []),
   ]);
 
   const positions = new Map<number, Position>();
@@ -298,6 +306,7 @@ export async function loadContext(day: string): Promise<Context> {
 
   const config: Record<string, any> = {};
   for (const c of configRows) config[c.key] = c.value;
+  // NB: `config` stays local — Context carries only the resolved tunables.
 
   return {
     day, soldiers, positions, positionByName, slots, fairness, existing, recentSubCount,
@@ -306,10 +315,10 @@ export async function loadContext(day: string): Promise<Context> {
     magenCommander: magenRows[0]
       ? { soldierId: magenRows[0].soldier_id, name: magenRows[0].full_name }
       : undefined,
-    // incoming-week מגן commander (used only when tomorrow is a Sunday)
-    nextMagenCommander: isSunday(tomorrow) && nextMagenRows[0]
+    // incoming-week מגן commander (queried only when tomorrow is a Sunday)
+    nextMagenCommander: wantNextMagen && nextMagenRows[0]
       ? { soldierId: nextMagenRows[0].soldier_id, name: nextMagenRows[0].full_name }
       : undefined,
-    config, tunables: loadTunables(config),
+    tunables: loadTunables(config),
   };
 }
