@@ -30,8 +30,20 @@ export const ROUTES: Record<string, () => Promise<{ default: ApiHandler }>> = {
   'presence': () => import('./_handlers/presence.js'),
 };
 
-/** '/api/draft' | 'draft' | ['draft'] → 'draft'; anything unroutable → ''. */
+/**
+ * '/api/draft?day=x' | '/api/draft' | 'draft' | ['draft'] → 'draft';
+ * anything unroutable → ''.
+ *
+ * Takes the request URL as readily as the resolved route param, because the
+ * param is not something to trust: an `/api/(.*)` → `/api/$1` rewrite sat in
+ * vercel.json, and rewrites use path-to-regexp (`:name`), where `$1` is a
+ * literal, not a backreference. It never fired while every endpoint was its own
+ * file (rewrites only run when nothing matched the filesystem), and the day the
+ * catch-all took over it mangled every path into an empty route param — a
+ * 404 on all 14 endpoints in production. The rewrite is gone; deriving the key
+ * from req.url keeps the routing from depending on that plumbing at all.
+ */
 export function routeKey(path: string | string[] | undefined): string {
   const raw = Array.isArray(path) ? path.join('/') : (path ?? '');
-  return raw.replace(/^\/?(api\/)?/, '').replace(/\/+$/, '').split('?')[0];
+  return raw.split('?')[0].replace(/^\/?(api\/)?/, '').replace(/\/+$/, '');
 }

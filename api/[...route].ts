@@ -4,7 +4,9 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { ROUTES, routeKey } from './_routes.js';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-  const key = routeKey(req.query.route as string | string[] | undefined);
+  // req.url first: it is the path as received, so routing survives whatever
+  // the platform does (or fails to do) with the [...route] param — see routeKey.
+  const key = routeKey(req.url) || routeKey(req.query.route as string | string[] | undefined);
   const load = ROUTES[key];
   if (!load) { res.status(404).json({ error: `unknown endpoint: /api/${key}` }); return; }
   return (await load()).default(req, res);

@@ -1,7 +1,4 @@
 {
-  "rewrites": [
-    { "source": "/api/(.*)", "destination": "/api/$1" }
-  ],
   "functions": {
     "api/[...route].ts": { "maxDuration": 60 }
   }
