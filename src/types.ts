@@ -19,7 +19,7 @@ export interface SheetData {
   allowedEmails: string[]; // from the 'email' column in the sheet
 }
 
-export type TabId = 'personal' | 'unit' | 'company' | 'shavtzak' | 'draft' | 'fairness' | 'exitreq' | 'exitadmin' | 'hamal' | 'daystructure' | 'roster' | 'presence';
+export type TabId = 'personal' | 'unit' | 'company' | 'shavtzak' | 'draft' | 'fairness' | 'exitadmin' | 'hamal' | 'daystructure' | 'roster' | 'presence';
 
 // A tab may register a leave guard so App can prompt to save/discard unsaved
 // edits before switching away or reloading (the מבנה יומי tab uses this).
