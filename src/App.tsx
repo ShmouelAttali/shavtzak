@@ -28,7 +28,7 @@ const TABS: { id: TabId; label: string; restricted?: 'company' | 'scheduler' | '
   { id: 'unit',      label: 'לוז יציאות מחלקתי' },
   { id: 'company',   label: 'סיכום פלוגתי', restricted: 'company' },
   { id: 'shavtzak',  label: 'שבצק' },
-  { id: 'exitreq',   label: 'בקש יציאה קצרה' },
+  { id: 'exitreq',   label: 'יציאה קצרה' },
   { id: 'draft',     label: 'צור שבצק', restricted: 'scheduler' },
   { id: 'fairness',  label: 'הוגנות', restricted: 'scheduler' },
   { id: 'daystructure', label: 'מבנה יומי', restricted: 'scheduler' },
@@ -176,6 +176,15 @@ function AppContent({ data }: { data: SheetData }) {
               <span className={shavtzakLoading ? 'animate-spin inline-block' : ''}>↺</span>
               טען מחדש
             </button>
+            <a
+              href="https://s25qjhg6wm.zite.so"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="rounded-lg bg-blue-500 hover:bg-blue-400 px-3 py-1.5 text-sm font-semibold text-white transition-colors whitespace-nowrap"
+              dir="rtl"
+            >
+              הגש בקשה ליציאה
+            </a>
             <UserButton afterSignOutUrl="/" />
           </div>
         </div>
