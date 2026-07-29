@@ -10,7 +10,6 @@ import { CompanySummary } from './components/CompanySummary';
 import { Shavtzak } from './components/Shavtzak';
 import { DraftSchedule } from './components/DraftSchedule';
 import { FairnessView } from './components/FairnessView';
-import { ExitRequests } from './components/ExitRequests';
 import { AdminExits } from './components/AdminExits';
 import { HamalSchedule } from './components/HamalSchedule';
 import { DayStructure } from './components/DayStructure';
@@ -28,7 +27,6 @@ const TABS: { id: TabId; label: string; restricted?: 'company' | 'scheduler' | '
   { id: 'unit',      label: 'לוז יציאות מחלקתי' },
   { id: 'company',   label: 'סיכום פלוגתי', restricted: 'company' },
   { id: 'shavtzak',  label: 'שבצק' },
-  { id: 'exitreq',   label: 'יציאה קצרה' },
   { id: 'draft',     label: 'צור שבצק', restricted: 'scheduler' },
   { id: 'fairness',  label: 'הוגנות', restricted: 'scheduler' },
   { id: 'daystructure', label: 'מבנה יומי', restricted: 'scheduler' },
@@ -233,7 +231,6 @@ function AppContent({ data }: { data: SheetData }) {
           {activeTab === 'draft' && <DraftSchedule soldiers={data.soldiers} mySoldierName={mySoldierName} email={myEmail} />}
           {activeTab === 'fairness' && <FairnessView />}
           {activeTab === 'daystructure' && <DayStructure guardRef={tabLeaveGuardRef} />}
-          {activeTab === 'exitreq' && <ExitRequests soldierName={mySoldierName} email={myEmail} />}
           {activeTab === 'exitadmin' && <AdminExits soldiers={data.soldiers} email={myEmail} />}
           {activeTab === 'roster' && <Roster guardRef={tabLeaveGuardRef} />}
           {activeTab === 'presence' && <Presence guardRef={tabLeaveGuardRef} />}
