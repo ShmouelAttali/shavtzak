@@ -46,26 +46,35 @@ const UNIT_COLOR: Record<string, string> = {
     'חמ"ל': 'text-blue-500',
 };
 
+// Marks a name as the slot's commander. Only the print-only sub-type merge
+// (mergeCommanderSubType) ever appends it.
+export const CMD_TAG = ' (מפקד)';
+
 function SoldierName({name, time}: { name: string; time?: string }) {
+    // Strip the commander tag before anything reads the name: the roster
+    // lookup, the "me" highlight, the popup and the draft-meta keys are all
+    // keyed by the exact full name from the sheet.
+    const tagged = name.endsWith(CMD_TAG);
+    const base = tagged ? name.slice(0, -CMD_TAG.length) : name;
     const lookup = useContext(SoldierCtx);
     const onCLick = useContext(NameClickCtx);
     const myName = useContext(MyNameCtx);
     const draftMeta = useContext(DraftMetaCtx);
     const onRationale = useContext(RationaleClickCtx);
-    const pending = useContext(PendingSeatsCtx).has(`${name}|${time ?? ''}`);
+    const pending = useContext(PendingSeatsCtx).has(`${base}|${time ?? ''}`);
     // draft API pads under-filled slots with this marker — render as a red badge
-    if (name === 'לא מאויש') {
+    if (base === 'לא מאויש') {
         return (
             <span className="text-sm whitespace-nowrap leading-snug select-none font-bold text-red-600 bg-red-50 ring-1 ring-red-300 rounded px-1.5 py-0.5">
                 ⚠ לא מאויש
             </span>
         );
     }
-    const info = lookup.get(name);
+    const info = lookup.get(base);
     const bold = info ? BOLD_ROLES.has(info.role) : false;
     const color = info ? (UNIT_COLOR[info.unit] ?? 'text-gray-800') : 'text-gray-800';
-    const isMe = myName !== '' && name === myName;
-    const meta = draftMeta && time !== undefined ? draftMeta[`${name}|${time}`] : undefined;
+    const isMe = myName !== '' && base === myName;
+    const meta = draftMeta && time !== undefined ? draftMeta[`${base}|${time}`] : undefined;
     const warn = meta ? meta.violations.length > 0 || meta.rationale.some(isCaveat) : false;
     if (pending) {
         return (
@@ -73,21 +82,22 @@ function SoldierName({name, time}: { name: string; time?: string }) {
                 title="מתבצעת החלפה בשיבוץ זה"
                 className={`text-sm whitespace-nowrap leading-snug select-none opacity-50 cursor-wait ${color} ${bold ? 'font-bold' : 'font-medium'}`}
             >
-                <span className="animate-spin inline-block ml-0.5 text-blue-500">↺</span>{name}
+                <span className="animate-spin inline-block ml-0.5 text-blue-500">↺</span>{base}
             </span>
         );
     }
     return (
         <span
-            onClick={() => onCLick(name, info, time)}
+            onClick={() => onCLick(base, info, time)}
             className={`text-sm whitespace-nowrap leading-snug select-none cursor-pointer active:opacity-70 ${isMe ? `font-bold ${color} bg-yellow-200 ring-1 ring-yellow-400 rounded px-1.5 py-0.5` : `${color} ${bold ? 'font-bold' : 'font-medium'}`}`}
         >
-      {name}
+      {base}
+            {tagged && <span className="font-normal opacity-60"> (מפקד)</span>}
             {meta && (
                 <button
                     onClick={e => {
                         e.stopPropagation();
-                        onRationale(name, time!, meta);
+                        onRationale(base, time!, meta);
                     }}
                     title="למה שובץ?"
                     className={`mr-0.5 align-super text-[10px] leading-none font-bold ${warn ? 'text-orange-500' : 'text-blue-500'}`}
@@ -122,6 +132,26 @@ function formatLikeTemplate(template: string, d: Date): string {
 }
 
 const shortDate = (d: Date) => `${pad2(d.getDate())}/${pad2(d.getMonth() + 1)}`;
+
+// ── Print titles ───────────────────────────────────────────────────────────
+// Same day letters as Presence.tsx.
+const HE_DOW = ['א', 'ב', 'ג', 'ד', 'ה', 'ו', 'ש'];
+
+// The printed sheet's own heading — the interactive date picker is
+// `print:hidden`, so this is the only thing identifying the day on paper.
+export function printDayTitle(date: string): string {
+    if (!date) return '';
+    const d = parseAnyDate(date);
+    if (Number.isNaN(d.getTime())) return date;
+    return `יום ${HE_DOW[d.getDay()]}׳ · ${date}`;
+}
+
+// Swapped into document.title around window.print(): it becomes the browser's
+// own print-header line and the default "Save as PDF" filename, where a slash
+// would be illegal.
+export function printDocTitle(date: string): string {
+    return `שבצק ${date.replace(/\//g, '-')}`.trim();
+}
 
 // Shifts a date string by `deltaDays` calendar days, same format in and
 // out — used to look up the adjacent schedule day's record when merging in
@@ -256,6 +286,31 @@ function allUniqueSlots(subTypes: DisplaySubType[]): DisplaySlot[] {
         if (!map.has(key)) map.set(key, t);
     }
     return Array.from(map.values()).sort((a, b) => a.ms - b.ms);
+}
+
+// PRINT ONLY. A group like כרמל חטיבה arrives as two sub-types — "מפקד כרמל
+// חטיבה" and "כרמל חטיבה" — which renders as two columns, one of them holding a
+// single name per row. On paper that is wasted width, so fold the commander into
+// the other column as its first entry, tagged with CMD_TAG.
+//
+// Returns null unless the sub-types really are that exact pair (a "מפקד X"
+// alongside a plain "X"), so every other group prints exactly as it appears.
+// The screen keeps the two-column form — GroupCard renders both and lets CSS
+// choose.
+export function mergeCommanderSubType(subTypes: DisplaySubType[]): DisplaySubType[] | null {
+    if (subTypes.length !== 2) return null;
+    const cmd = subTypes.find(s => s.sug.startsWith('מפקד '));
+    const rest = subTypes.find(s => s !== cmd);
+    if (!cmd || !rest) return null;
+    if (cmd.sug.slice('מפקד '.length).trim() !== rest.sug.trim()) return null;
+
+    const key = (t: DisplaySlot) => `${t.gray ? 1 : 0}:${t.time}`;
+    const times = allUniqueSlots([cmd, rest]).map(slot => {
+        const at = (s: DisplaySubType) => s.times.find(t => key(t) === key(slot))?.soldiers ?? [];
+        // commander first, then the rest of the slot
+        return {...slot, soldiers: [...at(cmd).map(n => n + CMD_TAG), ...at(rest)]};
+    });
+    return [{sug: rest.sug, times}];
 }
 
 function isYomiOnly(subTypes: DisplaySubType[]): boolean {
@@ -800,10 +855,28 @@ function GroupCard({group}: { group: DisplayGroup }) {
     const multiType = group.subTypes.length > 1;
     const yomiOnly = isYomiOnly(group.subTypes);
     const sparse = multiType && !yomiOnly && isSparseMultiType(group.subTypes);
+    const merged = multiType && !yomiOnly && !sparse ? mergeCommanderSubType(group.subTypes) : null;
 
     return (
-        <div className={`rounded-xl border-2 overflow-hidden ${c.border}`}>
-            <div className={`px-4 py-2.5 font-bold text-base flex items-center justify-between ${c.header}`}>
+        // print: `overflow-visible` stops overflow-hidden from clipping a table
+        // wider than the 1062px A4-landscape page. Page breaks are tier-aware —
+        // a short card is kept whole, but forbidding a break inside a tall
+        // `wide` card just pushes the whole thing to the next page and leaves
+        // most of a sheet blank (that alone took a 9-card day from 3 to 6
+        // pages). A wide card splits instead; its inner <table> has a <thead>,
+        // which the browser repeats on the continuation page.
+        // In print every card is content-width and packs side by side (see
+        // .print-flow in index.css). break-inside-avoid on all of them, per the
+        // owner: a position is read as one block, so it must never be split
+        // across a page — better to leave a gap and start it on the next sheet.
+        <div className={`rounded-xl border-2 overflow-hidden print:overflow-visible print-tight print:break-inside-avoid ${c.border}`}>
+            {/* print:break-after-avoid — never strand the colored group header
+                alone at the foot of a page with its table overleaf. */}
+            {/* gap-3: in print the card is content-width, so justify-between has
+                no slack left and the name would touch the count ("התקפי8 חיילים").
+                print:break-after-avoid — never strand the colored group header
+                alone at the foot of a page with its table overleaf. */}
+            <div className={`px-4 py-2.5 font-bold text-base flex items-center justify-between gap-3 print:break-after-avoid ${c.header}`}>
                 <span>{group.name}</span>
                 <span className="font-normal opacity-80 text-sm">{totalSoldiers} חיילים</span>
             </div>
@@ -812,8 +885,23 @@ function GroupCard({group}: { group: DisplayGroup }) {
             ) : sparse ? (
                 <MissionCards subTypes={group.subTypes} colHeader={c.colHeader}/>
             ) : multiType ? (
-                <MultiTypeTable subTypes={group.subTypes} bg={c.bg} rowAlt={c.rowAlt}
-                                 colHeader={c.colHeader}/>
+                // A "מפקד X" + "X" pair collapses to one column on paper only;
+                // both forms are rendered and CSS picks per medium.
+                merged ? (
+                    <>
+                        <div className="print:hidden">
+                            <MultiTypeTable subTypes={group.subTypes} bg={c.bg} rowAlt={c.rowAlt}
+                                             colHeader={c.colHeader}/>
+                        </div>
+                        <div className="hidden print:block">
+                            <MultiTypeTable subTypes={merged} bg={c.bg} rowAlt={c.rowAlt}
+                                             colHeader={c.colHeader}/>
+                        </div>
+                    </>
+                ) : (
+                    <MultiTypeTable subTypes={group.subTypes} bg={c.bg} rowAlt={c.rowAlt}
+                                     colHeader={c.colHeader}/>
+                )
             ) : (
                 <TransposedTable sub={group.subTypes[0]} bg={c.bg} rowAlt={c.rowAlt}
                                  colHeader={c.colHeader} groupName={group.name}/>
@@ -829,7 +917,8 @@ export function GroupsView({groups}: { groups: DisplayGroup[] }) {
     const wideGroups = groups.filter(g => g.tier === 'wide');
 
     return (
-        <div className="space-y-3">
+        // print-flow: multi-column packing on paper only (see index.css).
+        <div className="space-y-3 print-flow">
             {smallGroups.length > 0 && (
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 items-start">
                     {smallGroups.map(g => <GroupCard key={g.name} group={g}/>)}
@@ -940,13 +1029,28 @@ export function Shavtzak({soldiers, shavtzakAll: data, loading, error, mySoldier
         if (sorted[0]) setSelectedDate(sorted[0]);
     }
 
+    // Native print → the dialog's "Save as PDF". The layout is all CSS
+    // (@media print in index.css + print: classes here), so this only has to
+    // give the browser a sensible title for its header line and PDF filename.
+    function handlePrint() {
+        const prev = document.title;
+        const restore = () => {
+            document.title = prev;
+            window.removeEventListener('afterprint', restore);
+        };
+        document.title = printDocTitle(selectedDate);
+        window.addEventListener('afterprint', restore);
+        window.print();
+        restore(); // afterprint is not reliable outside Chrome
+    }
+
     return (
         <SoldierCtx.Provider value={lookup}>
             <NameClickCtx.Provider value={handleNameClick}>
                 <MyNameCtx.Provider value={mySoldierName}>
                     <div className="space-y-3">
                         {/* Header bar */}
-                        <div className="flex items-center gap-2 flex-wrap" dir="ltr">
+                        <div className="flex items-center gap-2 flex-wrap print:hidden" dir="ltr">
                             <button
                                 onClick={() => canPrev && setSelectedDate(data.dates[idx - 1])}
                                 disabled={!canPrev}
@@ -980,6 +1084,17 @@ export function Shavtzak({soldiers, shavtzakAll: data, loading, error, mySoldier
             {combatCount} חיילים ללא חפק וחמל
           </span>
 
+                            <button
+                                onClick={handlePrint}
+                                disabled={!dayData}
+                                dir="rtl"
+                                title="הדפס / שמור כ-PDF"
+                                className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-40 flex items-center gap-1.5"
+                            >
+                                <span>🖨</span>
+                                הדפס
+                            </button>
+
                             {loading && (
                                 <span className="ml-auto text-sm text-gray-400 flex items-center gap-1.5">
               <span className="animate-spin inline-block">↺</span>
@@ -988,9 +1103,37 @@ export function Shavtzak({soldiers, shavtzakAll: data, loading, error, mySoldier
                             )}
                         </div>
 
-                        {/* Day content */}
+                        {/* Day content.
+                            The table wrapper exists only for print: a <thead>
+                            is the one structure browsers repeat on every printed
+                            page, so the date heading follows the schedule onto
+                            page 2. On screen every part is forced back to
+                            `block`, leaving the layout exactly as it was. */}
                         {dayData ? (
-                            <GroupsView groups={displayGroups}/>
+                            <table className="w-full block print:table print-page">
+                                <thead className="hidden print:table-header-group">
+                                <tr>
+                                    <th className="p-0 pb-2 font-normal">
+                                        <div className="flex items-baseline gap-3 border-b-2 border-slate-300 pb-1.5">
+                                            <span className="text-lg font-bold text-slate-900">שבצק</span>
+                                            <span className="text-base font-semibold text-slate-700">
+                                                {printDayTitle(selectedDate)}
+                                            </span>
+                                            <span className="ms-auto text-sm font-semibold text-slate-600">
+                                                {totalDistinct} חיילים · {combatCount} ללא חפק וחמל
+                                            </span>
+                                        </div>
+                                    </th>
+                                </tr>
+                                </thead>
+                                <tbody className="block print:table-row-group">
+                                <tr className="block print:table-row">
+                                    <td className="block p-0 print:table-cell">
+                                        <GroupsView groups={displayGroups}/>
+                                    </td>
+                                </tr>
+                                </tbody>
+                            </table>
                         ) : (
                             <div
                                 className="rounded-xl border-2 border-dashed border-gray-200 py-16 text-center text-gray-400">

@@ -75,30 +75,113 @@ Notes:
 - The copy holds real cookies. It lives outside the repo
   (`~/.claude-chrome/shavtzak`) and must stay out of git and out of any notes.
 
-## 3. Drive it over CDP
+## 3. Drive it over CDP — raw, NOT Playwright
 
-Playwright lives in the **repo's** node_modules — import by absolute path when
-the script sits in the scratchpad:
+⚠ **`chromium.connectOverCDP()` does not work here.** Playwright 1.61 against
+Chrome 150 dies immediately on handshake:
 
-```ts
-import { chromium } from '/Users/elyashiv/dev/ShmouelAttali/shavtzak/node_modules/playwright/index.mjs';
-const browser = await chromium.connectOverCDP('http://localhost:9222');
-const ctx = browser.contexts()[0];
-const p = ctx.pages().find(pg => pg.url().includes('localhost:5173')) ?? ctx.pages()[0];
-await p.bringToFront();
+```
+browserType.connectOverCDP: Protocol error (Browser.setDownloadBehavior):
+Browser context management is not supported.
 ```
 
-`browser.close()` on a CDP connection only detaches — the window stays open for
-the owner, which is what we want.
+Don't spend time on it — Node 26 ships a **global `WebSocket`**, so speak CDP
+directly. ~40 lines, no dependency, and it exposes `Page.printToPDF` and
+`Emulation.*` that Playwright would have wrapped anyway. Keep a `cdp.mts` in the
+scratchpad:
+
+```ts
+const list = await (await fetch('http://localhost:9222/json/list')).json();
+const target = list.find((t: any) => t.type === 'page' && t.url.includes('localhost:5173'));
+const ws = new WebSocket(target.webSocketDebuggerUrl);
+await new Promise<void>((res, rej) => { ws.onopen = () => res(); ws.onerror = () => rej(new Error('ws')); });
+// then: id-matched {id, method, params} sends, resolve on the matching msg.id;
+// Runtime.enable + Page.enable once, and evaluate via
+//   Runtime.evaluate {expression: `(${fn})()`, returnByValue: true, awaitPromise: true}
+// — always check result.exceptionDetails, a thrown eval otherwise looks like undefined.
+```
+
+**If `/json/list` returns `count 0`** (it happens to a long-lived instance — the
+window got closed but the process lives, while `/json/version` still answers),
+don't restart Chrome and re-rsync. Just make a page:
+
+```bash
+curl -s -X PUT "http://localhost:9222/json/new?http://localhost:5173/?tab=shavtzak"
+```
+
+**Poll for content, never `sleep(n)`.** `/api/shavtzak` reads the live sheet and
+takes **~25–30 s cold**; a fixed 6 s sleep just screenshots "טוען שבצק..." and
+every later assertion then reports absent/0 and looks like a real bug. Poll on a
+DOM fact (`main .rounded-xl.border-2` count > 0) with a ~60 s ceiling.
+
+**Force a desktop viewport** before measuring or screenshotting, or Tailwind's
+`sm:` breakpoint collapses every 2-column grid and the layout you judge is the
+phone one:
+
+```ts
+await send('Emulation.setDeviceMetricsOverride', {width: 1400, height: 1000, deviceScaleFactor: 2, mobile: false});
+// ...and clear it when done: Emulation.clearDeviceMetricsOverride
+```
 
 **Always prove which account is driving** (a wrong account silently changes which
 tabs exist and which soldier is "me"):
 
 ```ts
-await p.evaluate(() => document.querySelector('.cl-userButtonTrigger img')?.getAttribute('alt'));
-// → "Elyashiv Lavi's logo"
-await p.locator('nav button.border-blue-600').innerText();   // the active tab
+document.querySelector('.cl-userButtonTrigger img')?.getAttribute('alt')  // → "Elyashiv Lavi's logo"
+document.querySelector('nav button.border-blue-600')?.textContent          // the active tab
 ```
+
+## 3b. Verifying print / PDF output
+
+The שבצק tab's **הדפס** button is `window.print()` over a print stylesheet
+(`@media print` in `src/index.css` + `print:` classes). To see what paper gets:
+
+```ts
+await send('Emulation.setEmulatedMedia', {media: 'print'});   // print CSS, live DOM — assert computed styles here
+const pdf = await send('Page.printToPDF', {
+  printBackground: true,       // else every colored group header comes out white
+  preferCSSPageSize: true,     // honours @page { size: A4 landscape }
+  displayHeaderFooter: false,
+});
+await send('Emulation.setEmulatedMedia', {});                 // ALWAYS restore, or the owner's window stays in print mode
+```
+
+Assert on computed style under print media, not just the picture: `display` of
+`header` / `div.sticky.top-0` (must be `none`), `breakInside`, `overflowX`,
+`printColorAdjust` (`exact`).
+
+Confirm the paper size from the PDF itself rather than trusting the CSS —
+`/MediaBox [0 0 841.92 594.96]` × 25.4/72 = **297 × 210 mm = A4 landscape**.
+Page count: `len(re.findall(rb'/Type\s*/Page[^s]', pdf))`.
+
+**Measure clipping numerically — a screenshot hides it.** Set the viewport to the
+true printable width (A4 8mm margins: **portrait 733px, landscape 1062px**) under
+print media, then compare each card's content against its box:
+
+```ts
+const need = Math.max(...[...card.querySelectorAll('table, .grid')].map(t => t.scrollWidth));
+const have = card.getBoundingClientRect().width;   // need > have → that many px are cut off
+```
+
+Names are `whitespace-nowrap`, so overflow truncates a name rather than wrapping
+it — by eye that reads as a font artifact, not as missing data. Only the numbers
+tell you.
+
+⚠ **A wrapper `<table>` used for the repeating header defaults to
+`table-layout: auto`, which sizes to its content's *min-content* width, not the
+page.** Symptom: the table measures wider than the viewport and sits at a
+negative `x` (RTL), so the page header looks truncated ("57 ח") while the cards
+themselves seem fine. Fix is `table-layout: fixed; width: 100%`. Until you do
+this, overflow measurements are meaningless — content spills off-page instead of
+overflowing its card, so the check above reports clean.
+
+**Rasterizing the PDF to actually look at it:** this box has **no `pdftoppm`, no
+ghostscript, no imagemagick, and no pyobjc `Quartz`**; `sips -s format png` works
+but only ever converts **page 1**. Use Chrome's own PDFium: navigate the driven
+page to `file:///…/x.pdf#page=N&zoom=page-fit` and screenshot per page.
+Caveat — the `#page=N` fragment is **imprecise** (asking for 2 landed on 4), so
+read the page number off the viewer's own toolbar in the screenshot instead of
+trusting N.
 
 ## 4. Gotchas that cost time
 
