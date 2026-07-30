@@ -34,6 +34,21 @@ interface Props {
   shavtzakAll: ShavtzakAllData | null;
 }
 
+/** מחלקה sentinel: the default — every soldier in the company, no filter.
+ *  A real מחלקה value is never '*' (they are digits/letters from the sheet). */
+export const ALL_UNITS = '*';
+
+/** Soldiers offered in the חייל dropdown for a chosen מחלקה. ALL_UNITS (and a
+ *  legacy empty stored value) means the whole company. */
+export function soldiersForUnit<T extends { unit: string; fullName: string }>(
+  soldiers: T[],
+  unit: string
+): T[] {
+  const inUnit =
+    unit === ALL_UNITS || unit === '' ? soldiers.slice() : soldiers.filter((s) => s.unit === unit);
+  return inUnit.sort((a, b) => a.fullName.localeCompare(b.fullName, 'he'));
+}
+
 function toDateStr(d: Date) {
   const dd = String(d.getDate()).padStart(2, '0');
   const mm = String(d.getMonth() + 1).padStart(2, '0');
@@ -69,7 +84,7 @@ export function PersonalSchedule({ data, shavtzakAll }: Props) {
   twoWeeksAhead.setDate(twoWeeksAhead.getDate() + 14);
 
   const [selectedUnit, setSelectedUnit] = useState(
-    () => localStorage.getItem('personal:unit') ?? ''
+    () => localStorage.getItem('personal:unit') || ALL_UNITS
   );
   const [selectedId, setSelectedId] = useState(
     () => localStorage.getItem('personal:soldier') ?? ''
@@ -83,9 +98,7 @@ export function PersonalSchedule({ data, shavtzakAll }: Props) {
   }, [soldiers]);
 
   const unitSoldiers = useMemo(
-    () =>
-      (selectedUnit ? soldiers.filter((s) => s.unit === selectedUnit) : [])
-        .sort((a, b) => a.fullName.localeCompare(b.fullName, 'he')),
+    () => soldiersForUnit(soldiers, selectedUnit),
     [soldiers, selectedUnit]
   );
 
@@ -126,7 +139,7 @@ export function PersonalSchedule({ data, shavtzakAll }: Props) {
             onChange={(e) => handleUnitChange(e.target.value)}
             className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
           >
-            <option value="">-- בחר מחלקה --</option>
+            <option value={ALL_UNITS}>כלל הפלוגה</option>
             {units.map((u) => (
               <option key={u} value={u}>
                 מחלקה {u}
@@ -140,7 +153,6 @@ export function PersonalSchedule({ data, shavtzakAll }: Props) {
           <select
             value={selectedId}
             onChange={(e) => handleSoldierChange(e.target.value)}
-            disabled={!selectedUnit}
             className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 disabled:opacity-50"
           >
             <option value="">-- בחר חייל --</option>
@@ -215,7 +227,7 @@ export function PersonalSchedule({ data, shavtzakAll }: Props) {
 
       {!selectedSoldier && (
         <div className="rounded-xl border-2 border-dashed border-gray-200 py-16 text-center text-gray-400">
-          <p className="text-lg">בחר מחלקה וחייל להצגת הלוז</p>
+          <p className="text-lg">בחר חייל להצגת הלוז</p>
         </div>
       )}
 
