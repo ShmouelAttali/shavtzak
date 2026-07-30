@@ -5,7 +5,7 @@ export function SoldierPopup({ info, onClose }: { info: PopupState; onClose: () 
   const waNum = clean.startsWith('0') ? '972' + clean.slice(1) : clean;
   return (
     <div
-      className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/40 px-4 pb-6 sm:pb-0"
+      className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/40 px-4 pb-6 sm:pb-0 print:hidden"
       onClick={onClose}
     >
       <div

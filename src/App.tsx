@@ -156,9 +156,9 @@ function AppContent({ data }: { data: SheetData }) {
   const guardDiscardAndGo = () => { if (pendingTab) setActiveTab(pendingTab); setPendingTab(null); };
 
   return (
-    <div className="min-h-screen bg-gray-50" dir="rtl">
+    <div className="min-h-screen bg-gray-50 print:bg-white" dir="rtl">
       {/* Header */}
-      <header className="bg-slate-800 text-white shadow-md">
+      <header className="bg-slate-800 text-white shadow-md print:hidden">
         <div className="mx-auto max-w-6xl px-4 py-4 flex items-center justify-between">
           <h1
             className="text-xl font-bold tracking-wide cursor-pointer select-none hover:opacity-80 transition-opacity"
@@ -189,7 +189,7 @@ function AppContent({ data }: { data: SheetData }) {
       </header>
 
       {/* Tab bar */}
-      <div className="sticky top-0 z-20 bg-white shadow-sm">
+      <div className="sticky top-0 z-20 bg-white shadow-sm print:hidden">
         <div className="mx-auto max-w-6xl">
           <nav className="flex overflow-x-auto" aria-label="Tabs">
             {TABS.filter(tab => tabAllowed(tab.id)).map((tab) => (
@@ -216,7 +216,7 @@ function AppContent({ data }: { data: SheetData }) {
       )}
 
       {/* Content */}
-      <main className="mx-auto max-w-6xl px-4 py-6">
+      <main className="mx-auto max-w-6xl px-4 py-6 print:max-w-none print:p-0">
         {/* A deep link to a restricted tab waits for the access lookup rather
             than rendering it — the effect above bounces it if not permitted. */}
         {!tabAllowed(activeTab) ? (

@@ -5,3 +5,102 @@
 * {
   font-family: 'Heebo', system-ui, -apple-system, Arial, sans-serif;
 }
+
+/* ── Print (the שבצק tab's הדפס button → "Save as PDF") ──────────────────────
+   Everything else is expressed as Tailwind `print:` classes on the elements
+   themselves; only these need to be global. */
+@media print {
+  @page {
+    size: A4 portrait;
+    margin: 8mm;
+  }
+
+  /* Without this Chrome drops every background — the colored GroupCard headers,
+     the card fills and the alternating row stripes — unless the user happens to
+     tick "Background graphics" in the dialog. */
+  html {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  body {
+    background: #fff !important;
+  }
+
+  /* The card layouts scroll horizontally on screen (Shavtzak.tsx YomiGrid /
+     TransposedTable / MultiTypeTable / MissionCards). On paper there is nothing
+     to scroll, so clipping would silently swallow columns — overflow instead. */
+  .overflow-x-auto {
+    overflow: visible !important;
+  }
+
+  /* Never split a schedule row across a page boundary. */
+  tr {
+    break-inside: avoid;
+  }
+
+  /* A4 portrait gives 194mm = 733px of printable width, and the busiest card
+     (a TransposedTable with four time columns) wants 391px inside a 361px box —
+     30px of clipped names. Trimming the cells' sm:px-4 (16px/side) to 6px/side
+     frees ~80px across four columns, so it fits with room to spare.
+     `!important` is load-bearing: Tailwind emits `sm:` variants AFTER `print:`,
+     so a `print:px-2` class would lose to `sm:px-4` at 733px. */
+  .print-tight th,
+  .print-tight td {
+    padding-left: 0.375rem !important;
+    padding-right: 0.375rem !important;
+  }
+
+  /* The repeating-header wrapper must be exactly the page width. With the
+     default `table-layout: auto` the table sizes to its content's min-content
+     width instead — the multi-column block below reported 885px inside a 733px
+     page, which dragged the whole table to x:-152 (RTL) and sliced the header's
+     headcount off the edge. `fixed` makes the 100% width authoritative. */
+  .print-page {
+    table-layout: fixed;
+    width: 100% !important;
+    max-width: 100%;
+  }
+
+  /* ── Packing ───────────────────────────────────────────────────────────────
+     Print never stretches a card to the page width (owner's rule): each card is
+     only as wide as its own content needs, and cards then sit side by side.
+
+     Neither of the screen layouts can express that. The `sm:grid-cols-2` bands
+     force equal half-page columns, and multi-column layout also makes every
+     column identical by definition — both stretch a one-name card to the same
+     width as a four-column time table. Flex-wrap is the one model with
+     content-sized boxes: `width: max-content` per card, wrap when the row runs
+     out of room. */
+  .print-flow {
+    display: flex !important;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    gap: 3mm;
+  }
+
+  /* `display: contents` erases the two band wrappers from the box tree, so the
+     cards inside them become flex items of .print-flow itself rather than two
+     opaque blocks. Without this only the bands would pack, not the cards. */
+  .print-flow > .grid {
+    display: contents !important;
+  }
+
+  /* space-y-3's `> * + *` top margins fight the flex gap. */
+  .print-flow > * {
+    margin-top: 0 !important;
+  }
+
+  /* Shrink to content, but never past the page — a card whose content genuinely
+     exceeds the printable width is capped here rather than running off the edge. */
+  .print-flow .rounded-xl {
+    width: max-content;
+    max-width: 100%;
+  }
+
+  /* The tables are `w-full`, which would re-stretch each card back to its
+     container. Content width is what we actually want on paper. */
+  .print-tight table {
+    width: auto !important;
+  }
+}
