@@ -7,7 +7,11 @@
 // so the printed heading is simply that date's own weekday.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { printDayTitle, printDocTitle, mergeCommanderSubType, CMD_TAG } from '../src/components/Shavtzak';
+import {
+  printDayTitle, printDocTitle, mergeCommanderSubType, CMD_TAG, estimatePrintRows,
+  buildSheetDisplayGroups,
+} from '../src/components/Shavtzak';
+import type { StationGroup } from '../api/_handlers/shavtzak';
 
 // ── printDayTitle: the heading on the paper ─────────────────────────────────
 
@@ -84,4 +88,51 @@ test('leaves every other shape alone so it prints as it appears', () => {
   assert.equal(mergeCommanderSubType([
     { sug: 'מפקד סיור', times: [] }, { sug: 'כרמל חטיבה', times: [] },
   ]), null);
+});
+
+// ── estimatePrintRows: ranks cards by printed height ────────────────────────
+// Only the ORDER matters — GroupsView sorts the print column flow tallest-first
+// so the big blocks land before the small ones and the leftovers slot into the
+// gaps. The absolute numbers are deliberately approximate.
+
+const station = (name: string, subs: [string, [string, string[]][]][]): StationGroup =>
+  ({ name, subTypes: subs.map(([sug, times]) => ({ sug, times: times.map(([time, soldiers]) => ({ time, soldiers })) })) });
+
+const rowsOf = (g: StationGroup) =>
+  estimatePrintRows(buildSheetDisplayGroups([g], null, '')[0]);
+
+test('a many-slot multi-sub table outranks a single short slot', () => {
+  const big = station('כרמל חטיבה', [
+    ['מפקד כרמל חטיבה', [['06:00', ['a']], ['10:00', ['b']], ['14:00', ['c']], ['18:00', ['d']]]],
+    ['כרמל חטיבה', [['06:00', ['e', 'f', 'g']], ['10:00', ['h', 'i', 'j']],
+                    ['14:00', ['k', 'l', 'm']], ['18:00', ['n', 'o', 'p']]]],
+  ]);
+  const small = station('חמל', [['חמל', [['02:00', ['q']]]]]);
+  assert.ok(rowsOf(big) > rowsOf(small), `${rowsOf(big)} should exceed ${rowsOf(small)}`);
+});
+
+test('a tall single-column shift outranks a wide shallow one', () => {
+  // eight names stacked in one time slot: tall on paper
+  const tall = station('התקפי', [['התקפי', [['14:00', ['a','b','c','d','e','f','g','h']]]]]);
+  // the same eight names spread across four slots: four columns, two rows
+  const wide = station('סיור', [['סיור', [
+    ['06:00', ['a', 'b']], ['10:00', ['c', 'd']], ['14:00', ['e', 'f']], ['18:00', ['g', 'h']],
+  ]]]);
+  assert.ok(rowsOf(tall) > rowsOf(wide), `${rowsOf(tall)} should exceed ${rowsOf(wide)}`);
+});
+
+test('sorting by the estimate is descending and stable-shaped', () => {
+  const groups = [
+    station('חמל', [['חמל', [['02:00', ['a']]]]]),
+    station('התקפי', [['התקפי', [['14:00', ['a','b','c','d','e','f']]]]]),
+    station('סיור', [['סיור', [['06:00', ['a','b','c']], ['14:00', ['d','e','f']]]]]),
+  ].flatMap(g => buildSheetDisplayGroups([g], null, ''));
+
+  const order = [...groups].sort((a, b) => estimatePrintRows(b) - estimatePrintRows(a)).map(g => g.name);
+  assert.deepEqual(order, ['התקפי', 'סיור', 'חמל']);
+});
+
+test('never returns zero, so an empty-ish card still sorts predictably', () => {
+  const g = buildSheetDisplayGroups([station('ריק', [['ריק', [['08:00', ['a']]]]])], null, '')[0];
+  assert.ok(estimatePrintRows(g) >= 1);
 });

@@ -89,7 +89,18 @@ function SoldierName({name, time}: { name: string; time?: string }) {
     return (
         <span
             onClick={() => onCLick(base, info, time)}
-            className={`text-sm whitespace-nowrap leading-snug select-none cursor-pointer active:opacity-70 ${isMe ? `font-bold ${color} bg-yellow-200 ring-1 ring-yellow-400 rounded px-1.5 py-0.5` : `${color} ${bold ? 'font-bold' : 'font-medium'}`}`}
+            // The yellow "me" highlight is a screen affordance — a printed sheet
+            // is handed to other people, where one name ringed in yellow is just
+            // noise. Print drops the highlight and falls back to the weight the
+            // soldier's own role would have given them.
+            className={[
+                'text-sm whitespace-nowrap leading-snug select-none cursor-pointer active:opacity-70',
+                color,
+                bold || isMe ? 'font-bold' : 'font-medium',
+                bold ? 'print:font-bold' : 'print:font-medium',
+                isMe && 'bg-yellow-200 ring-1 ring-yellow-400 rounded px-1.5 py-0.5 ' +
+                        'print:bg-transparent print:ring-0 print:rounded-none print:p-0',
+            ].filter(Boolean).join(' ')}
         >
       {base}
             {tagged && <span className="font-normal opacity-60"> (מפקד)</span>}
@@ -838,6 +849,43 @@ function getTier(subTypes: DisplaySubType[], name: string): Tier {
     return 'wide';
 }
 
+// Roughly how many text lines a card's body will occupy once printed. Used only
+// to order the print column flow tallest-first: filling the columns with the big
+// blocks before the small ones packs the leftovers into the gaps instead of
+// stranding them (first-fit-decreasing). Approximate by design — it never has to
+// be exact, only monotonic enough to rank the cards.
+export function estimatePrintRows(group: DisplayGroup): number {
+    const subs = group.subTypes;
+    const lines = (n: number) => Math.max(1, n);
+
+    if (isYomiOnly(subs)) {
+        if (subs.length > 1) {
+            // side-by-side columns; the tallest column sets the height
+            return Math.max(...subs.map(s => {
+                const n = s.times[0]?.soldiers.length ?? 0;
+                return Math.ceil(n / (n > 5 ? 2 : 1));
+            }));
+        }
+        const n = subs[0]?.times[0]?.soldiers.length ?? 0;
+        const cols = n <= 6 ? 2 : n <= 12 ? 3 : 4;
+        return Math.ceil(n / cols);
+    }
+
+    if (subs.length > 1) {
+        if (isSparseMultiType(subs)) return subs.length * 2; // MissionCards
+        // MultiTypeTable: one row per slot, as tall as that slot's fullest cell
+        return allUniqueSlots(subs).reduce((total, slot) => {
+            const key = `${slot.gray ? 1 : 0}:${slot.time}`;
+            const tallest = Math.max(0, ...subs.map(s =>
+                s.times.find(t => `${t.gray ? 1 : 0}:${t.time}` === key)?.soldiers.length ?? 0));
+            return total + lines(tallest);
+        }, 0);
+    }
+
+    // TransposedTable: times are columns, so height is the fullest column
+    return lines(Math.max(0, ...(subs[0]?.times ?? []).map(t => t.soldiers.length)));
+}
+
 function sortByOrder(groups: DisplayGroup[], order: string[]): DisplayGroup[] {
     return [...groups].sort((a, b) => {
         const ai = order.findIndex(k => a.name.includes(k));
@@ -859,21 +907,13 @@ function GroupCard({group}: { group: DisplayGroup }) {
 
     return (
         // print: `overflow-visible` stops overflow-hidden from clipping a table
-        // wider than the 1062px A4-landscape page. Page breaks are tier-aware —
-        // a short card is kept whole, but forbidding a break inside a tall
-        // `wide` card just pushes the whole thing to the next page and leaves
-        // most of a sheet blank (that alone took a 9-card day from 3 to 6
-        // pages). A wide card splits instead; its inner <table> has a <thead>,
-        // which the browser repeats on the continuation page.
-        // In print every card is content-width and packs side by side (see
-        // .print-flow in index.css). break-inside-avoid on all of them, per the
-        // owner: a position is read as one block, so it must never be split
-        // across a page — better to leave a gap and start it on the next sheet.
+        // print: overflow-visible so a table can't be clipped by the card's own
+        // rounded corners. break-inside-avoid on every card, per the owner — a
+        // position is read as one block, so it must never split across a page;
+        // better to leave a gap and start it on the next sheet.
         <div className={`rounded-xl border-2 overflow-hidden print:overflow-visible print-tight print:break-inside-avoid ${c.border}`}>
-            {/* print:break-after-avoid — never strand the colored group header
-                alone at the foot of a page with its table overleaf. */}
-            {/* gap-3: in print the card is content-width, so justify-between has
-                no slack left and the name would touch the count ("התקפי8 חיילים").
+            {/* gap-3 keeps the name off the count even when the card is narrow
+                enough that justify-between has no slack ("התקפי8 חיילים").
                 print:break-after-avoid — never strand the colored group header
                 alone at the foot of a page with its table overleaf. */}
             <div className={`px-4 py-2.5 font-bold text-base flex items-center justify-between gap-3 print:break-after-avoid ${c.header}`}>
@@ -916,21 +956,32 @@ export function GroupsView({groups}: { groups: DisplayGroup[] }) {
     const mediumGroups = groups.filter(g => g.tier === 'medium');
     const wideGroups = groups.filter(g => g.tier === 'wide');
 
+    // Paper wants a different order and a different container than the screen:
+    // one flat tallest-first list flowing down two columns, rather than the
+    // screen's three tier bands. Reordering can't be done in CSS (multi-column
+    // follows DOM order, and `order` only works in flex/grid), so print gets its
+    // own tree and each medium hides the other's.
+    const printOrder = [...groups].sort((a, b) => estimatePrintRows(b) - estimatePrintRows(a));
+
     return (
-        // print-flow: multi-column packing on paper only (see index.css).
-        <div className="space-y-3 print-flow">
-            {smallGroups.length > 0 && (
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 items-start">
-                    {smallGroups.map(g => <GroupCard key={g.name} group={g}/>)}
-                </div>
-            )}
-            {wideGroups.map(g => <GroupCard key={g.name} group={g}/>)}
-            {mediumGroups.length > 0 && (
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 items-start">
-                    {mediumGroups.map(g => <GroupCard key={g.name} group={g}/>)}
-                </div>
-            )}
-        </div>
+        <>
+            <div className="space-y-3 print:hidden">
+                {smallGroups.length > 0 && (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 items-start">
+                        {smallGroups.map(g => <GroupCard key={g.name} group={g}/>)}
+                    </div>
+                )}
+                {wideGroups.map(g => <GroupCard key={g.name} group={g}/>)}
+                {mediumGroups.length > 0 && (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 items-start">
+                        {mediumGroups.map(g => <GroupCard key={g.name} group={g}/>)}
+                    </div>
+                )}
+            </div>
+            <div className="hidden print:block print-flow">
+                {printOrder.map(g => <GroupCard key={g.name} group={g}/>)}
+            </div>
+        </>
     );
 }
 
