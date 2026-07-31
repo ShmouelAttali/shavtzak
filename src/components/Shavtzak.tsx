@@ -1,6 +1,6 @@
 import {createContext, useContext, useEffect, useMemo, useRef, useState} from 'react';
 import {todayShavtzakStr} from '../hooks/useShavtzak';
-import type {ShavtzakAllData, StationGroup, SubType} from '../../api/_handlers/shavtzak';
+import type {ShavtzakAllData, StationGroup, SubType, TimeSlot} from '../../api/_handlers/shavtzak';
 import type {DraftAssignmentMeta} from '../../api/_handlers/draft';
 import type {Soldier} from '../types';
 import type {PopupState} from './SoldierPopup';
@@ -221,6 +221,17 @@ function slotMoment(recordDate: string, time: string): { dateStr: string; short:
     return {dateStr: formatLikeTemplate(recordDate, dt), short: shortDate(dt), ms: dt.getTime()};
 }
 
+// A range whose end equals its start ("14:00-14:00", כוננות התקפי) is a full
+// 24h shift, but on the board it reads as a zero-length slot. True whenever
+// the label needs a "(למחרת)" tag to make the end unmistakably tomorrow's.
+// Display only — `slot.time` stays the raw sheet string everywhere else
+// (map keys, popups, the draft tab's `${name}|${time}` meta lookups).
+export function spansToNextDay(time: string): boolean {
+    const range = /^(\d{1,2}):(\d{2})-(\d{1,2}):(\d{2})$/.exec(time);
+    if (!range) return false;
+    return parseInt(range[1]) * 60 + parseInt(range[2]) === parseInt(range[3]) * 60 + parseInt(range[4]);
+}
+
 // Shared hour-label renderer: normal styling for same-day hours, grayed +
 // dated for hours that land on a different calendar day than the one being
 // viewed. `gray`/`dateLabel` are precomputed per slot (see slotMoment)
@@ -235,6 +246,9 @@ function TimeLabel({time, gray, dateLabel, activeClass, futureClass = 'text-gray
     return (
         <span className={gray ? futureClass : activeClass}>
             {label}
+            {spansToNextDay(time) && (
+                <span className="text-[10px] font-normal opacity-80">(למחרת)</span>
+            )}
             {gray && dateLabel && (
                 <span className="text-[10px] font-normal opacity-80"> ({dateLabel})</span>
             )}
@@ -433,6 +447,28 @@ function rawSlotsOnly(subTypes: SubType[]): DisplaySubType[] {
 // tomorrow's preview sorts after all of today regardless of hour.
 const TOMORROW_OFFSET = 10_000;
 
+// ...and its mirror: below every real minutes-of-day, so the carry-over from
+// yesterday sorts ahead of all of today.
+const YESTERDAY_OFFSET = -10_000;
+
+// כוננות התקפי is seated 14:00→14:00 — a full 24h — so for the first half of
+// any day the position is actually manned by the PREVIOUS day's crew, who
+// appear nowhere in today's own rows. Surface them as one extra slot taken
+// from yesterday's record, grayed and dated like the tomorrow look-ahead.
+//
+// Deliberately scoped to התקפי by name, per the owner. The split-day forms
+// that also appear in the sheet (14:00-09:00, 09:00-14:00) are excluded by
+// the exact time match: on those days the sheet already spells the morning
+// shift out as its own row. To generalise later, swap the name test for
+// "a range whose end equals its start".
+const CARRY_OVER_GROUP = 'התקפי';
+const CARRY_OVER_TIME = '14:00-14:00';
+const CARRY_OVER_LABEL = 'עד 14:00';
+
+function carriedOverSlot(group: StationGroup | undefined, sug: string): TimeSlot | undefined {
+    return group?.subTypes.find(s => s.sug === sug)?.times.find(t => t.time === CARRY_OVER_TIME);
+}
+
 // The שבצק sheet's own תאריך is always the literal, correct calendar day for
 // every row (confirmed by the owner) — unlike the newer scheduler DB the
 // draft tab reads, this data source has no 14:00-anchored "this early hour
@@ -441,8 +477,16 @@ const TOMORROW_OFFSET = 10_000;
 // look-ahead into `nextDaySource` (tomorrow's own record) is appended,
 // grayed and dated — only its shifts starting before 14:00, per the owner —
 // as a preview of what's coming, without reinterpreting any of today's own
-// rows.
-export function buildSheetDisplayGroups(current: StationGroup[], nextDaySource: StationGroup[] | null, nextDateShort: string): DisplayGroup[] {
+// rows. Symmetrically, `prevDaySource` (yesterday's own record) contributes
+// only the התקפי carry-over described at CARRY_OVER_GROUP — the one shift
+// long enough that yesterday's crew is still on duty for half of today.
+export function buildSheetDisplayGroups(
+    current: StationGroup[],
+    nextDaySource: StationGroup[] | null,
+    nextDateShort: string,
+    prevDaySource: StationGroup[] | null = null,
+    prevDateShort = '',
+): DisplayGroup[] {
     const names: string[] = [];
     const seenNames = new Set<string>();
     for (const g of current) if (!seenNames.has(g.name)) {
@@ -456,10 +500,13 @@ export function buildSheetDisplayGroups(current: StationGroup[], nextDaySource: 
 
     const curByName = new Map(current.map(g => [g.name, g]));
     const nextByName = new Map((nextDaySource ?? []).map(g => [g.name, g]));
+    const prevByName = new Map((prevDaySource ?? []).map(g => [g.name, g]));
 
     return names.map(name => {
         const curGroup = curByName.get(name);
         const nextGroup = nextByName.get(name);
+        const carryOver = name.includes(CARRY_OVER_GROUP);
+        const prevGroup = carryOver ? prevByName.get(name) : undefined;
 
         const sugs: string[] = [];
         const seenSugs = new Set<string>();
@@ -471,11 +518,24 @@ export function buildSheetDisplayGroups(current: StationGroup[], nextDaySource: 
             seenSugs.add(s.sug);
             sugs.push(s.sug);
         }
+        // A carrying sub-type that today's own sheet doesn't mention at all
+        // still has yesterday's crew on it until 14:00 — keep the column.
+        for (const s of prevGroup?.subTypes ?? []) if (!seenSugs.has(s.sug) && carriedOverSlot(prevGroup, s.sug)) {
+            seenSugs.add(s.sug);
+            sugs.push(s.sug);
+        }
 
         const subTypes: DisplaySubType[] = sugs.map(sug => {
             const curSub = curGroup?.subTypes.find(s => s.sug === sug);
             const nextSub = nextGroup?.subTypes.find(s => s.sug === sug);
             const times: DisplaySlot[] = [];
+            const carried = carryOver ? carriedOverSlot(prevGroup, sug) : undefined;
+            if (carried && carried.soldiers.length > 0) {
+                times.push({
+                    time: CARRY_OVER_LABEL, gray: true, dateLabel: prevDateShort,
+                    soldiers: carried.soldiers, ms: YESTERDAY_OFFSET,
+                });
+            }
             for (const t of curSub?.times ?? []) {
                 times.push({time: t.time, gray: false, dateLabel: '', soldiers: t.soldiers, ms: timeOfDayMinutes(t.time)});
             }
@@ -1051,7 +1111,12 @@ export function Shavtzak({soldiers, shavtzakAll: data, loading, error, mySoldier
 
     const nextDayData = dayData ? data.byDate[shiftDateStr(selectedDate, 1)] ?? null : null;
     const nextDateShort = dayData ? shortDate(parseAnyDate(shiftDateStr(selectedDate, 1))) : '';
-    const displayGroups = dayData ? buildSheetDisplayGroups(dayData.groups, nextDayData?.groups ?? null, nextDateShort) : [];
+    const prevDayData = dayData ? data.byDate[shiftDateStr(selectedDate, -1)] ?? null : null;
+    const prevDateShort = dayData ? shortDate(parseAnyDate(shiftDateStr(selectedDate, -1))) : '';
+    const displayGroups = dayData
+        ? buildSheetDisplayGroups(dayData.groups, nextDayData?.groups ?? null, nextDateShort,
+            prevDayData?.groups ?? null, prevDateShort)
+        : [];
 
     const {total: totalDistinct, combat: combatCount} = computeTodayHeadcounts(displayGroups);
 

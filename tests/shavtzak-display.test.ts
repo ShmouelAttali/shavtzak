@@ -13,7 +13,7 @@
 //     own record (its shifts before 14:00) is appended, grayed and dated.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildDisplayGroups, buildSheetDisplayGroups, computeTodayHeadcounts } from '../src/components/Shavtzak';
+import { buildDisplayGroups, buildSheetDisplayGroups, computeTodayHeadcounts, spansToNextDay } from '../src/components/Shavtzak';
 import type { StationGroup } from '../api/_handlers/shavtzak';
 
 const SEL_DATE = '21/07/2026';
@@ -101,6 +101,107 @@ test('sheet: tomorrow\'s own rows do not affect today\'s empty-box filtering whe
   const found = display.find(g => g.name === 'חפק');
   assert.ok(found);
   assert.equal(found!.subTypes[0].times[0].gray, true);
+});
+
+// ── sheet: the התקפי "עד 14:00" carry-over ─────────────────────────────────
+// כוננות התקפי is seated 14:00->14:00, so until 14:00 today the position is
+// still manned by yesterday's crew — who appear nowhere in today's own rows.
+// Deliberately scoped to התקפי by name and to the exact "14:00-14:00" form.
+
+test('sheet: התקפי gets yesterday\'s 14:00-14:00 crew as a leading "עד 14:00" column', () => {
+  const current = [group('התקפי', 'כוננות', [['14:00-14:00', ['אביאל', 'מתן']]])];
+  const yesterday = [group('התקפי', 'כוננות', [['14:00-14:00', ['שמואל', 'אלי']]])];
+
+  const [display] = buildSheetDisplayGroups(current, null, '', yesterday, '20/07');
+  const slots = display.subTypes[0].times;
+
+  assert.deepEqual(slots.map(s => s.time), ['עד 14:00', '14:00-14:00']);
+  assert.equal(slots[0].gray, true);
+  assert.equal(slots[0].dateLabel, '20/07');
+  assert.deepEqual(slots[0].soldiers, ['שמואל', 'אלי']);
+  // today's own row is untouched
+  assert.equal(slots[1].gray, false);
+  assert.deepEqual(slots[1].soldiers, ['אביאל', 'מתן']);
+});
+
+test('sheet: the carry-over column sorts ahead of every other hour, including a 06:00 sub-type', () => {
+  const current: StationGroup[] = [{
+    name: 'התקפי',
+    subTypes: [
+      { sug: 'כוננות', times: [{ time: '14:00-14:00', soldiers: ['א'] }] },
+      { sug: 'תגבצ בוקר', times: [{ time: '06:30-09:00', soldiers: ['ב'] }] },
+    ],
+  }];
+  const yesterday = [group('התקפי', 'כוננות', [['14:00-14:00', ['ג']]])];
+
+  const [display] = buildSheetDisplayGroups(current, null, '', yesterday, '20/07');
+  const konenut = display.subTypes.find(s => s.sug === 'כוננות')!;
+
+  assert.deepEqual(konenut.times.map(s => s.time), ['עד 14:00', '14:00-14:00']);
+  // the carry-over is per-sub-type: תגבצ בוקר has no 14:00-14:00 row to carry
+  assert.deepEqual(display.subTypes.find(s => s.sug === 'תגבצ בוקר')!.times.map(s => s.time), ['06:30-09:00']);
+});
+
+test('sheet: a carrying sub-type missing from today\'s own rows still gets its column', () => {
+  const current = [group('התקפי', 'תגבצ ערב', [['17:00-22:00', ['א']]])];
+  const yesterday = [group('התקפי', 'כוננות', [['14:00-14:00', ['ג', 'ד']]])];
+
+  const [display] = buildSheetDisplayGroups(current, null, '', yesterday, '20/07');
+  const konenut = display.subTypes.find(s => s.sug === 'כוננות');
+
+  assert.ok(konenut);
+  assert.deepEqual(konenut!.times.map(s => s.time), ['עד 14:00']);
+  assert.deepEqual(konenut!.times[0].soldiers, ['ג', 'ד']);
+});
+
+test('sheet: no carry-over for a non-התקפי group, even with a 14:00-14:00 row yesterday', () => {
+  const current = [group('סיור', 'סיור', [['14:00-14:00', ['א']]])];
+  const yesterday = [group('סיור', 'סיור', [['14:00-14:00', ['ב']]])];
+
+  const [display] = buildSheetDisplayGroups(current, null, '', yesterday, '20/07');
+  assert.deepEqual(display.subTypes[0].times.map(s => s.time), ['14:00-14:00']);
+});
+
+test('sheet: no carry-over when yesterday\'s התקפי is a split day (14:00-09:00)', () => {
+  // On those days the sheet already spells today's morning out as its own row.
+  const current = [group('התקפי', 'כוננות', [['09:00-14:00', ['א']]])];
+  const yesterday = [group('התקפי', 'כוננות', [['14:00-09:00', ['ב']]])];
+
+  const [display] = buildSheetDisplayGroups(current, null, '', yesterday, '20/07');
+  assert.deepEqual(display.subTypes[0].times.map(s => s.time), ['09:00-14:00']);
+});
+
+test('sheet: no prev-day source (the sheet\'s first date) leaves התקפי unchanged', () => {
+  const current = [group('התקפי', 'כוננות', [['14:00-14:00', ['א']]])];
+
+  const [display] = buildSheetDisplayGroups(current, null, '');
+  assert.deepEqual(display.subTypes[0].times.map(s => s.time), ['14:00-14:00']);
+});
+
+test('sheet: the carry-over crew does not inflate today\'s headcounts', () => {
+  const current = [group('התקפי', 'כוננות', [['14:00-14:00', ['א', 'ב']]])];
+  const yesterday = [group('התקפי', 'כוננות', [['14:00-14:00', ['ג', 'ד']]])];
+
+  const groups = buildSheetDisplayGroups(current, null, '', yesterday, '20/07');
+  const {total, combat} = computeTodayHeadcounts(groups);
+
+  assert.equal(total, 2);
+  assert.equal(combat, 2);
+});
+
+test('sheet: spansToNextDay tags only a range that ends at its own start hour', () => {
+  // 14:00-14:00 is a full 24h shift — the label needs "(למחרת)" or it reads
+  // as a zero-length slot. Everything else must stay untagged.
+  assert.equal(spansToNextDay('14:00-14:00'), true);
+  assert.equal(spansToNextDay('06:00-06:00'), true);
+
+  assert.equal(spansToNextDay('14:00-09:00'), false); // overnight, but not full-day
+  assert.equal(spansToNextDay('22:00-6:00'), false);
+  assert.equal(spansToNextDay('09:00-14:00'), false);
+  assert.equal(spansToNextDay('14:00'), false);
+  assert.equal(spansToNextDay('יומי'), false);
+  assert.equal(spansToNextDay(''), false);
+  assert.equal(spansToNextDay('עד 14:00'), false); // the carry-over column's own label
 });
 
 // ── buildDisplayGroups (draft tab: genuine 14:00-anchored scheduler DB) ─────
