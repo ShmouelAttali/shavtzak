@@ -11,8 +11,8 @@
    themselves; only these need to be global. */
 @media print {
   @page {
-    size: A4 portrait;
-    margin: 8mm;
+    size: A4 landscape;
+    margin: 7mm;
   }
 
   /* Without this Chrome drops every background — the colored GroupCard headers,
@@ -39,16 +39,34 @@
     break-inside: avoid;
   }
 
-  /* A4 portrait gives 194mm = 733px of printable width, and the busiest card
-     (a TransposedTable with four time columns) wants 391px inside a 361px box —
-     30px of clipped names. Trimming the cells' sm:px-4 (16px/side) to 6px/side
-     frees ~80px across four columns, so it fits with room to spare.
-     `!important` is load-bearing: Tailwind emits `sm:` variants AFTER `print:`,
-     so a `print:px-2` class would lose to `sm:px-4` at 733px. */
+  /* Squeeze the cells both ways. `!important` is load-bearing on the horizontal
+     padding: Tailwind emits `sm:` variants AFTER `print:`, so a `print:px-2`
+     class would lose to the cells' own `sm:px-4` at any printable width. */
   .print-tight th,
   .print-tight td {
     padding-left: 0.375rem !important;
     padding-right: 0.375rem !important;
+    padding-top: 0.0625rem !important;
+    padding-bottom: 0.0625rem !important;
+    line-height: 1.15 !important;
+  }
+
+  /* Ruled rows read far better than the screen's near-invisible gray hairlines
+     once the vertical padding is gone and the lines sit close together. */
+  .print-tight th,
+  .print-tight td {
+    border-color: #000 !important;
+  }
+
+  .print-tight tbody td {
+    border-bottom-width: 1px !important;
+    border-bottom-style: solid !important;
+  }
+
+  /* The group header no longer needs screen-sized breathing room either. */
+  .print-tight > div:first-child {
+    padding-top: 0.125rem !important;
+    padding-bottom: 0.125rem !important;
   }
 
   /* The repeating-header wrapper must be exactly the page width. With the
@@ -63,44 +81,24 @@
   }
 
   /* ── Packing ───────────────────────────────────────────────────────────────
-     Print never stretches a card to the page width (owner's rule): each card is
-     only as wide as its own content needs, and cards then sit side by side.
+     Two columns per page, cards flowing down them and packing against each other
+     like masonry — no fixed rows, so a short card never leaves a hole beside a
+     tall one. GroupsView feeds this flow tallest-card-first, which fills the big
+     blocks in before the small ones and leaves the leftovers to slot into the
+     gaps.
 
-     Neither of the screen layouts can express that. The `sm:grid-cols-2` bands
-     force equal half-page columns, and multi-column layout also makes every
-     column identical by definition — both stretch a one-name card to the same
-     width as a four-column time table. Flex-wrap is the one model with
-     content-sized boxes: `width: max-content` per card, wrap when the row runs
-     out of room. */
+     A4 landscape at 7mm margins gives 283mm = 1070px, so each column is ~525px —
+     roomier than the whole page was in portrait. */
   .print-flow {
-    display: flex !important;
-    flex-wrap: wrap;
-    align-items: flex-start;
-    gap: 3mm;
+    columns: 2;
+    column-gap: 6mm;
   }
 
-  /* `display: contents` erases the two band wrappers from the box tree, so the
-     cards inside them become flex items of .print-flow itself rather than two
-     opaque blocks. Without this only the bands would pack, not the cards. */
-  .print-flow > .grid {
-    display: contents !important;
-  }
-
-  /* space-y-3's `> * + *` top margins fight the flex gap. */
-  .print-flow > * {
-    margin-top: 0 !important;
-  }
-
-  /* Shrink to content, but never past the page — a card whose content genuinely
-     exceeds the printable width is capped here rather than running off the edge. */
+  /* Cards fill their column (owner's call, reversing the earlier shrink-to-fit):
+     two even columns of full-width cards read as a cleaner grid than a ragged
+     right edge, and the extra width gives the wider time tables room. The tables
+     keep their own `w-full`, so they stretch with the card. */
   .print-flow .rounded-xl {
-    width: max-content;
-    max-width: 100%;
-  }
-
-  /* The tables are `w-full`, which would re-stretch each card back to its
-     container. Content width is what we actually want on paper. */
-  .print-tight table {
-    width: auto !important;
+    margin-bottom: 3mm;
   }
 }
