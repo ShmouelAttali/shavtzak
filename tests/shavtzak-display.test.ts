@@ -115,9 +115,10 @@ test('sheet: התקפי gets yesterday\'s 14:00-14:00 crew as a leading "עד 14
   const [display] = buildSheetDisplayGroups(current, null, '', yesterday, '20/07');
   const slots = display.subTypes[0].times;
 
-  assert.deepEqual(slots.map(s => s.time), ['עד 14:00', '14:00-14:00']);
+  assert.deepEqual(slots.map(s => s.time), ['14:00-14:00', '14:00-14:00']);
   assert.equal(slots[0].gray, true);
-  assert.equal(slots[0].dateLabel, '20/07');
+  assert.equal(slots[0].startDateLabel, '20/07');
+  assert.equal(slots[0].endDateLabel, '');
   assert.deepEqual(slots[0].soldiers, ['שמואל', 'אלי']);
   // today's own row is untouched
   assert.equal(slots[1].gray, false);
@@ -137,7 +138,8 @@ test('sheet: the carry-over column sorts ahead of every other hour, including a 
   const [display] = buildSheetDisplayGroups(current, null, '', yesterday, '20/07');
   const konenut = display.subTypes.find(s => s.sug === 'כוננות')!;
 
-  assert.deepEqual(konenut.times.map(s => s.time), ['עד 14:00', '14:00-14:00']);
+  assert.deepEqual(konenut.times.map(s => s.time), ['14:00-14:00', '14:00-14:00']);
+  assert.equal(konenut.times[0].startDateLabel, '20/07');
   // the carry-over is per-sub-type: תגבצ בוקר has no 14:00-14:00 row to carry
   assert.deepEqual(display.subTypes.find(s => s.sug === 'תגבצ בוקר')!.times.map(s => s.time), ['06:30-09:00']);
 });
@@ -150,7 +152,8 @@ test('sheet: a carrying sub-type missing from today\'s own rows still gets its c
   const konenut = display.subTypes.find(s => s.sug === 'כוננות');
 
   assert.ok(konenut);
-  assert.deepEqual(konenut!.times.map(s => s.time), ['עד 14:00']);
+  assert.deepEqual(konenut!.times.map(s => s.time), ['14:00-14:00']);
+  assert.equal(konenut!.times[0].startDateLabel, '20/07');
   assert.deepEqual(konenut!.times[0].soldiers, ['ג', 'ד']);
 });
 
@@ -201,7 +204,6 @@ test('sheet: spansToNextDay tags only a range that ends at its own start hour', 
   assert.equal(spansToNextDay('14:00'), false);
   assert.equal(spansToNextDay('יומי'), false);
   assert.equal(spansToNextDay(''), false);
-  assert.equal(spansToNextDay('עד 14:00'), false); // the carry-over column's own label
 });
 
 // ── buildDisplayGroups (draft tab: genuine 14:00-anchored scheduler DB) ─────

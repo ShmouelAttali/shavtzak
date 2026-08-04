@@ -232,25 +232,57 @@ export function spansToNextDay(time: string): boolean {
     return parseInt(range[1]) * 60 + parseInt(range[2]) === parseInt(range[3]) * 60 + parseInt(range[4]);
 }
 
+// For a spansToNextDay slot, the calendar date its end actually falls on —
+// one day after `startDateStr` (the date the slot's own start hour lands
+// on). Owner preference: spell out the real date rather than an "(למחרת)"
+// tag, which reads ambiguous once a slot is already merged in from a
+// different day.
+function wrapEndDateLabel(time: string, startDateStr: string): string {
+    if (!spansToNextDay(time)) return '';
+    return shortDate(parseAnyDate(shiftDateStr(startDateStr, 1)));
+}
+
+// A raw sheet range like "6:00-14:00" reads ambiguously (which end is
+// start?) — split it into zero-padded start/end hours so the caller can
+// render "HH:MM עד HH:MM" with a same-size date tag next to whichever end
+// needs one. Returns null for bare clock times ("14:00") and non-time
+// labels (יומי), which render as plain text instead.
+function parseRangeHours(time: string): { start: string; end: string } | null {
+    const range = /^(\d{1,2}):(\d{2})-(\d{1,2}):(\d{2})$/.exec(time);
+    if (!range) return null;
+    const pad = (s: string) => s.padStart(2, '0');
+    return {start: `${pad(range[1])}:${range[2]}`, end: `${pad(range[3])}:${range[4]}`};
+}
+
+const DATE_TAG_CLASS = 'text-[10px] font-normal opacity-80';
+
 // Shared hour-label renderer: normal styling for same-day hours, grayed +
 // dated for hours that land on a different calendar day than the one being
 // viewed. `gray`/`dateLabel` are precomputed per slot (see slotMoment)
 // rather than re-derived here, since the same clock hour (e.g. "06:00") can
 // appear twice once the previous day's tail is merged in — once as this
 // morning, once as tomorrow morning — and only real date comparison tells
-// them apart.
-function TimeLabel({time, gray, dateLabel, activeClass, futureClass = 'text-gray-400'}: {
-    time: string; gray: boolean; dateLabel: string; activeClass: string; futureClass?: string;
+// them apart. `startDateLabel`/`endDateLabel` tag a 24h span's (see
+// spansToNextDay) start/end hour with the real date, at the same small size
+// on both sides, whichever end isn't the day currently being viewed.
+function TimeLabel({time, gray, dateLabel, startDateLabel, endDateLabel, activeClass, futureClass = 'text-gray-400'}: {
+    time: string; gray: boolean; dateLabel: string; startDateLabel: string; endDateLabel: string;
+    activeClass: string; futureClass?: string;
 }) {
-    const label = time || 'יומי';
+    const hours = parseRangeHours(time);
     return (
         <span className={gray ? futureClass : activeClass}>
-            {label}
-            {spansToNextDay(time) && (
-                <span className="text-[10px] font-normal opacity-80">(למחרת)</span>
-            )}
+            {hours ? (
+                <>
+                    {hours.start}
+                    {startDateLabel && <span className={DATE_TAG_CLASS}> ({startDateLabel})</span>}
+                    {' עד '}
+                    {hours.end}
+                    {endDateLabel && <span className={DATE_TAG_CLASS}> ({endDateLabel})</span>}
+                </>
+            ) : (time || 'יומי')}
             {gray && dateLabel && (
-                <span className="text-[10px] font-normal opacity-80"> ({dateLabel})</span>
+                <span className={DATE_TAG_CLASS}> ({dateLabel})</span>
             )}
         </span>
     );
@@ -274,6 +306,8 @@ interface DisplaySlot {
     time: string;
     gray: boolean;
     dateLabel: string;
+    startDateLabel: string;
+    endDateLabel: string;
     soldiers: string[];
     ms: number;
 }
@@ -297,9 +331,15 @@ function toDisplaySubTypes(recordDate: string, subTypes: SubType[]): DisplaySubT
         sug: s.sug,
         times: s.times.map(t => {
             const moment = slotMoment(recordDate, t.time);
-            if (!moment) return {time: t.time, gray: false, dateLabel: '', soldiers: t.soldiers, ms: Infinity};
+            if (!moment) {
+                return {time: t.time, gray: false, dateLabel: '', startDateLabel: '', endDateLabel: '', soldiers: t.soldiers, ms: Infinity};
+            }
             const gray = moment.dateStr !== recordDate;
-            return {time: t.time, gray, dateLabel: gray ? moment.short : '', soldiers: t.soldiers, ms: moment.ms};
+            return {
+                time: t.time, gray, dateLabel: gray ? moment.short : '',
+                startDateLabel: '', endDateLabel: gray ? '' : wrapEndDateLabel(t.time, recordDate),
+                soldiers: t.soldiers, ms: moment.ms,
+            };
         }),
     }));
 }
@@ -408,17 +448,28 @@ export function buildDisplayGroups(selDate: string, current: StationGroup[], pre
             for (const t of prevSub?.times ?? []) {
                 const moment = slotMoment(prevDate, t.time);
                 if (moment && moment.dateStr === selDate) {
-                    times.push({time: t.time, gray: false, dateLabel: '', soldiers: t.soldiers, ms: moment.ms});
+                    times.push({
+                        time: t.time, gray: false, dateLabel: '',
+                        startDateLabel: '', endDateLabel: wrapEndDateLabel(t.time, selDate),
+                        soldiers: t.soldiers, ms: moment.ms,
+                    });
                 }
             }
             for (const t of curSub?.times ?? []) {
                 const moment = slotMoment(selDate, t.time);
                 if (!moment) {
-                    times.push({time: t.time, gray: false, dateLabel: '', soldiers: t.soldiers, ms: Infinity});
+                    times.push({
+                        time: t.time, gray: false, dateLabel: '', startDateLabel: '', endDateLabel: '',
+                        soldiers: t.soldiers, ms: Infinity,
+                    });
                     continue;
                 }
                 const gray = moment.dateStr !== selDate;
-                times.push({time: t.time, gray, dateLabel: gray ? moment.short : '', soldiers: t.soldiers, ms: moment.ms});
+                times.push({
+                    time: t.time, gray, dateLabel: gray ? moment.short : '',
+                    startDateLabel: '', endDateLabel: gray ? '' : wrapEndDateLabel(t.time, selDate),
+                    soldiers: t.soldiers, ms: moment.ms,
+                });
             }
             times.sort((a, b) => a.ms - b.ms);
             return {sug, times};
@@ -439,7 +490,10 @@ export function buildDisplayGroups(selDate: string, current: StationGroup[], pre
 function rawSlotsOnly(subTypes: SubType[]): DisplaySubType[] {
     return subTypes.map(s => ({
         sug: s.sug,
-        times: s.times.map(t => ({time: t.time, gray: false, dateLabel: '', soldiers: t.soldiers, ms: timeOfDayMinutes(t.time)})),
+        times: s.times.map(t => ({
+            time: t.time, gray: false, dateLabel: '', startDateLabel: '', endDateLabel: '',
+            soldiers: t.soldiers, ms: timeOfDayMinutes(t.time),
+        })),
     }));
 }
 
@@ -463,7 +517,6 @@ const YESTERDAY_OFFSET = -10_000;
 // "a range whose end equals its start".
 const CARRY_OVER_GROUP = 'התקפי';
 const CARRY_OVER_TIME = '14:00-14:00';
-const CARRY_OVER_LABEL = 'עד 14:00';
 
 function carriedOverSlot(group: StationGroup | undefined, sug: string): TimeSlot | undefined {
     return group?.subTypes.find(s => s.sug === sug)?.times.find(t => t.time === CARRY_OVER_TIME);
@@ -532,18 +585,24 @@ export function buildSheetDisplayGroups(
             const carried = carryOver ? carriedOverSlot(prevGroup, sug) : undefined;
             if (carried && carried.soldiers.length > 0) {
                 times.push({
-                    time: CARRY_OVER_LABEL, gray: true, dateLabel: prevDateShort,
+                    time: CARRY_OVER_TIME, gray: true, dateLabel: '',
+                    startDateLabel: prevDateShort, endDateLabel: '',
                     soldiers: carried.soldiers, ms: YESTERDAY_OFFSET,
                 });
             }
             for (const t of curSub?.times ?? []) {
-                times.push({time: t.time, gray: false, dateLabel: '', soldiers: t.soldiers, ms: timeOfDayMinutes(t.time)});
+                times.push({
+                    time: t.time, gray: false, dateLabel: '', startDateLabel: '',
+                    endDateLabel: spansToNextDay(t.time) ? nextDateShort : '',
+                    soldiers: t.soldiers, ms: timeOfDayMinutes(t.time),
+                });
             }
             for (const t of nextSub?.times ?? []) {
                 const start = parseSlotStart(t.time);
                 if (!start || start.h >= 14) continue; // only tomorrow's early look-ahead, before 14:00
                 times.push({
-                    time: t.time, gray: true, dateLabel: nextDateShort, soldiers: t.soldiers,
+                    time: t.time, gray: true, dateLabel: nextDateShort, startDateLabel: '', endDateLabel: '',
+                    soldiers: t.soldiers,
                     ms: TOMORROW_OFFSET + start.h * 60 + start.m,
                 });
             }
@@ -754,6 +813,7 @@ function TransposedTable({sub, bg, rowAlt, colHeader, groupName = ''}: {
                         <th key={`${slot.gray ? 1 : 0}:${slot.time}`}
                             className={`py-2 px-2 sm:px-4 text-center text-sm font-semibold border-b-2 border-gray-200 ${colHeader}`}>
                             <TimeLabel time={slot.time} gray={slot.gray} dateLabel={slot.dateLabel}
+                                       startDateLabel={slot.startDateLabel} endDateLabel={slot.endDateLabel}
                                        activeClass="text-gray-700"/>
                         </th>
                     ))}
@@ -810,6 +870,7 @@ function MultiTypeTable({subTypes, bg, rowAlt, colHeader}: {
                         <tr key={key} className={`border-b border-gray-100 ${idx % 2 === 1 ? rowAlt : ''}`}>
                             <td className="py-2 px-4 text-sm font-bold whitespace-nowrap">
                                 <TimeLabel time={slot.time} gray={slot.gray} dateLabel={slot.dateLabel}
+                                           startDateLabel={slot.startDateLabel} endDateLabel={slot.endDateLabel}
                                            activeClass="text-gray-600"/>
                             </td>
                             {subTypes.map(sub => {
@@ -859,6 +920,7 @@ function MissionCards({subTypes, colHeader}: {
                             <div key={`${entry.gray ? 1 : 0}:${entry.time}`} className="px-3 py-1.5">
                                 <div className="text-[11px] font-semibold text-gray-400 mb-0.5">
                                     <TimeLabel time={entry.time} gray={entry.gray} dateLabel={entry.dateLabel}
+                                               startDateLabel={entry.startDateLabel} endDateLabel={entry.endDateLabel}
                                                activeClass="text-gray-400"/>
                                 </div>
                                 <div className="flex flex-wrap gap-x-2 gap-y-0.5">
