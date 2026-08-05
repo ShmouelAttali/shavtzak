@@ -192,14 +192,16 @@ test('sheet: the carry-over crew does not inflate today\'s headcounts', () => {
   assert.equal(combat, 2);
 });
 
-test('sheet: spansToNextDay tags only a range that ends at its own start hour', () => {
-  // 14:00-14:00 is a full 24h shift — the label needs "(למחרת)" or it reads
-  // as a zero-length slot. Everything else must stay untagged.
+test('sheet: spansToNextDay tags any range whose end lands on the day after its start', () => {
+  // 14:00-14:00 is a full 24h shift — the label needs a date tag or it reads
+  // as a zero-length slot. A genuine overnight range (14:00-09:00,
+  // 22:00-6:00) also ends the next calendar day, so it's tagged too.
+  // Same-day ranges (end strictly after start) must stay untagged.
   assert.equal(spansToNextDay('14:00-14:00'), true);
   assert.equal(spansToNextDay('06:00-06:00'), true);
+  assert.equal(spansToNextDay('14:00-09:00'), true);
+  assert.equal(spansToNextDay('22:00-6:00'), true);
 
-  assert.equal(spansToNextDay('14:00-09:00'), false); // overnight, but not full-day
-  assert.equal(spansToNextDay('22:00-6:00'), false);
   assert.equal(spansToNextDay('09:00-14:00'), false);
   assert.equal(spansToNextDay('14:00'), false);
   assert.equal(spansToNextDay('יומי'), false);

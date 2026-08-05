@@ -221,22 +221,27 @@ function slotMoment(recordDate: string, time: string): { dateStr: string; short:
     return {dateStr: formatLikeTemplate(recordDate, dt), short: shortDate(dt), ms: dt.getTime()};
 }
 
-// A range whose end equals its start ("14:00-14:00", כוננות התקפי) is a full
-// 24h shift, but on the board it reads as a zero-length slot. True whenever
-// the label needs a "(למחרת)" tag to make the end unmistakably tomorrow's.
-// Display only — `slot.time` stays the raw sheet string everywhere else
-// (map keys, popups, the draft tab's `${name}|${time}` meta lookups).
+// True for any range whose end doesn't come after its start within the same
+// day — a genuine overnight range ("14:00-09:00", "22:00-6:00") or a range
+// whose end equals its start ("14:00-14:00", כוננות התקפי — a full 24h
+// shift that reads as a zero-length slot without help). Either way the end
+// hour actually lands on the calendar day AFTER the start's, which the bare
+// hour alone doesn't say. Display only — `slot.time` stays the raw sheet
+// string everywhere else (map keys, popups, the draft tab's `${name}|${time}`
+// meta lookups).
 export function spansToNextDay(time: string): boolean {
     const range = /^(\d{1,2}):(\d{2})-(\d{1,2}):(\d{2})$/.exec(time);
     if (!range) return false;
-    return parseInt(range[1]) * 60 + parseInt(range[2]) === parseInt(range[3]) * 60 + parseInt(range[4]);
+    const startMin = parseInt(range[1]) * 60 + parseInt(range[2]);
+    const endMin = parseInt(range[3]) * 60 + parseInt(range[4]);
+    return endMin <= startMin;
 }
 
 // For a spansToNextDay slot, the calendar date its end actually falls on —
 // one day after `startDateStr` (the date the slot's own start hour lands
-// on). Owner preference: spell out the real date rather than an "(למחרת)"
-// tag, which reads ambiguous once a slot is already merged in from a
-// different day.
+// on). Owner preference: spell out the real date next to the end hour
+// rather than leaving it bare or using a relative "(למחרת)" tag, which
+// reads ambiguous once a slot is already merged in from a different day.
 function wrapEndDateLabel(time: string, startDateStr: string): string {
     if (!spansToNextDay(time)) return '';
     return shortDate(parseAnyDate(shiftDateStr(startDateStr, 1)));
