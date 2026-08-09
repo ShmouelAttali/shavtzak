@@ -1,6 +1,14 @@
 /** @OnlyCurrentDoc */
 /**
- * Shabtzak Recommendations Engine v3.7 - שעון לחימה 14:00-14:00
+ * Shabtzak Recommendations Engine v3.8 - שעון לחימה 14:00-14:00
+ *
+ * שינויים ב-v3.8 - צוותי התקפי:
+ * 1. התקפי יוצא בשני צוותים באותה קבוצה (משבצות 1-4 ו-5-8). ההעדפה
+ *    "אותה מחלקה כמו המפקד" נמדדת מול מפקד הצוות של אותה משבצת:
+ *    משבצות 2-4 לפי המפקד במשבצת 1, ומשבצות 6-8 לפי המפקד במשבצת 5.
+ *    קודם כל שמונה המשבצות נמדדו מול המפקד שבמשבצת 1.
+ * 2. צוות בלי מפקד משלו לא "שואל" את מפקד הצוות השני - אין לו עוגן,
+ *    ולכן פשוט אין לו העדפת מחלקה.
  *
  * שינויים ב-v3.7 - יציאה קצרה מאושרת:
  * 1. סטטוס יציאה ב"מצבת החיילים" ("יציאה מ10 עד 22" / "יציאה מ20" /
@@ -189,6 +197,11 @@ const SHABTZAK_REC_CONFIG = {
   postOfficerKeywords: ['קצין מוצב'],
 
   fullDayBlockingTimeKeywords: ['יומי'],
+
+  // v3.7: התקפי יוצא בצוותים של 4 באותה קבוצה - משבצות 1-4 ו-5-8.
+  // המשבצת הראשונה בכל צוות היא מפקד הצוות, ולפיו נקבעת העדפת המחלקה
+  // לשאר משבצות אותו צוות. 0 = בלי חלוקה לצוותים.
+  attackTeamSize: 4,
 
   magenKeywords: ['מגן', 'מגן השומרון'],
   tagbatzKeywords: ['תגבצ', 'תגב״צ', 'תגב"צ'],
@@ -1447,18 +1460,55 @@ function getFirstSlotCommanderStatus_(task, group, soldiersByName, config) {
   return { required: true, status: 'wrong', text: '⚠ המשבצת הראשונה אינה מפקד' };
 }
 
+/**
+ * v3.7: התקפי יוצא בכמה צוותים באותה קבוצה - כל attackTeamSize משבצות
+ * רצופות הן צוות, והמשבצת הראשונה של כל צוות היא המפקד שלו (1 ו-5
+ * בקבוצה בת 8). לשאר הקטגוריות אין חלוקה כזו והצוות הוא כל הקבוצה.
+ */
+function getTeamSizeForTask_(task, config) {
+  if (task && task.category === 'attack') return config.attackTeamSize || 0;
+  return 0;
+}
+
+function getTeamTasksForTask_(task, group, config) {
+  const tasks = getGroupTasksSortedByRow_(group);
+  const size = getTeamSizeForTask_(task, config);
+  if (!size || tasks.length <= size) return tasks;
+
+  let index = -1;
+  for (let i = 0; i < tasks.length; i++) {
+    if (task && tasks[i].rowNumber === task.rowNumber) { index = i; break; }
+  }
+  if (index === -1) return tasks;
+
+  const start = Math.floor(index / size) * size;
+  return tasks.slice(start, start + size);
+}
+
+function isTaskInSplitTeam_(task, group, config) {
+  const size = getTeamSizeForTask_(task, config);
+  return !!size && getGroupTasksSortedByRow_(group).length > size;
+}
+
+/**
+ * המפקד שאליו מיוחסת המשבצת: המשבצת הראשונה של הצוות, ואם אין בה מפקד -
+ * המפקד הראשון בתוך אותו צוות. בהתקפי מפוצל לא "שואלים" את מפקד הצוות
+ * השני: לצוות בלי מפקד אין עוגן, ולכן אין העדפת מחלקה.
+ */
 function getAssignedGroupCommander_(task, group, soldiersByName, config) {
   if (!group || !group.tasks) return null;
 
-  const firstTask = getFirstTaskInGroup_(group);
+  const teamTasks = getTeamTasksForTask_(task, group, config);
+  if (!teamTasks.length) return null;
+
+  const firstTask = teamTasks[0];
   if (firstTask && firstTask.assigned) {
     const firstSoldier = soldiersByName[normalizeNameKey_(firstTask.assigned)];
     if (firstSoldier && soldierCanCommandTask_(firstSoldier, task)) return firstSoldier;
   }
 
-  const sortedTasks = getGroupTasksSortedByRow_(group);
-  for (let i = 0; i < sortedTasks.length; i++) {
-    const t = sortedTasks[i];
+  for (let i = 0; i < teamTasks.length; i++) {
+    const t = teamTasks[i];
     if (!t || !t.assigned) continue;
     const s = soldiersByName[normalizeNameKey_(t.assigned)];
     if (s && soldierCanCommandTask_(s, task)) return s;
@@ -1628,6 +1678,7 @@ function evaluateCandidateForTask_(soldier, task, context) {
     previousAssignment: null,
     previousDayMatch: null,
     samePlatoonAsGroupCommander: false,
+    samePlatoonCommanderLabel: '',
     stats: null,
     sameDayMissionHours: 0,
     sameDayKonenutHours: 0
@@ -1937,7 +1988,12 @@ function applySamePlatoonAsGroupCommanderScoring_(result, soldier, task, group, 
 
   result.score += config.scoring.samePlatoonAsGroupCommanderBonus || -7;
   result.samePlatoonAsGroupCommander = true;
-  result.reasons.push('אותה מחלקה כמו המפקד');
+  // v3.8: בהתקפי מפוצל ההשוואה היא מול מפקד הצוות של המשבצת, לא מול
+  // המפקד של המשבצת הראשונה בקבוצה.
+  result.samePlatoonCommanderLabel = isTaskInSplitTeam_(task, group, config)
+    ? 'אותה מחלקה כמו מפקד הצוות'
+    : 'אותה מחלקה כמו המפקד';
+  result.reasons.push(result.samePlatoonCommanderLabel);
 }
 
 function applyRoleScoring_(result, soldier, task, group, soldiersByName, currentTasks, config) {
@@ -2568,7 +2624,7 @@ function formatCandidateFit_(ev) {
 
   if (soldier.isDudDriver) parts.push('נהג דוד');
   if (soldier.isTigerDriver) parts.push('נהג טיגריס');
-  if (ev.samePlatoonAsGroupCommander) parts.push('אותה מחלקה כמו המפקד');
+  if (ev.samePlatoonAsGroupCommander) parts.push(ev.samePlatoonCommanderLabel || 'אותה מחלקה כמו המפקד');
 
   if (ev.previousDayMatch && ev.previousDayMatch.sameTask) {
     parts.push('⚠ אותה משימה אתמול');

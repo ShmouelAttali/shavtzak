@@ -12,8 +12,11 @@ import path from 'node:path';
  * all three driver seats already filled, so the reservation never triggers
  * there. Here we control how many drivers exist and which seats are open.
  */
-const REC = path.join(process.cwd(), 'apps-script/plugat-gaash/ShavtzakRecommendation.js');
-const SOURCE = fs.readFileSync(REC, 'utf8');
+// Both files share one global scope in Apps Script and are loaded in filename
+// order; the engine calls helpers that live in ShabtzakOps.js (parseExitStatus_).
+const DIR = path.join(process.cwd(), 'apps-script/plugat-gaash');
+const SOURCES = ['ShabtzakOps.js', 'ShavtzakRecommendation.js']
+  .map(f => fs.readFileSync(path.join(DIR, f), 'utf8'));
 
 const BASE = '11/08/2026';
 const NEXT = '12/08/2026';
@@ -152,7 +155,7 @@ function runEngine(tasks: Task[], roster: Soldier[] = ROSTER, history: HistoryRo
   };
   ctx.globalThis = ctx;
   vm.createContext(ctx);
-  vm.runInContext(SOURCE, ctx);
+  for (const source of SOURCES) vm.runInContext(source, ctx);
   vm.runInContext('updateShabtzakRecommendations()', ctx);
 
   const body = writes.filter(w => w.kind === 'values').reduce((b, w) => (w.values.length > b.values.length ? w : b));
