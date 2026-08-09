@@ -64,10 +64,24 @@ proven otherwise.
 and shared with elyashivlavi@gmail.com, bound to spreadsheet
 `1FCuaQsOvDzrHcVhlYy49Mr5p6gTyTjEF1GqnW5frXDg`.
 
-- `ShabtzakOps.js` (~1.8k lines) — header `v3.10 שעון לחימה 14:00-14:00`.
+- `ShabtzakOps.js` (~1.8k lines) — header `v3.11 שעון לחימה 14:00-14:00`.
   Validation (rest between shifts, overlaps, כרמל based on defense posts, כרמל
   minimum staff, tracker based on tours, daily hours, availability), the כרמל
   fills, and the roster-status diff dialog.
+
+**Daily missions are written four ways** and all of them mean the same thing:
+`יומי`, `14:00-14:00`, and the split-at-09:00 pair `14:00-09:00` (19h) +
+`09:00-14:00` (5h). v3.11 classifies any range of `DAILY_MIN_SPAN_HOURS` (12) or
+more as a daily mission — counted as `DAILY_HOURS` (8) toward the cap and
+excluded from overlap checks, exactly like `יומי`. The short complement stays an
+ordinary shift, by owner decision 2026-08-09.
+
+Before v3.11 only the literal word `יומי` was handled, so the other spellings
+were counted at 19–24h: **184 over-8h errors and 50 overlap errors across 13 days
+of real data, of which 135 and 34 were false.** Pinned by
+`tests/apps-script-daily-mission.test.ts`. If validation output ever looks like
+noise again, check the time-spelling census first — that harness is the fastest
+way to tell a format drift from a real scheduling problem.
 - `ShavtzakRecommendation.js` (~2.4k lines) — the recommendations engine, plus
   `installShabtzakTriggers` / `removeShabtzakTriggers`.
 - `appsscript.json` — `Asia/Jerusalem`, V8, and a sheet macro `runShabtzakNow`
@@ -84,23 +98,92 @@ signed-in account. Shmouel can have `onShabtzakEdit` installed under his account
 and yours will show 0. If the sheet "changes by itself", that is the first thing
 to suspect, and you cannot confirm it from your own account.
 
-## ⚠ The 14:00 trap — the two halves disagree
+## יציאה קצרה — approved short exits
 
-`CLAUDE.md` says **sheet dates are LITERAL** for the viewer: the תאריך in a row
-is that row's calendar day, no 14:00 anchor, no `h < 6 → h + 24`. That is
-owner-confirmed and pinned by `tests/shavtzak-display.test.ts` and
-`tests/personal-schedule.test.ts`.
+An approved exit is written by the officer into the `מצבת החיילים` date cell in
+one of **three whole-hour forms**, always within a single calendar day:
 
-The Apps Script does the opposite. `CONFIG.OPERATIONAL_DAY_START_HOUR = 14`, and
-its header states *"שעות לפני 14:00 שייכות קלנדרית ליום שאחרי התאריך הרשום"* —
-hours before 14:00 belong to the day *after* the written date. See
-`operationalDayOfDateTime_`, `calendarDateForOpDaySlot_`,
-`normalizeToOperationalDay_`, `getPreviousOpDayShifts_`.
+| Cell text | Window |
+|---|---|
+| `יציאה מ10 עד 22` | 10:00 → 22:00 |
+| `יציאה מ20` | 20:00 → midnight ("won't return before the end of the day") |
+| `יציאה עד 10` | midnight → 10:00 |
 
-Both statements are load-bearing where they live. **Never carry one convention
-into the other half**, and never "fix" the viewer to match the script (that
-mistake has already been made twice). Flagged to the owner 2026-08-09; if he has
-since reconciled them, this section is what needs updating.
+Hours are 0–23, one or two digits, no minutes — `יציאה 12:00-20:00` is **not** a
+valid form (it was the first design and was replaced).
+
+⚠ **The sheet does not enforce this — the scripts are the only gate.** A cell
+carries one validation rule and a custom formula kills the dropdown, so
+`O4:CR145` keeps its `ONE_OF_RANGE` dropdown over `'אפשרויות'!$C$2:$C$30` with
+`strict: false` (warn, don't reject) plus an `inputMessage` listing the three
+forms (owner decision 2026-08-09, applied via the Sheets API). A typo is kept
+with an orange corner. That is exactly why `looksLikeTimedExit_` must keep
+warning on unparseable `יציאה` values — it is the last line of defence, and
+without it a mistyped exit reads as "present". Requests originate in
+the separate *Soldier Deployment Records* doc (see the
+`deployment-requests-sheet` skill), but **approval is manual and neither script
+reads that doc** — which is what lets `ShavtzakRecommendation.js` keep its
+`/** @OnlyCurrentDoc */` annotation and its narrow OAuth scopes. The cell text is
+the entire contract.
+
+Semantics, decided by the owner 2026-08-09:
+
+- It **occupies its window only** — not the whole day. Half-open, so an exit
+  ending 22:00 and a shift starting 22:00 are both fine.
+- It is **worth 0 working hours and requires no rest around it**. On the Ops side
+  that is free (exits live in the roster, never in `כל השבצק`, so they can't
+  enter hours or rest math). In the engine it is deliberate: the exit is *not*
+  injected into `assignments`, only checked for overlap.
+- Legacy dropdown values (`יציאה בערב`, `יציאה בבוקר`, `יציאה ב14:00`) have no
+  times and keep behaving exactly as before — they block nothing.
+- A value starting with `יציאה` that contains digits but fails to parse raises a
+  **warning**, never silence. A swallowed exit shows the soldier as available,
+  which is the exact failure this feature exists to prevent.
+
+`parseExitStatus_` / `looksLikeTimedExit_` / `rangesOverlap_` live in
+`ShabtzakOps.js` and are used from both files — the project shares one global
+scope. ⚠ That scope also means **`addDays_`, `formatHours_` and `pad2_` are
+defined in both files**; the engine's definitions win (files load in filename
+order, `ShabtzakOps` first). The two `addDays_` differ — Ops strips the time,
+the engine preserves it — so never rely on that behavior without checking.
+
+In the engine the block sits in `evaluateCandidateForTask_` **outside**
+`availabilityCache` on purpose: that cache is keyed per day, so caching a
+time-dependent answer would leak one slot's verdict onto another.
+
+`exitPackageMisfitPenalty: 45` is a *soft* penalty on a partial mission whose
+complementary shift has nowhere to go around the exit. It is deliberately
+conservative — it fires only when **no** contiguous gap in the operational day
+fits the residual hours, so it under-fires rather than mis-steering. When the
+exit fits several mission types, nothing is penalised and ordinary factors
+(rotation, same-task-yesterday, load) decide, which is the required behavior.
+
+## The 14:00 operational day — a grouping, not a second date convention
+
+This one has burned two agents (and this skill's first draft). Get it right:
+
+**תאריך in `כל השבצק` is always the literal calendar day of the row.** Verified
+against the sheet: within a single operational day, the 18:00 and 22:00 rows
+carry `11/08` while the 02:00, 06:00 and 10:00 rows carry `12/08`. The `שבצק`
+tab's own header says the day runs *"שבת ב14:00 עד ראשון ב14:00"* — and it still
+writes each row under its true calendar date.
+
+So the operational day is a **grouping over literal dates**, computed by
+`operationalDayOfDateTime_(calDate, minutes)` (before 14:00 → the op day that
+started yesterday). `normalizeToOperationalDay_` adds 24h to pre-14:00 times only
+on the *internal* minute axis, so shifts within one op day can be compared and
+sorted. Neither rewrites what a date means.
+
+This does **not** contradict `CLAUDE.md`'s "Sheet dates are LITERAL" — that rule
+forbids a *viewer* surface from inventing a rollover, and the script doesn't
+invent one either. Both are true simultaneously. What is still forbidden: giving
+the viewer an operational-day anchor (pinned by `tests/shavtzak-display.test.ts`,
+`tests/personal-schedule.test.ts`).
+
+The old `calendarDateForOpDaySlot_` carried a comment implying the written date
+was the *op* day. It was never called, it was the source of the confusion, and
+v3.11 deleted it. If you find yourself concluding the two halves disagree,
+re-read this section before acting.
 
 ## Inspecting Google's side
 

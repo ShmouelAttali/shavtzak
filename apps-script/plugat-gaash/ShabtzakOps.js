@@ -1,13 +1,43 @@
 /***************
- * שבצ"ק - ולידציה, מילוי ומצבה (קובץ מאוחד) - v3.10 שעון לחימה 14:00-14:00
+ * שבצ"ק - ולידציה, מילוי ומצבה (קובץ מאוחד) - v3.12 שעון לחימה 14:00-14:00
  *
  * Sheet names:
  * - כל השבצק
  * - מצבת החיילים
  *
- * שינויים בגרסה זו:
+ * שינויים בגרסה זו (v3.12) - יציאה קצרה מאושרת:
+ * 1. סטטוס יציאה ב"מצבת החיילים" נקרא כחלון זמן אמיתי, באחת משלוש
+ *    צורות בשעות עגולות ובתוך יום קלנדרי אחד:
+ *      "יציאה מ10 עד 22" - חלון מפורש
+ *      "יציאה מ20"       - יוצא ואינו חוזר עד חצות
+ *      "יציאה עד 10"     - אינו בבסיס מחצות ועד השעה הזו
+ *    שיבוץ שחופף לחלון הוא שגיאה. הבדיקה חצי-פתוחה: יציאה עד 22
+ *    ומשימה שמתחילה ב-22:00 תקינות.
+ * 2. היציאה אינה משימה - היא לא נספרת בשעות עבודה ולא דורשת מנוחה
+ *    סביבה. זה מתקיים מאליו: היציאה נמצאת במצבה ולא ב"כל השבצק",
+ *    ולכן אינה נכנסת לחישובי השעות והמנוחה.
+ * 3. ערך שמתחיל ב"יציאה" עם ספרות ואינו בפורמט מפיק אזהרה. אסור
+ *    שייבלע בשקט - חייל שיצא ייראה זמין.
+ * 4. ערכי הרשימה ההיסטוריים (יציאה בערב / בבוקר / ב14:00) ממשיכים
+ *    להתנהג בדיוק כמו קודם ואינם חוסמים.
+ *    parseExitStatus_ משותפת גם ל-ShavtzakRecommendation.
+ *
+ * שינויים קודמים (v3.11):
+ * 1. משימה יומית מזוהה לפי אורך הטווח ולא רק לפי המילה "יומי".
+ *    ב"כל השבצק" אותה משימה נכתבת גם "14:00-14:00" וגם מפוצלת
+ *    בהעברה ב-09:00 ("14:00-09:00"). כל טווח באורך
+ *    DAILY_MIN_SPAN_HOURS ומעלה נספר כ-DAILY_HOURS ולא נכנס
+ *    לבדיקת חפיפות - בדיוק כמו "יומי". קודם לכן הן נספרו לפי
+ *    אורכן המלא (19-24 שעות) וייצרו חריגות וחפיפות שווא.
+ * 2. הובהר שעמודת "תאריך" היא התאריך הקלנדרי האמיתי של השורה,
+ *    והיממה המבצעית היא קיבוץ מעליה (ראה operationalDayOfDateTime_).
+ * 3. נמחק קוד מת: calendarDateForOpDaySlot_ (שהתיאור שלה סתר את
+ *    הנ"ל ולא נקראה מעולם), findCarmelRowsToFill_ ו-
+ *    findAttackReadinessRowsToFill_ (הוחלפו ב-
+ *    groupCarmelRowsByAbsoluteStart_) ו-runAllShabzakValidationForIso.
+ *
+ * שינויים קודמים (v3.10):
  * 1. היממה המבצעית: 14:00 עד 14:00 למחרת (OPERATIONAL_DAY_START_HOUR).
- *    שעות לפני 14:00 שייכות קלנדרית ליום שאחרי התאריך הרשום.
  * 2. כונן גשש: 3 משמרות (14-22 / 22-07 / 07-14) על בסיס יורדי סיור.
  *    - לא נספר במנוחה ולא בתקרת 8 השעות (כוננות שינה).
  *    - ולידציה חדשה: כל משמרת גשש חייבת להיות מאוישת ע"י חייל
@@ -50,6 +80,13 @@ const CONFIG = {
 
   DAILY_HOURS: 8,
 
+  // v3.11: משימה יומית נכתבת ב"כל השבצק" בכמה צורות שוות ערך -
+  // "יומי", "14:00-14:00", וגם מפוצלת בהעברה ב-09:00
+  // ("14:00-09:00" = 19 שעות). כל טווח שאורכו לפחות DAILY_MIN_SPAN_HOURS
+  // נחשב משימה יומית: נספר כ-DAILY_HOURS ולא נכנס לבדיקת חפיפות.
+  // המשלים הקצר ("09:00-14:00" = 5 שעות) נשאר משמרת רגילה לכל דבר.
+  DAILY_MIN_SPAN_HOURS: 12,
+
   SINGLE_TIME_DURATION_BY_TYPE: {
     'סיור': 8,
     'עמדות הגנה': 4,
@@ -63,6 +100,17 @@ const CONFIG = {
   },
 
   UNAVAILABLE_STATUS_WORDS: ['חופש', 'לא מגויס'],
+
+  // v3.12: יציאה קצרה מאושרת נרשמת ב"מצבת החיילים" באחת משלוש הצורות
+  // (שעות עגולות, יום קלנדרי אחד): "יציאה מ10 עד 22", "יציאה מ20"
+  // (עד חצות), "יציאה עד 10" (מחצות). היא חוסמת שיבוץ שחופף לה, לא
+  // נספרת כשעות עבודה, ולא דורשת מנוחה סביבה - חייל שיצא עד 22
+  // יכול לעלות למשימה שמתחילה ב-22:00.
+  EXIT_STATUS_PREFIX: 'יציאה',
+
+  // ערכי היציאה ההיסטוריים מרשימת "אפשרויות" - אין להם שעות, והם
+  // ממשיכים להתנהג כמו קודם (לא חוסמים). לא מתריעים עליהם כשגיאת פורמט.
+  LEGACY_EXIT_STATUSES: ['יציאה בערב', 'יציאה בבוקר', 'יציאה ב14:00'],
 
   HEADER_NAMES: {
     scheduleDate: 'תאריך',
@@ -243,17 +291,7 @@ function buildParsedShifts_(rows, errors, warnings, contextLabel) {
 function parseShiftTime_(row, warnings, contextLabel) {
   const text = normalizeTimeText_(row.timeText);
 
-  if (text === 'יומי') {
-    // v2.0: משימה יומית = היממה המבצעית המלאה 14:00 עד 14:00 למחרת.
-    // לצורך תקרת השעות היא נספרת כ-DAILY_HOURS (8), לא כ-24.
-    return {
-      isDaily: true,
-      hasRealTimeRange: false,
-      startMin: null,
-      endMin: null,
-      hoursForDailyTotal: CONFIG.DAILY_HOURS
-    };
-  }
+  if (text === 'יומי') return dailyTimeInfo_();
 
   const fixed = CONFIG.SPECIAL_FIXED_RANGES_BY_POSITION[row.position];
   if (fixed) {
@@ -283,6 +321,13 @@ function parseShiftTime_(row, warnings, contextLabel) {
 
     const startOp = normalizeToOperationalDay_(start);
     const endOp = normalizeEnd_(startOp, normalizeToOperationalDay_(end));
+
+    // v3.11: טווח ארוך (יממה שלמה "14:00-14:00", או חלק ארוך של משימה
+    // יומית מפוצלת כמו "14:00-09:00") הוא אותה משימה שנכתבת במקום אחר
+    // "יומי" - אותן עמדות, אותו תוכן. בלי זה היא נספרת לפי אורכה המלא
+    // (חריגה ודאית מתקרת 8 השעות) וגם חופפת לכל שאר המשבצות של אותו
+    // חייל באותו יום.
+    if (endOp - startOp >= CONFIG.DAILY_MIN_SPAN_HOURS * 60) return dailyTimeInfo_();
 
     return {
       isDaily: false,
@@ -317,6 +362,88 @@ function parseShiftTime_(row, warnings, contextLabel) {
 
   warnings.push(contextLabel + ': שורה ' + row.rowNumber + ' — לא הצלחתי לפרש את השעה "' + text + '".');
   return emptyTimeInfo_();
+}
+
+/* ============================================================
+ * יציאה קצרה מאושרת ("יציאה מ10 עד 22" / "יציאה מ20" / "יציאה עד 10")
+ * משותף ל-ShabtzakOps ול-ShavtzakRecommendation (אותו פרויקט,
+ * אותו scope גלובלי). פונקציה טהורה - בלי תלות ב-CONFIG של אף צד.
+ * ============================================================ */
+
+// מחזיר {startMin, endMin} בדקות מחצות של אותו יום קלנדרי, או null.
+// שלוש הצורות המותרות, כולן בשעות עגולות ובתוך יום קלנדרי אחד:
+//   "יציאה מ10 עד 22" - חלון מפורש.
+//   "יציאה מ20"       - יוצא ואינו חוזר עד סוף היום (חצות).
+//   "יציאה עד 10"     - אינו בבסיס מחצות ועד השעה הזו.
+// שעה תקפה היא 0-23, ושעת הסיום חייבת להיות אחרי ההתחלה.
+function parseExitStatus_(text) {
+  const t = normalize_(text);
+
+  const hourToMinutes = function(raw) {
+    const h = Number(raw);
+    if (!isFinite(h) || h < 0 || h > 23) return null;
+    return h * 60;
+  };
+
+  const forms = [
+    { re: /^יציאה\s+מ\s*(\d{1,2})\s+עד\s+(\d{1,2})$/,
+      build: function(m) { return { start: hourToMinutes(m[1]), end: hourToMinutes(m[2]) }; } },
+    { re: /^יציאה\s+מ\s*(\d{1,2})$/,
+      build: function(m) { return { start: hourToMinutes(m[1]), end: 24 * 60 }; } },
+    { re: /^יציאה\s+עד\s*(\d{1,2})$/,
+      build: function(m) { return { start: 0, end: hourToMinutes(m[1]) }; } }
+  ];
+
+  for (let i = 0; i < forms.length; i++) {
+    const m = t.match(forms[i].re);
+    if (!m) continue;
+
+    const range = forms[i].build(m);
+    if (range.start === null || range.end === null) return null;
+    if (range.end <= range.start) return null;
+
+    return { startMin: range.start, endMin: range.end, text: t };
+  }
+
+  return null;
+}
+
+// האם הטקסט *מתיימר* להיות יציאה עם שעות (ולכן שגיאת פורמט אם לא נפרס).
+// ערכי הרשימה ההיסטוריים (יציאה בערב וכו') אינם נחשבים.
+function looksLikeTimedExit_(text) {
+  const t = normalize_(text);
+  if (t.indexOf(CONFIG.EXIT_STATUS_PREFIX) !== 0) return false;
+  if (CONFIG.LEGACY_EXIT_STATUSES.indexOf(t) !== -1) return false;
+  return /\d/.test(t);
+}
+
+// חפיפה בין שני טווחים חצי-פתוחים: [aStart,aEnd) מול [bStart,bEnd).
+// נגיעה בקצה אינה חפיפה - יציאה שמסתיימת ב-22:00 ומשימה שמתחילה
+// ב-22:00 הן תקינות.
+function rangesOverlap_(aStart, aEnd, bStart, bEnd) {
+  return aStart < bEnd && bStart < aEnd;
+}
+
+// חלון המשבצת על ציר היממה המבצעית (דקות מחצות של יום השבצ"ק).
+// משימה יומית תופסת את היממה כולה.
+function shiftWindowOnOpAxis_(shift) {
+  const dayStart = CONFIG.OPERATIONAL_DAY_START_HOUR * 60;
+  if (shift.isDaily) return { start: dayStart, end: dayStart + 24 * 60 };
+  if (shift.hasRealTimeRange) return { start: shift.startMin, end: shift.endMin };
+  return null;
+}
+
+// משימה יומית = היממה המבצעית המלאה 14:00 עד 14:00 למחרת.
+// לצורך תקרת השעות היא נספרת כ-DAILY_HOURS (8) ולא כ-24, ובלי טווח
+// שעות אמיתי - כלומר לא נכנסת לבדיקת החפיפות.
+function dailyTimeInfo_() {
+  return {
+    isDaily: true,
+    hasRealTimeRange: false,
+    startMin: null,
+    endMin: null,
+    hoursForDailyTotal: CONFIG.DAILY_HOURS
+  };
 }
 
 function emptyTimeInfo_() {
@@ -546,7 +673,7 @@ function validateDailyHours_(targetShifts, roster, errors, warnings) {
   });
 }
 
-function validateAvailabilityAndMissingAssignments_(targetShifts, roster, errors) {
+function validateAvailabilityAndMissingAssignments_(targetShifts, roster, errors, warnings) {
   // v3.7: זמינות נבדקת לפי היום הקלנדרי של כל משבצת.
   // משבצת שמתחילה לפני שעת תחילת היממה (למשל 06:00, 08:00) נופלת
   // קלנדרית ל"מחר", ולכן נבדקת מול סטטוס המחר של החייל.
@@ -560,6 +687,39 @@ function validateAvailabilityAndMissingAssignments_(targetShifts, roster, errors
 
   const assignedNames = new Set();
   const conflicts = []; // {name, status, part}
+  const exitConflicts = []; // {name, status, part, shift}
+  const badExitFormats = new Set();
+
+  // v3.12: יציאה קצרה נבדקת מול הזמן בפועל, לא מול היום כולו.
+  // עמודת "היום" היא היום הקלנדרי של תחילת היממה, ולכן שעותיה יושבות
+  // כמות שהן על ציר היממה; עמודת "מחר" מוסטת ב-24 שעות.
+  // יציאה עשויה לחצות את 14:00 (למשל 12:00-20:00) - הבדיקה מול שתי
+  // העמודות מכסה את שני חלקי היממה בלי להסתמך על שיוך היום של המשבצת.
+  const exitWindowsFor = function(soldier) {
+    const windows = [];
+    const columns = [
+      { status: soldier.statusToday, part: 'היום', offset: 0 },
+      { status: soldier.statusTomorrow, part: 'מחר', offset: 24 * 60 }
+    ];
+
+    columns.forEach(function(c){
+      const exit = parseExitStatus_(c.status);
+      if (exit) {
+        windows.push({
+          start: exit.startMin + c.offset,
+          end: exit.endMin + c.offset,
+          status: normalize_(c.status),
+          part: c.part
+        });
+      } else if (looksLikeTimedExit_(c.status)) {
+        badExitFormats.add(soldier.name + ' — "' + normalize_(c.status) + '"');
+      }
+    });
+
+    // שתי העמודות זהות כשאין עמודת מחר בגיליון - לא סופרים פעמיים.
+    if (!soldier.hasTomorrowColumn) return windows.slice(0, 1);
+    return windows;
+  };
 
   targetShifts.forEach(function(s){
     if (shouldIgnoreSoldier_(s.soldier)) return;
@@ -579,7 +739,21 @@ function validateAvailabilityAndMissingAssignments_(targetShifts, roster, errors
         part: isTomorrow ? 'מחר' : 'היום',
         shift: describeShift_(s)
       });
+      return;
     }
+
+    const window = shiftWindowOnOpAxis_(s);
+    if (!window) return;
+
+    exitWindowsFor(soldier).forEach(function(w){
+      if (!rangesOverlap_(window.start, window.end, w.start, w.end)) return;
+      exitConflicts.push({
+        name: s.soldier,
+        status: w.status,
+        part: w.part,
+        shift: describeShift_(s)
+      });
+    });
   });
 
   // חייל משובץ שלא נמצא במצבה
@@ -596,6 +770,25 @@ function validateAvailabilityAndMissingAssignments_(targetShifts, roster, errors
       c.name + ' — ' + c.shift + '.'
     );
   });
+
+  // v3.12: שיבוץ שחופף ליציאה קצרה מאושרת
+  exitConflicts.forEach(function(c){
+    errors.push(
+      'חייל משובץ בזמן יציאה מאושרת "' + c.status + '" (' + c.part + '): ' +
+      c.name + ' — ' + c.shift + '.'
+    );
+  });
+
+  // ערך שנראה כמו יציאה עם שעות אבל לא בפורמט - חייבים להתריע,
+  // אחרת היציאה נבלעת בשקט והחייל ייראה זמין.
+  if (warnings) {
+    badExitFormats.forEach(function(text){
+      warnings.push(
+        'סטטוס יציאה בפורמט לא תקין (נדרש "יציאה מ10 עד 22" / "יציאה מ20" / ' +
+        '"יציאה עד 10", בשעות עגולות ובאותו יום): ' + text + '.'
+      );
+    });
+  }
 
   // חייל שזמין בחלק כלשהו של היום המבצעי ולא שובץ כלל
   roster.soldiers.forEach(function(soldier){
@@ -713,9 +906,14 @@ function timeStringToMinutes_(text) {
 }
 
 /**
- * v2.0 שעון לחימה: יום שיבוץ הוא 14:00 עד 14:00.
- * שעות לפני 14:00 מתרחשות קלנדרית ביום שאחרי התאריך הרשום,
- * ולכן מקבלות +24 שעות בציר הזמן של היממה.
+ * שעון לחימה: יום שיבוץ הוא 14:00 עד 14:00.
+ *
+ * v3.11 - הבהרה: עמודת "תאריך" ב"כל השבצק" היא תמיד התאריך הקלנדרי
+ * האמיתי של השורה. משבצת 06:00 נרשמת בתאריך של אותו בוקר, לא בתאריך
+ * היום המבצעי שהתחיל אתמול ב-14:00. היממה המבצעית היא *קיבוץ* מעל
+ * התאריכים הקלנדריים (ראה operationalDayOfDateTime_), לא כתיב אחר שלהם.
+ * שעות לפני 14:00 מקבלות +24 שעות רק על ציר הזמן הפנימי של היממה,
+ * כדי שאפשר יהיה להשוות ולמיין משמרות בתוך אותה יממה.
  */
 // v3.0: היום המבצעי (שעון לחימה) - התאריך הקלנדרי שאליו שייכת משבצת.
 // שעה לפני OPERATIONAL_DAY_START_HOUR (14:00) שייכת ליום המבצעי
@@ -745,14 +943,6 @@ function operationalDayOfDateTime_(calDate, minutesFromMidnight) {
   const dayStart = CONFIG.OPERATIONAL_DAY_START_HOUR * 60;
   if (minutesFromMidnight < dayStart) return addDays_(calDate, -1);
   return stripTime_(calDate);
-}
-
-// בהינתן יום מבצעי (opDay) ושעה, מחזיר את התאריך הקלנדרי האמיתי של המשבצת:
-// שעות >= 14:00 נמצאות ביום opDay עצמו; שעות < 14:00 נמצאות ב-opDay+1.
-function calendarDateForOpDaySlot_(opDay, minutesFromMidnight) {
-  const dayStart = CONFIG.OPERATIONAL_DAY_START_HOUR * 60;
-  if (minutesFromMidnight < dayStart) return addDays_(opDay, 1);
-  return stripTime_(opDay);
 }
 
 function normalizeToOperationalDay_(minutesFromMidnight) {
@@ -967,27 +1157,6 @@ function readRifleLevelMap_(rosterSheet, errors) {
   return map;
 }
 
-function findAttackReadinessRowsToFill_(currentRows) {
-  const map = {};
-
-  currentRows.forEach(row => {
-    if (!isAttackReadiness_(row)) return;
-
-    const timeInfo = parseShiftTime_(row, [], 'כוננות התקפי');
-    if (!timeInfo.hasRealTimeRange) return;
-
-    const key = String(timeInfo.startMin);
-    if (!map[key]) map[key] = [];
-    map[key].push(row);
-  });
-
-  Object.keys(map).forEach(key => {
-    map[key].sort((a, b) => a.rowNumber - b.rowNumber);
-  });
-
-  return map;
-}
-
 function isPatrolShift_(shift) {
   if (!shift) return false;
 
@@ -1033,35 +1202,6 @@ function groupCarmelRowsByAbsoluteStart_(currentRows) {
   });
   groups.sort(function(a, b){ return a.startAbs.getTime() - b.startAbs.getTime(); });
   return groups;
-}
-
-function findCarmelRowsToFill_(currentRows) {
-  const map = {};
-
-  currentRows.forEach(row => {
-    if (!isCarmel_(row)) return;
-
-    const timeInfo = parseShiftTime_(row, [], 'כרמל חטיבה');
-    if (!timeInfo.hasRealTimeRange) return;
-
-    const key = String(timeInfo.startMin);
-    if (!map[key]) map[key] = [];
-    map[key].push(row);
-  });
-
-  Object.keys(map).forEach(key => {
-    map[key].sort((a, b) => {
-      const aIsCommander = normalize_(a.position) === 'מפקד כרמל חטיבה';
-      const bIsCommander = normalize_(b.position) === 'מפקד כרמל חטיבה';
-
-      if (aIsCommander && !bIsCommander) return -1;
-      if (!aIsCommander && bIsCommander) return 1;
-
-      return a.rowNumber - b.rowNumber;
-    });
-  });
-
-  return map;
 }
 
 function chooseCarmelCommander_(soldiers, rifleMap) {
@@ -1654,7 +1794,7 @@ function runShabzakValidation_(parsedTarget, parsedPrevious, roster, titleDate, 
   validateCarmelMinimumStaff_(parsedTarget, errors);
   validateTrackerBasedOnTours_(parsedTarget, parsedPrevious, errors);
   validateDailyHours_(parsedTarget, roster, errors, warnings);
-  validateAvailabilityAndMissingAssignments_(parsedTarget, roster, errors);
+  validateAvailabilityAndMissingAssignments_(parsedTarget, roster, errors, warnings);
 
   const header = [
     'ולידציה: ' + titleDate + ' (יממה מבצעית 14:00-14:00)',
@@ -1666,7 +1806,8 @@ function runShabzakValidation_(parsedTarget, parsedPrevious, roster, titleDate, 
     '- לפחות 3 כרמל חטיבה + 1 מפקד כרמל חטיבה בכל משמרת',
     '- כונן גשש על בסיס יורדי סיור (14/22/07)',
     '- לא יותר מ־8 שעות ביום + הערה על פחות מ־8',
-    '- חופש/לא מגויס מול שיבוץ, ונוכחים בלי משימה', ''
+    '- חופש/לא מגויס מול שיבוץ, ונוכחים בלי משימה',
+    '- יציאה קצרה מאושרת ("יציאה מ.. עד ..") מול שעות המשבצת', ''
   ];
   if (returnHtml) return buildValidationResultHtml_(errors, warnings, header);
   showValidationResult_(errors, warnings, header);
@@ -1752,12 +1893,6 @@ function getAllShabzakValidationHtml(iso) {
   const parts = String(iso).split('-');
   const targetDate = new Date(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2]));
   return runAllShabzakValidationForDate_(targetDate, true);
-}
-
-function runAllShabzakValidationForIso(iso) {
-  const parts = String(iso).split('-');
-  const targetDate = new Date(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2]));
-  runAllShabzakValidationForDate_(targetDate);
 }
 
 function runAllShabzakValidationForDate_(targetDate, returnHtml) {
