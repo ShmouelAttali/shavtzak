@@ -9,6 +9,9 @@
     "preview": "vite preview",
     "vercel-build": "tsc && vite build",
     "dev:api": "tsx watch scripts/dev-api.ts",
+    "gs:status": "./apps-script/sync.sh status",
+    "gs:pull": "./apps-script/sync.sh pull",
+    "gs:push": "./apps-script/sync.sh push",
     "test": "node --import tsx --test --test-concurrency=1 tests/*.test.ts"
   },
   "dependencies": {

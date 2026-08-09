@@ -58,7 +58,22 @@ The sheet's own תאריך is always the correct calendar day for every row
 earlier in the same day and sorts first. That mistake has been made twice; both
 are pinned by tests (`tests/shavtzak-display.test.ts`,
 `tests/personal-schedule.test.ts`). The 14:00→14:00 anchor belongs to the frozen
-DB scheduler only — never import it into a sheet-based surface.
+DB scheduler **and to the sheet's own Apps Script** (`apps-script/`, which does
+reason in an operational day) — never import it into a viewer surface.
+
+## The sheet also runs Apps Script (`apps-script/`)
+
+The company sheet has a bound Apps Script project (`פלוגת געש`) that validates
+and fills שבצק rows — code Google stores *only in the spreadsheet*. It is
+mirrored into `apps-script/plugat-gaash/` with `clasp` (owner already logged in;
+`.clasp.json` holds the script ID, and it is **not** the service account).
+
+It is **HEAD-live**: no web app, no library, no versions — a push, like any save
+in the script editor, is instantly live for every user of the sheet. Sync with
+`npm run gs:status` / `gs:pull` / `gs:push`; pull before editing, and treat a
+push as a deploy. ⚠ These scripts reason in a 14:00→14:00 operational day, which
+the viewer deliberately does not — see above. Everything else lives in the
+**`sheet-apps-script` skill**.
 
 ## Tabs and who sees them
 
