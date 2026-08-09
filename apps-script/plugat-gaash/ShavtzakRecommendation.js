@@ -1,6 +1,20 @@
 /** @OnlyCurrentDoc */
 /**
- * Shabtzak Recommendations Engine v3.4 - שעון לחימה 14:00-14:00
+ * Shabtzak Recommendations Engine v3.5 - שעון לחימה 14:00-14:00
+ *
+ * שינויים ב-v3.5 - המצבה נקראת ישירות מ"מצבת החיילים":
+ * 1. עד כה המצבה שוכפלה לעמודות A:G של "שבצק" בנוסחאות
+ *    (ARRAYFORMULA/VLOOKUP/XLOOKUP) והסקריפט קרא משם. עכשיו הוא קורא
+ *    שם מלא / מחלקה / תפקיד וסטטוס אתמול-היום-מחר ישירות מ"מצבת
+ *    החיילים", לפי כותרות ולפי עמודות התאריך במטריצת הנוכחות.
+ *    בדרך נעלם באג יישור: עמודה A סוננה למחלקות 1/2/3/חמ"ל בעוד
+ *    שעמודות הסטטוס (E:G) לא סוננו, כך שכל דילוג במצבה היה מזיז
+ *    לכל החיילים שאחריו את הסטטוס בשורה אחת.
+ * 2. עמודת "משימה יום קודם" (B) ירדה: היא נגזרה מ"כל השבצק", ואת
+ *    ההיסטוריה הסקריפט קורא ממילא ישירות משם.
+ * 3. עמודות המשימות והפלט ב"שבצק" מזוהות לפי הכותרות ולא לפי מיקום
+ *    קבוע (resolveScheduleLayout_), כדי שמחיקת עמודות A:G לא תדרוש
+ *    שינוי קוד. תא התאריך נשאר scheduleDateCell (E1).
  *
  * שינויים מרכזיים ב-v3.0:
  * 1. היממה המבצעית מוגדרת בקונפיג (operationalDay.startHour = 14):
@@ -29,11 +43,11 @@
 const SHABTZAK_REC_CONFIG = {
   sheets: {
     schedule: 'שבצק',
-    history: 'כל השבצק'
+    history: 'כל השבצק',
+    roster: 'מצבת החיילים'
   },
 
   scheduleDateCell: 'E1',
-  firstDataRow: 3,
 
   // שעון לחימה: היממה המבצעית מתחילה ב-14:00 ומסתיימת ב-14:00 למחרת.
   // שעות לפני 14:00 בשבצ"ק של יום D מתרחשות קלנדרית ב-D+1.
@@ -42,24 +56,36 @@ const SHABTZAK_REC_CONFIG = {
     startMinute: 0
   },
 
+  // v3.5: המצבה נקראת ישירות מטאב "מצבת החיילים" - עמודות המידע לפי
+  // כותרת, וסטטוס אתמול/היום/מחר מעמודות התאריך של מטריצת הנוכחות.
   roster: {
-    nameCol: 1,
-    previousTextCol: 2,
-    platoonCol: 3,
-    roleCol: 4,
-    statusYesterdayCol: 5,
-    statusTodayCol: 6,
-    statusTomorrowCol: 7
+    headerLabels: {
+      fullName: 'שם מלא',
+      role: 'תפקיד',
+      platoon: 'מחלקה'
+    },
+    // שורת הכותרות (ומעליה שורת התאריכים) מזוהות בסריקת השורות הראשונות.
+    headerSearchRows: 6,
+    // מאגר המועמדים: רק המחלקות האלה - בדיוק מה שסיננה הנוסחה
+    // שהייתה בעמודה A של "שבצק". רשימה ריקה = כל המצבה.
+    // (מפל"ג ממילא נחסם בהמשך ע"י excludedPlatoonOrRoleKeywords.)
+    includePlatoons: ['1', '2', '3', 'חמ"ל']
   },
 
+  // v3.5: עמודות המשימות ב"שבצק" מזוהות לפי הכותרות בשורת הכותרת ולא
+  // לפי מיקום קבוע, כדי שמחיקת עמודות המצבה הכפולה (A:G) לא תדרוש
+  // שינוי קוד. הפלט נכתב מיד אחרי העמודה האחרונה מבין אלה.
+  // עמודת "תאריך" (אם קיימת) היא התאריך הקלנדרי המפורש של השורה,
+  // והיא מבטלת ניחוש carry לפי שעה.
   tasks: {
-    // v3.2: עמודה H - תאריך קלנדרי מפורש לשורת משימה (אם קיים,
-    // קובע את היום ומבטל ניחוש carry לפי שעה).
-    dateCol: 8,
-    positionCol: 9,
-    typeCol: 10,
-    timeCol: 11,
-    assignedCol: 12
+    headerLabels: {
+      date: 'תאריך',
+      position: 'העמדה',
+      type: 'סוג',
+      time: 'השעה',
+      soldier: 'החייל'
+    },
+    headerSearchRows: 6
   },
 
   // כונן גשש: שעה בודדת בעמודת השעה -> משך משמרת מובנה.
@@ -71,8 +97,8 @@ const SHABTZAK_REC_CONFIG = {
   },
 
   output: {
-    headerRow: 2,
-    startCol: 13,
+    // v3.5: headerRow/startCol מחושבים בזמן ריצה מתוך שורת הכותרות
+    // של המשימות (ראה resolveScheduleLayout_).
     width: 6,
     headers: ['מועמדים', 'משימה קודמת', 'מנוחה', 'עומס 7 ימים', 'התאמה / אזהרות', 'סטטוס צוות'],
     columnWidths: [185, 230, 105, 145, 290, 260],
@@ -148,9 +174,9 @@ const SHABTZAK_REC_CONFIG = {
   },
 
   onEdit: {
-    // עמודות שמפעילות ריצה אוטומטית בטאב "שבצק"
-    watchTaskColumns: { from: 9, to: 12 },      // I:L
-    watchStatusColumns: { from: 5, to: 7 },     // E:G
+    // v3.5: העמודות שמפעילות ריצה אוטומטית = עמודות המשימות שזוהו
+    // בזמן ריצה. עמודות הסטטוס הישנות (E:G) ירדו - הן היו נוסחאות,
+    // וחישוב מחדש של נוסחה לא מפעיל onEdit ממילא.
     watchDateCell: 'E1',
     lockTimeoutMs: 0 // 0 = אם כבר רצה ריצה אחרת, פשוט מוותרים (העריכה הבאה תריץ שוב)
   },
@@ -289,17 +315,24 @@ function onShabtzakEdit(e) {
   const lastCol = e.range.getLastColumn();
   const w = config.onEdit;
 
-  const touchesRange = function(from, to) {
-    return col <= to && lastCol >= from;
-  };
-
   const dateCellA1 = w.watchDateCell || config.scheduleDateCell;
   const touchesDate = e.range.getA1Notation().indexOf(dateCellA1) !== -1;
-  const relevant = touchesDate ||
-    touchesRange(w.watchTaskColumns.from, w.watchTaskColumns.to) ||
-    touchesRange(w.watchStatusColumns.from, w.watchStatusColumns.to);
 
-  if (!relevant) return;
+  // v3.5: טווח העמודות שמפעיל ריצה נגזר מהכותרות שזוהו, כך שהוא נשאר
+  // נכון גם אם עמודות נמחקו/נוספו משמאל למשימות.
+  let touchesTasks = false;
+  try {
+    const layout = resolveScheduleLayout_(sheet, config);
+    const from = layout.taskFirstCol;
+    const to = layout.taskFirstCol + layout.taskColCount - 1;
+    touchesTasks = (col <= to && lastCol >= from);
+  } catch (err) {
+    // פריסה לא מזוהה: לא מריצים בכל עריכה (זה רק ייצר שגיאות חוזרות).
+    // ההרצה הידנית מהתפריט תציג את השגיאה המדויקת.
+    return;
+  }
+
+  if (!touchesDate && !touchesTasks) return;
 
   const cache = CacheService.getDocumentCache();
   const lock = LockService.getDocumentLock();
@@ -344,34 +377,35 @@ function updateShabtzakRecommendations() {
   const baseDate = parseDateOnly_(sheet.getRange(config.scheduleDateCell).getValue());
   if (!baseDate) throw new Error('לא הצלחתי לקרוא תאריך מתוך ' + config.sheets.schedule + '!' + config.scheduleDateCell);
 
-  const lastRow = Math.max(sheet.getLastRow(), config.firstDataRow);
-  const rowCount = Math.max(0, lastRow - config.firstDataRow + 1);
+  // v3.5: הפריסה נגזרת מהכותרות, לא ממיקומים קבועים.
+  const layout = resolveScheduleLayout_(sheet, config);
+
+  const lastRow = Math.max(sheet.getLastRow(), layout.firstDataRow);
+  const rowCount = Math.max(0, lastRow - layout.firstDataRow + 1);
   if (rowCount === 0) return;
 
-  const maxRosterCol = Math.max(
-    config.roster.nameCol, config.roster.previousTextCol, config.roster.platoonCol,
-    config.roster.roleCol, config.roster.statusYesterdayCol,
-    config.roster.statusTodayCol, config.roster.statusTomorrowCol
-  );
-  // v3.2: קוראים מ-dateCol (עמודה H) כדי לכלול את התאריך המפורש של השורה.
-  const taskFirstCol = config.tasks.dateCol || config.tasks.positionCol;
-  const taskColCount = config.tasks.assignedCol - taskFirstCol + 1;
+  const taskValues = sheet
+    .getRange(layout.firstDataRow, layout.taskFirstCol, rowCount, layout.taskColCount)
+    .getValues();
 
-  const rosterValues = sheet.getRange(config.firstDataRow, 1, rowCount, maxRosterCol).getValues();
-  const taskValues = sheet.getRange(config.firstDataRow, taskFirstCol, rowCount, taskColCount).getValues();
-
-  const soldiers = parseSoldiers_(rosterValues, config);
+  // v3.5: המצבה מגיעה מ"מצבת החיילים" ולא מעמודות A:G של "שבצק".
+  const roster = readRosterSoldiers_(ss, baseDate, config);
+  const soldiers = roster.soldiers;
   const soldiersByName = makeSoldiersByName_(soldiers);
-  const currentTasks = parseCurrentTasks_(taskValues, baseDate, config);
+  const currentTasks = parseCurrentTasks_(taskValues, baseDate, layout, config);
 
   const historySheet = ss.getSheetByName(config.sheets.history);
   const historyAssignments = historySheet ? parseHistoryAssignments_(historySheet, baseDate, config) : [];
-  const previousTextAssignments = historyAssignments.length ? [] : parsePreviousTextAssignments_(soldiers, baseDate, config);
   const currentAssignments = currentTasks
     .filter(function(t) { return t && t.assigned; })
     .map(function(t) { return taskToAssignment_(t, config); });
 
-  const allAssignments = historyAssignments.concat(previousTextAssignments).concat(currentAssignments);
+  const allAssignments = historyAssignments.concat(currentAssignments);
+
+  // v3.5: "משימה יום קודם" נגזרת מההיסטוריה עצמה במקום מעמודה B של
+  // "שבצק" (שהייתה נוסחת FILTER מעל אותו "כל השבצק"). משמשת כגיבוי
+  // תצוגה כשלא חושבה משימה קודמת למועמד - למשל כשהוא נדחה מוקדם.
+  attachPreviousDayText_(soldiers, allAssignments, baseDate);
   timing.read = Date.now() - runStart;
 
   // ---- אינדקסים (לב שיפור הביצועים) ----
@@ -424,7 +458,7 @@ function updateShabtzakRecommendations() {
     if (task.assigned) {
       const assignedSoldier = soldiersByName[normalizeNameKey_(task.assigned)];
       if (!assignedSoldier) {
-        output.push(['משובץ: ' + task.assigned, '', '', '', '⚠ החייל לא נמצא ברשימת החיילים בעמודה A', groupStatus]);
+        output.push(['משובץ: ' + task.assigned, '', '', '', '⚠ החייל לא נמצא ב"' + config.sheets.roster + '" (או שאינו במחלקות המשובצות)', groupStatus]);
         notes.push(['']);
         backgrounds.push(makeBackgroundRow_('#fff7ed', config.output.width));
         continue;
@@ -461,7 +495,7 @@ function updateShabtzakRecommendations() {
   }
 
   timing.compute = Date.now() - runStart - timing.read;
-  writeRecommendationOutput_(sheet, output, notes, backgrounds, config);
+  writeRecommendationOutput_(sheet, output, notes, backgrounds, layout, config);
   // v2.5: flush מאלץ commit של כל הכתיבות + חישוב-מחדש של נוסחאות
   // תלויות *עכשיו*, בתוך המדידה - בלעדיו ה-commit קורה בסיום הסקריפט
   // אחרי ה-toast, וההודעה מציגה זמן קצר בהרבה מהמציאות.
@@ -472,6 +506,13 @@ function updateShabtzakRecommendations() {
   try {
     const seconds = Math.round((Date.now() - runStart) / 100) / 10;
     let msg = 'המלצות עודכנו (' + seconds + ' שניות)';
+    // v3.5: אם חסרה עמודת תאריך במצבה, הסטטוסים יוצאים ריקים - וזה
+    // משנה זמינות. עדיף להגיד את זה מפורשות מאשר להמליץ בשקט על מי
+    // שבחופש.
+    if (roster.missingDateLabels.length) {
+      msg += ' | ⚠ אין עמודת ' + roster.missingDateLabels.join('/') +
+        ' ב"' + config.sheets.roster + '"';
+    }
     if (config.debugTiming) {
       msg += ' | קריאה ' + Math.round(timing.read / 100) / 10 +
         ' | חישוב ' + Math.round(timing.compute / 100) / 10 +
@@ -486,10 +527,11 @@ function clearShabtzakRecommendations() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const sheet = ss.getSheetByName(config.sheets.schedule);
   if (!sheet) throw new Error('לא נמצא טאב בשם: ' + config.sheets.schedule);
-  const lastRow = Math.max(sheet.getLastRow(), config.firstDataRow);
-  const rowCount = Math.max(0, lastRow - config.output.headerRow + 1);
+  const layout = resolveScheduleLayout_(sheet, config);
+  const lastRow = Math.max(sheet.getLastRow(), layout.firstDataRow);
+  const rowCount = Math.max(0, lastRow - layout.outputHeaderRow + 1);
   if (rowCount === 0) return;
-  sheet.getRange(config.output.headerRow, config.output.startCol, rowCount, config.output.width)
+  sheet.getRange(layout.outputHeaderRow, layout.outputStartCol, rowCount, config.output.width)
     .clearContent()
     .clearNote()
     .setBackground(null);
@@ -500,28 +542,28 @@ function clearShabtzakRecommendations() {
  * כתיבת פלט
  * ============================================================ */
 
-function writeRecommendationOutput_(sheet, output, notes, backgrounds, config) {
+function writeRecommendationOutput_(sheet, output, notes, backgrounds, layout, config) {
   // ביצועים v2.2: פעולות עיצוב (כותרת, גבולות, רוחב עמודות, גלישת טקסט)
   // הן קריאות API איטיות שלא משתנות בין ריצות. מריצים אותן רק כשהפריסה
   // השתנתה (מספר שורות/עמודות) - ברוב הריצות נשארים רק ערכים+צבעים+הערות.
   const props = PropertiesService.getDocumentProperties();
   const layoutKey = 'shabtzak_layout';
-  const layoutSig = [config.output.headerRow, config.output.startCol, config.output.width, output.length].join('|');
+  const layoutSig = [layout.outputHeaderRow, layout.outputStartCol, config.output.width, output.length].join('|');
   const needLayout = props.getProperty(layoutKey) !== layoutSig;
 
-  const bodyRange = sheet.getRange(config.firstDataRow, config.output.startCol, output.length, config.output.width);
+  const bodyRange = sheet.getRange(layout.firstDataRow, layout.outputStartCol, output.length, config.output.width);
   // v2.3: בלי clearContent/clearNote - setValues ו-setNotes דורסים ממילא
   // את אותו טווח בדיוק. שתי קריאות API פחות.
   bodyRange.setValues(output);
   bodyRange.setBackgrounds(backgrounds);
 
   if (config.output.writeNotes !== false) {
-    const notesRange = sheet.getRange(config.firstDataRow, config.output.startCol, notes.length, 1);
+    const notesRange = sheet.getRange(layout.firstDataRow, layout.outputStartCol, notes.length, 1);
     notesRange.setNotes(notes);
   }
 
   if (needLayout) {
-    const headerRange = sheet.getRange(config.output.headerRow, config.output.startCol, 1, config.output.width);
+    const headerRange = sheet.getRange(layout.outputHeaderRow, layout.outputStartCol, 1, config.output.width);
     headerRange.setValues([config.output.headers]);
     headerRange
       .setFontWeight('bold')
@@ -533,12 +575,12 @@ function writeRecommendationOutput_(sheet, output, notes, backgrounds, config) {
     bodyRange.setVerticalAlignment('top');
     bodyRange.setHorizontalAlignment('right');
 
-    sheet.getRange(config.output.headerRow, config.output.startCol, output.length + 1, config.output.width)
+    sheet.getRange(layout.outputHeaderRow, layout.outputStartCol, output.length + 1, config.output.width)
       .setBorder(true, true, true, true, true, true, '#d1d5db', SpreadsheetApp.BorderStyle.SOLID);
 
     if (config.output.columnWidths && config.output.columnWidths.length) {
       for (let c = 0; c < config.output.width; c++) {
-        sheet.setColumnWidth(config.output.startCol + c, config.output.columnWidths[c] || 160);
+        sheet.setColumnWidth(layout.outputStartCol + c, config.output.columnWidths[c] || 160);
       }
     }
 
@@ -550,23 +592,164 @@ function writeRecommendationOutput_(sheet, output, notes, backgrounds, config) {
  * פרסינג: חיילים, משימות, היסטוריה
  * ============================================================ */
 
-function parseSoldiers_(values, config) {
-  const soldiers = [];
-  values.forEach(function(row, idx) {
-    const name = cleanText_(row[config.roster.nameCol - 1]);
-    if (!name || isHeaderLikeRosterRow_(row, config)) return;
+/**
+ * v3.5: מזהה את פריסת טאב "שבצק" לפי הכותרות במקום מיקומים קבועים.
+ * כל מספרי העמודות/השורות שמוחזרים הם 1-based.
+ *
+ * שורת הכותרות היא הראשונה (מבין headerSearchRows) שמכילה גם "העמדה"
+ * וגם "החייל". הקריאה מתחילה בשורת הכותרות עצמה - isHeaderLikeTaskRow_
+ * מסננת אותה - כדי שמספרי השורות בפלט יישארו מיושרים לגיליון.
+ * כותרות הפלט יושבות שורה אחת מעל שורת הכותרות של המשימות, כפי שהן
+ * בגיליון היום.
+ */
+function resolveScheduleLayout_(sheet, config) {
+  const labels = config.tasks.headerLabels;
+  const searchRows = Math.min(config.tasks.headerSearchRows || 6, sheet.getMaxRows());
+  const lastCol = Math.max(1, sheet.getLastColumn());
+  const band = sheet.getRange(1, 1, searchRows, lastCol).getValues();
 
-    const role = cleanText_(row[config.roster.roleCol - 1]);
+  const positionKey = normalizeForSearch_(labels.position);
+  const soldierKey = normalizeForSearch_(labels.soldier);
+
+  let headerRowIndex = -1;
+  let headers = null;
+  for (let i = 0; i < band.length; i++) {
+    const row = band[i].map(normalizeForSearch_);
+    if (row.indexOf(positionKey) !== -1 && row.indexOf(soldierKey) !== -1) {
+      headerRowIndex = i;
+      headers = row;
+      break;
+    }
+  }
+
+  if (headerRowIndex === -1) {
+    throw new Error('לא נמצאה שורת כותרות בטאב "' + config.sheets.schedule +
+      '" עם העמודות: ' + labels.position + ', ' + labels.soldier + '.');
+  }
+
+  const colOf = function(label) {
+    const idx = headers.indexOf(normalizeForSearch_(label));
+    return idx === -1 ? 0 : idx + 1;
+  };
+
+  const col = {
+    date: colOf(labels.date),
+    position: colOf(labels.position),
+    type: colOf(labels.type),
+    time: colOf(labels.time),
+    soldier: colOf(labels.soldier)
+  };
+
+  ['type', 'time'].forEach(function(key) {
+    if (!col[key]) {
+      throw new Error('חסרה עמודת "' + labels[key] + '" בשורת הכותרות של "' +
+        config.sheets.schedule + '".');
+    }
+  });
+
+  const used = [col.position, col.type, col.time, col.soldier];
+  if (col.date) used.push(col.date);
+  const taskFirstCol = Math.min.apply(null, used);
+  const taskLastCol = Math.max.apply(null, used);
+
+  return {
+    headerRow: headerRowIndex + 1,
+    firstDataRow: headerRowIndex + 1,
+    col: col,
+    taskFirstCol: taskFirstCol,
+    taskColCount: taskLastCol - taskFirstCol + 1,
+    outputHeaderRow: Math.max(1, headerRowIndex),
+    outputStartCol: taskLastCol + 1
+  };
+}
+
+/**
+ * v3.5: קוראת את המצבה ישירות מטאב "מצבת החיילים".
+ *
+ * מבנה הטאב: שורת תאריכים (DD/MM/YY) מעל שורת הכותרות, ואחריה שורה
+ * לכל חייל. הסטטוס ליום מסוים = התא בהצטלבות שורת החייל עם עמודת
+ * התאריך. הסינון לפי מחלקה (includePlatoons) משחזר בדיוק את מה
+ * שנוסחת ה-FILTER בעמודה A של "שבצק" עשתה.
+ *
+ * מחזירה { soldiers, missingDateLabels }.
+ */
+function readRosterSoldiers_(ss, baseDate, config) {
+  const sheetName = config.sheets.roster;
+  const sheet = ss.getSheetByName(sheetName);
+  if (!sheet) throw new Error('לא נמצא טאב בשם: ' + sheetName);
+
+  const values = sheet.getDataRange().getValues();
+  const labels = config.roster.headerLabels;
+  const searchRows = Math.min(config.roster.headerSearchRows || 6, values.length);
+  const fullNameKey = normalizeForSearch_(labels.fullName);
+
+  let headerRowIndex = -1;
+  let headers = null;
+  for (let i = 0; i < searchRows; i++) {
+    const row = values[i].map(normalizeForSearch_);
+    if (row.indexOf(fullNameKey) !== -1) {
+      headerRowIndex = i;
+      headers = row;
+      break;
+    }
+  }
+
+  if (headerRowIndex === -1) {
+    throw new Error('לא נמצאה שורת כותרות עם "' + labels.fullName + '" בטאב "' + sheetName + '".');
+  }
+
+  const colOf = function(label) { return headers.indexOf(normalizeForSearch_(label)); };
+  const nameCol = colOf(labels.fullName);
+  const roleCol = colOf(labels.role);
+  const platoonCol = colOf(labels.platoon);
+
+  if (roleCol === -1 || platoonCol === -1) {
+    throw new Error('חסרות עמודות "' + labels.role + '" / "' + labels.platoon +
+      '" בשורת הכותרות של "' + sheetName + '".');
+  }
+
+  const dateColByTime = buildRosterDateColumnMap_(values, headerRowIndex);
+  const colForDate = function(date) {
+    const found = dateColByTime[date.getTime()];
+    return found === undefined ? -1 : found;
+  };
+
+  const yesterdayCol = colForDate(addDays_(baseDate, -1));
+  const todayCol = colForDate(baseDate);
+  const tomorrowCol = colForDate(addDays_(baseDate, 1));
+
+  const missingDateLabels = [];
+  if (yesterdayCol === -1) missingDateLabels.push('אתמול');
+  if (todayCol === -1) missingDateLabels.push('היום');
+  if (tomorrowCol === -1) missingDateLabels.push('מחר');
+
+  const includePlatoons = config.roster.includePlatoons || [];
+  const includeSet = {};
+  includePlatoons.forEach(function(p) { includeSet[normalizeForSearch_(p)] = true; });
+
+  const statusAt = function(row, colIndex) {
+    return colIndex === -1 ? '' : cleanText_(row[colIndex]);
+  };
+
+  const soldiers = [];
+  for (let i = headerRowIndex + 1; i < values.length; i++) {
+    const row = values[i];
+    const name = cleanText_(row[nameCol]);
+    if (!name) continue;
+
+    const platoon = cleanText_(row[platoonCol]);
+    if (includePlatoons.length && !includeSet[normalizeForSearch_(platoon)]) continue;
+
+    const role = cleanText_(row[roleCol]);
     const soldier = {
-      rowIndex: config.firstDataRow + idx,
+      rowIndex: i + 1,
       name: name,
       nameKey: normalizeNameKey_(name),
-      previousText: cleanText_(row[config.roster.previousTextCol - 1]),
-      platoon: cleanText_(row[config.roster.platoonCol - 1]),
+      platoon: platoon,
       role: role,
-      statusYesterday: cleanText_(row[config.roster.statusYesterdayCol - 1]),
-      statusToday: cleanText_(row[config.roster.statusTodayCol - 1]),
-      statusTomorrow: cleanText_(row[config.roster.statusTomorrowCol - 1])
+      statusYesterday: statusAt(row, yesterdayCol),
+      statusToday: statusAt(row, todayCol),
+      statusTomorrow: statusAt(row, tomorrowCol)
     };
 
     soldier.isCommander = containsAny_(role, config.roles.commanderKeywords);
@@ -576,8 +759,71 @@ function parseSoldiers_(values, config) {
     soldier.isTigerDriver = containsAny_(role, config.roles.tigerDriverKeywords);
 
     soldiers.push(soldier);
+  }
+
+  return { soldiers: soldiers, missingDateLabels: missingDateLabels };
+}
+
+/**
+ * v3.5: מחשבת לכל חייל את משימות היום המבצעי הקודם, כטקסט קצר.
+ * זו בדיוק המידע שעמודה B של "שבצק" סיפקה בנוסחה - רק שכאן הוא נגזר
+ * מאותן שיבוצים שהמנוע כבר קרא מ"כל השבצק", ולפי אותה חלוקה ליום
+ * מבצעי (14:00-14:00) שבה המנוע משתמש בכל מקום אחר.
+ */
+function attachPreviousDayText_(soldiers, assignments, baseDate) {
+  const previousOpDay = addDays_(dateOnly_(baseDate), -1).getTime();
+  const bySoldier = {};
+
+  assignments.forEach(function(a) {
+    if (!a || !a.soldierKey || !a.start) return;
+    if (getOperationalBaseDateForDate_(a.start).getTime() !== previousOpDay) return;
+    if (!bySoldier[a.soldierKey]) bySoldier[a.soldierKey] = [];
+    bySoldier[a.soldierKey].push(a);
   });
-  return soldiers;
+
+  soldiers.forEach(function(soldier) {
+    const list = bySoldier[soldier.nameKey];
+    if (!list || !list.length) {
+      soldier.previousDayText = '';
+      return;
+    }
+    list.sort(function(x, y) { return x.start.getTime() - y.start.getTime(); });
+    soldier.previousDayText = list.map(function(a) {
+      const title = a.position || a.type || categoryDisplayName_(a.category);
+      return title + ' ' + formatTimeOnly_(a.start);
+    }).join(', ');
+  });
+}
+
+/**
+ * שורת התאריכים של מטריצת הנוכחות: השורה שמעל הכותרות שיש בה הכי הרבה
+ * תאים שנפרסים כתאריך. מחזירה מיפוי timestamp -> אינדקס עמודה (0-based).
+ */
+function buildRosterDateColumnMap_(values, headerRowIndex) {
+  let bestRow = -1;
+  let bestCount = 0;
+
+  for (let i = 0; i < headerRowIndex; i++) {
+    let count = 0;
+    for (let c = 0; c < values[i].length; c++) {
+      if (parseDateOnly_(values[i][c])) count++;
+    }
+    if (count > bestCount) {
+      bestCount = count;
+      bestRow = i;
+    }
+  }
+
+  const map = {};
+  if (bestRow === -1) return map;
+
+  const row = values[bestRow];
+  for (let c = 0; c < row.length; c++) {
+    const date = parseDateOnly_(row[c]);
+    // תאריך כפול בשורה: הראשון קובע, כמו XLOOKUP.
+    if (date && map[date.getTime()] === undefined) map[date.getTime()] = c;
+  }
+  return map;
 }
 
 function makeSoldiersByName_(soldiers) {
@@ -596,16 +842,6 @@ function indexBySoldier_(assignments) {
   return map;
 }
 
-function isHeaderLikeRosterRow_(row, config) {
-  const name = normalizeForSearch_(row[config.roster.nameCol - 1]);
-  const platoon = normalizeForSearch_(row[config.roster.platoonCol - 1]);
-  const role = normalizeForSearch_(row[config.roster.roleCol - 1]);
-  if (name === 'שם מלא' || name === 'שם' || name === 'חייל' || name === 'שם החייל') return true;
-  if (name === 'name' || name === 'full name') return true;
-  if (platoon === 'מחלקה' && role === 'תפקיד') return true;
-  return false;
-}
-
 function isHeaderLikeTaskRow_(position, type, timeText, assigned) {
   const p = normalizeForSearch_(position);
   const t = normalizeForSearch_(type);
@@ -617,17 +853,22 @@ function isHeaderLikeTaskRow_(position, type, timeText, assigned) {
   return false;
 }
 
-function parseCurrentTasks_(values, baseDate, config) {
+function parseCurrentTasks_(values, baseDate, layout, config) {
   const tasks = [];
-  // v3.2: אם קוראים מ-dateCol, עמודה H היא אינדקס 0 והשאר מוזזים.
-  const hasDateCol = (config.tasks.dateCol && config.tasks.dateCol < config.tasks.positionCol);
-  const off = hasDateCol ? (config.tasks.positionCol - config.tasks.dateCol) : 0;
+  // v3.5: אינדקסים יחסיים לתוך הטווח שנקרא, לפי העמודות שזוהו.
+  const first = layout.taskFirstCol;
+  const iDate = layout.col.date ? layout.col.date - first : -1;
+  const iPosition = layout.col.position - first;
+  const iType = layout.col.type - first;
+  const iTime = layout.col.time - first;
+  const iAssigned = layout.col.soldier - first;
+
   values.forEach(function(row, idx) {
-    const rowDate = hasDateCol ? parseDateOnly_(row[0]) : null;
-    const position = cleanText_(row[off]);
-    const type = cleanText_(row[off + 1]);
-    const timeValue = row[off + 2];
-    const assigned = cleanText_(row[off + 3]);
+    const rowDate = iDate >= 0 ? parseDateOnly_(row[iDate]) : null;
+    const position = cleanText_(row[iPosition]);
+    const type = cleanText_(row[iType]);
+    const timeValue = row[iTime];
+    const assigned = cleanText_(row[iAssigned]);
     const timeText = cleanText_(timeValue);
 
     if ((!position && !type && !timeText && !assigned) || isHeaderLikeTaskRow_(position, type, timeText, assigned)) {
@@ -636,7 +877,7 @@ function parseCurrentTasks_(values, baseDate, config) {
     }
 
     tasks.push(buildTaskFromFields_({
-      rowNumber: config.firstDataRow + idx,
+      rowNumber: layout.firstDataRow + idx,
       position: position,
       type: type,
       timeValue: timeValue,
@@ -712,49 +953,6 @@ function parseHistoryAssignments_(historySheet, currentBaseDate, config) {
     }
   });
   return assignments;
-}
-
-function parsePreviousTextAssignments_(soldiers, currentBaseDate, config) {
-  const assignments = [];
-  soldiers.forEach(function(soldier) {
-    if (!soldier.previousText) return;
-    const parsed = parseAssignmentsFromPreviousText_(soldier.previousText, soldier.name, currentBaseDate, config);
-    if (parsed) assignments.push(parsed);
-  });
-  return assignments;
-}
-
-/**
- * תיקון v2.0: טקסט כמו "סיור 06-14" מייצר משימה *אחת* (הטווח),
- * ולא משימה נפרדת לכל מספר בטקסט.
- */
-function parseAssignmentsFromPreviousText_(text, soldierName, currentBaseDate, config) {
-  const normalizedText = cleanText_(text);
-  const previousBaseDate = addDays_(currentBaseDate, -1);
-
-  // קודם מנסים טווח שעות; אם אין - לוקחים את השעה הראשונה בלבד.
-  const range = parseTimeRange_(normalizedText);
-  let timeValue = null;
-  if (range) {
-    timeValue = normalizedText; // buildTaskFromFields_ יפרסר את הטווח בעצמו
-  } else {
-    const m = normalizedText.match(/\b\d{1,2}[:.]\d{2}\b|\b\d{1,2}\b/);
-    if (!m) return null;
-    timeValue = m[0];
-  }
-
-  const task = buildTaskFromFields_({
-    rowNumber: null,
-    position: normalizedText,
-    type: normalizedText,
-    timeValue: timeValue,
-    assigned: soldierName,
-    baseDate: previousBaseDate,
-    config: config
-  });
-  const assignment = taskToAssignment_(task, config);
-  assignment.source = 'previous_text';
-  return assignment;
 }
 
 /* ============================================================
@@ -2126,7 +2324,7 @@ function formatPreviousAssignmentForCell_(ev) {
     // מצב שמעיד על נתון כפול/חריג ושווה בדיקה ידנית.
     return ev.previousAssignmentIsToday ? '⚠ היום: ' + text : text;
   }
-  if (ev.soldier.previousText) return limitText_(ev.soldier.previousText, 34);
+  if (ev.soldier.previousDayText) return limitText_(ev.soldier.previousDayText, 34);
   return 'אין';
 }
 
