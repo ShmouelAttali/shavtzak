@@ -229,6 +229,61 @@ Measured facts behind the arithmetic (10/08 + 11/08, verified against real data)
   `$E$1` and cross-sheet refs alone — so a naive "shift every number" diff reports
   false damage. Compare computed values, or spot-check.
 
+## ⚠ Hebrew keywords lie — check them against the sheet before trusting them
+
+Both scripts classify rows by searching for Hebrew substrings in
+`position + ' ' + type`. Two separate bugs have come from a keyword that simply
+never matched, and **both failed in total silence** — the row just gets no
+category, no group, no exemption, and nothing anywhere says so.
+
+| code literal | real sheet value | matches? | cost |
+|---|---|---|---|
+| `'תורן'` — final nun `ן` | `תורנים` — regular nun `נ` | **no** | 108 rows in `כל השבצק` had no rotation group at all |
+| `'מפלג'` | `מפל"ג` — with גרשיים | **no** | would have silently un-fixed the מפל"ג exemption |
+
+Two traps, and they compose:
+
+- **Final letters.** `ן ם ך ף ץ` are distinct characters from `נ ם כ פ צ`.
+  `'תורן'` cannot match `תורנים`; only `'תורנ'` can. Any keyword whose last
+  letter is a final form matches *only* the word in isolation.
+- **The two files normalize differently.** `normalizeForSearch_` (engine) strips
+  `" ' ״ ׳`; `normalize_` (Ops) strips only directionality marks and whitespace.
+  So the same keyword list is safe in one file and broken in the other. When
+  matching a unit or role on the Ops side, go through `normalizeUnitText_`.
+
+The census is one API call and settles it — list every distinct
+`position || type` in `כל השבצק` with counts before adding a keyword. That is
+how the `תורנים` spelling was found, and how you'd notice a new one appearing.
+Order matters too: `כונן גשש ותורן רס"פ` contains both `גשש` and `תורן`, and the
+גשש check deliberately runs first.
+
+## Verifying an engine change before you deploy it
+
+A push is a live deploy, and the engine is ~2.5k lines of scoring where a
+one-line change can reorder every candidate list. Two committed tools:
+
+```bash
+npx tsx apps-script/tools/offline-validate.mts --last 14   # validators, per op day + blame
+npx tsx apps-script/tools/ab-recommendations.mts           # engine: HEAD vs working tree
+```
+
+`ab-recommendations.mts` runs both versions of the engine over the *same* live
+snapshot in a fake `SpreadsheetApp` and prints only the cells that differ, so
+"6 cells changed, all in the התקפי block" becomes a fact you can paste into the
+commit message. `--base <ref>`, `--only <substring>`, `--full`.
+
+⚠ **The sheet moves under you.** It is rebuilt for the next day constantly, and
+a block you are testing may be empty by the time you run — which yields
+`0 cells changed`, indistinguishable from "no regression" unless you look. The
+tool prints coverage first and exits 2 on an empty comparison for exactly this
+reason. If the block you need is empty, inject a lineup into the snapshot and
+compare that instead of concluding anything from a vacuous run.
+
+Both tools load **both** script files in filename order, because Apps Script
+concatenates them into one global scope; a harness that loads only
+`ShavtzakRecommendation.js` throws `ReferenceError` the moment the engine calls
+something defined in `ShabtzakOps.js`.
+
 ## The 14:00 operational day — a grouping, not a second date convention
 
 This one has burned two agents (and this skill's first draft). Get it right:
