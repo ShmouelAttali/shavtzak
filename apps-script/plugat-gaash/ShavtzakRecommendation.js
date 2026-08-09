@@ -1,6 +1,19 @@
 /** @OnlyCurrentDoc */
 /**
- * Shabtzak Recommendations Engine v3.8 - שעון לחימה 14:00-14:00
+ * Shabtzak Recommendations Engine v3.9 - שעון לחימה 14:00-14:00
+ *
+ * שינויים ב-v3.9 - תורנות: קבוצת רוטציה והוגנות:
+ * 1. תיקון זיהוי: "תורנים" (נו"ן רגילה) לא נתפס ע"י החיפוש 'תורן'
+ *    (נו"ן סופית), ולכן 108 שורות התורנות ב"כל השבצק" - וגם המשבצות
+ *    של היום - נפלו ל-day_blocking בלי שום קבוצת רוטציה. התוצאה:
+ *    סטטיות ואז תורנות לא נחשבו לאותה קבוצה ולא נענשו. שני האיותים
+ *    נמצאים עכשיו ב-toranutKeywords, ותורנות היא daily_duty = סטטית.
+ * 2. הוגנות תורנויות: בשיבוץ תורנות נספרות *כל* התורנויות הקודמות של
+ *    החייל בכל "כל השבצק" (לא רק חלון הלוקבק), וכל אחת מוסיפה קנס.
+ *    כך מי שעשה הכי מעט עולה לראש הרשימה. התקרה מונעת חסימת-לתמיד של
+ *    מי שהיסטורית עשה הרבה.
+ * 3. "כל השבצק" נקרא פעם אחת ומשרת גם את חלון הלוקבק וגם את הספירה
+ *    ההיסטורית, כדי לא לשלם קריאה שנייה על גיליון של ~4700 שורות.
  *
  * שינויים ב-v3.8 - צוותי התקפי:
  * 1. התקפי יוצא בשני צוותים באותה קבוצה (משבצות 1-4 ו-5-8). ההעדפה
@@ -194,6 +207,12 @@ const SHABTZAK_REC_CONFIG = {
   // המבוססות על יורדי סיור - רושמים טווח שעות בעמודת השעה.
   trackerKeywords: ['כונן גשש', 'גשש'],
 
+  // תורנות. שתי הצורות נחוצות: "תורנים" נכתב בנו"ן רגילה ו-"תורן רס״פ"
+  // בנו"ן סופית, ולכן חיפוש 'תורן' בלבד פספס את 108 שורות ה"תורנים"
+  // שב"כל השבצק". הבדיקה תמיד אחרי הגשש - "כונן גשש ותורן רס״פ" היא
+  // משמרת גשש ולא תורנות.
+  toranutKeywords: ['תורנ', 'תורן'],
+
   postOfficerKeywords: ['קצין מוצב'],
 
   fullDayBlockingTimeKeywords: ['יומי'],
@@ -261,6 +280,13 @@ const SHABTZAK_REC_CONFIG = {
     commanderNeededBonus: -26,
     commanderMissingPenalty: 90,
     dudDriverNightBonus: -16,
+    // v3.9 הוגנות תורנויות: קנס לכל תורנות קודמת של החייל בכל
+    // "כל השבצק", לא רק בחלון הלוקבק. ההתפלגות בפועל (09/08/26, 128
+    // חיילים) היא חציון 0 / ממוצע 0.8 / מקסימום 18, ולכן משקל 8 מפריד
+    // היטב בין מי שלא עשה לבין מי שעשה 2-3, והתקרה מונעת ממי שיש לו
+    // היסטוריה חריגה להיחסם לתמיד.
+    toranutHistoryWeight: 8,
+    toranutHistoryCap: 6,
     // v3.6: משבצת הנהג בסיור פתוחה רק לנהגי דוד; הבונוס קובע איזה נהג
     // ייבחר ראשון כשיש כמה, מול שיקולי המנוחה והעומס.
     dudDriverSeatBonus: -30,
@@ -444,7 +470,9 @@ function updateShabtzakRecommendations() {
   const currentTasks = parseCurrentTasks_(taskValues, baseDate, layout, config);
 
   const historySheet = ss.getSheetByName(config.sheets.history);
-  const historyAssignments = historySheet ? parseHistoryAssignments_(historySheet, baseDate, config) : [];
+  const historyValues = historySheet ? readHistoryValues_(historySheet, config) : [];
+  const historyAssignments = parseHistoryAssignments_(historyValues, baseDate, config);
+  const toranutHistoryCounts = countToranutHistory_(historyValues, config);
   const currentAssignments = currentTasks
     .filter(function(t) { return t && t.assigned; })
     .map(function(t) { return taskToAssignment_(t, config); });
@@ -469,6 +497,7 @@ function updateShabtzakRecommendations() {
     assignmentsBySoldier: assignmentsBySoldier,
     currentBySoldier: currentBySoldier,
     baseDate: baseDate,
+    toranutHistoryCounts: toranutHistoryCounts,
     statsCache: {},
     availabilityCache: {},
     config: config
@@ -945,25 +974,53 @@ function parseCurrentTasks_(values, baseDate, layout, config) {
   return tasks;
 }
 
-function parseHistoryAssignments_(historySheet, currentBaseDate, config) {
+/**
+ * v3.9: קריאה אחת של כל "כל השבצק". שני צרכנים שונים לה - חלון הלוקבק
+ * (parseHistoryAssignments_, שממשיך לבנות אובייקטים רק לזנב) וספירת
+ * התורנויות ההיסטורית, שצריכה את הגיליון כולו.
+ */
+function readHistoryValues_(historySheet, config) {
   const lastRow = historySheet.getLastRow();
-  if (lastRow < config.history.firstDataRow) return [];
-
-  // ביצועים: קוראים רק את זנב הגיליון. מניחים שההיסטוריה נכתבת
-  // כרונולוגית (שורות חדשות למטה); הסינון לפי תאריך בהמשך מגבה בכל מקרה.
-  const maxScan = config.history.maxScanRows || 0;
-  let firstScanRow = config.history.firstDataRow;
-  let rowCount = lastRow - firstScanRow + 1;
-  if (maxScan > 0 && rowCount > maxScan) {
-    firstScanRow = lastRow - maxScan + 1;
-    rowCount = maxScan;
-  }
+  const firstRow = config.history.firstDataRow;
+  if (lastRow < firstRow) return [];
 
   const maxCol = Math.max(
     config.history.dateCol, config.history.positionCol, config.history.typeCol,
     config.history.timeCol, config.history.soldierCol
   );
-  const values = historySheet.getRange(firstScanRow, 1, rowCount, maxCol).getValues();
+  return historySheet.getRange(firstRow, 1, lastRow - firstRow + 1, maxCol).getValues();
+}
+
+/**
+ * v3.9: כמה תורנויות עשה כל חייל בכל ההיסטוריה. משמש להוגנות בשיבוץ
+ * תורנות (applyToranutFairnessScoring_) - שם דווקא כן רוצים את התמונה
+ * המלאה ולא את חלון עשרת הימים.
+ */
+function countToranutHistory_(values, config) {
+  const counts = {};
+  values.forEach(function(row) {
+    const soldier = cleanText_(row[config.history.soldierCol - 1]);
+    if (!soldier) return;
+    if (!isToranutText_(
+      cleanText_(row[config.history.positionCol - 1]),
+      cleanText_(row[config.history.typeCol - 1]),
+      config)) return;
+
+    const key = normalizeNameKey_(soldier);
+    counts[key] = (counts[key] || 0) + 1;
+  });
+  return counts;
+}
+
+function parseHistoryAssignments_(historyValues, currentBaseDate, config) {
+  if (!historyValues || !historyValues.length) return [];
+
+  // ביצועים: בונים אובייקטים רק לזנב הגיליון. מניחים שההיסטוריה נכתבת
+  // כרונולוגית (שורות חדשות למטה); הסינון לפי תאריך בהמשך מגבה בכל מקרה.
+  const maxScan = config.history.maxScanRows || 0;
+  const values = (maxScan > 0 && historyValues.length > maxScan)
+    ? historyValues.slice(historyValues.length - maxScan)
+    : historyValues;
 
   const lookbackStart = addDays_(currentBaseDate, -config.historyLookbackDays - 2);
   // היום המבצעי הנוכחי (מתחיל ב-14:00 של currentBaseDate).
@@ -1142,7 +1199,7 @@ function getTaskCategory_(position, type, timeValue, config) {
   // סדר חשוב: גשש ותורן לפני כוננות/יומי, כדי ששורות כמו
   // "כונן גשש ותורן רס\"פ / יומי" יקבלו את הזמנים הנכונים שלהן.
   if (containsAny_(text, config.trackerKeywords || ['גשש'])) return 'tracker';
-  if (text.indexOf('תורן') !== -1 || text.indexOf('תורנות') !== -1) return 'daily_duty';
+  if (isToranutText_(position, type, config)) return 'daily_duty';
 
   if (containsAny_(text, config.carmelTaskKeywords || [])) return 'carmel';
   if (containsAny_(text, config.ignoredTaskKeywords)) return 'ignored';
@@ -1251,10 +1308,31 @@ function isMagenTagbatzComplement_(a, b) {
     (a.category === 'tagbatz' && b.category === 'magen');
 }
 
+/**
+ * v3.9: זיהוי תורנות, במקום אחד. מוגדר אחרי הגשש בכוונה - שורה כמו
+ * "כונן גשש ותורן רס״פ" היא משמרת גשש ולא תורנות.
+ */
+function isToranutText_(position, type, config) {
+  const cfg = config || SHABTZAK_REC_CONFIG;
+  const text = normalizeForSearch_((position || '') + ' ' + (type || ''));
+  if (!text) return false;
+  if (containsAny_(text, cfg.trackerKeywords || ['גשש'])) return false;
+  return containsAny_(text, cfg.toranutKeywords || []);
+}
+
+/**
+ * שתי קבוצות הרוטציה: סטטית (עמדות הגנה, תורנות, כונן גשש) מול דינמית
+ * (סיור, התקפי). אחרי יום בקבוצה אחת מעדיפים לעבור לשנייה - ולכן
+ * סטטיות ואז תורנות *אינה* רוטציה, שתיהן באותה קבוצה.
+ */
 function getMissionClass_(category, config, taskOrAssignment) {
-  const text = taskOrAssignment ? normalizeForSearch_((taskOrAssignment.position || '') + ' ' + (taskOrAssignment.type || '')) : '';
+  const position = taskOrAssignment ? taskOrAssignment.position : '';
+  const type = taskOrAssignment ? taskOrAssignment.type : '';
+  const text = normalizeForSearch_((position || '') + ' ' + (type || ''));
   if (category === 'static' || category === 'tracker' || category === 'daily_duty') return 'static';
-  if (category === 'day_blocking' && (text.indexOf('גשש') !== -1 || text.indexOf('תורן') !== -1 || text.indexOf('תורנות') !== -1)) return 'static';
+  // רשת ביטחון לשורות "יומי" שלא נתפסו בקטגוריה עצמה.
+  if (category === 'day_blocking' &&
+      (text.indexOf('גשש') !== -1 || isToranutText_(position, type, config))) return 'static';
   if (category === 'tour' || category === 'attack') return 'dynamic';
   return '';
 }
@@ -1691,6 +1769,7 @@ function evaluateCandidateForTask_(soldier, task, context) {
     previousDayMatch: null,
     samePlatoonAsGroupCommander: false,
     samePlatoonCommanderLabel: '',
+    toranutHistoryCount: 0,
     stats: null,
     sameDayMissionHours: 0,
     sameDayKonenutHours: 0
@@ -1934,6 +2013,7 @@ function evaluateCandidateForTask_(soldier, task, context) {
   applyMagenTagbatzPackageScoring_(result, task, currentAssignmentsForSoldier, config);
   applyRoleScoring_(result, soldier, task, context.group, context.soldiersByName, context.currentTasks, config);
   applySamePlatoonAsGroupCommanderScoring_(result, soldier, task, context.group, context.soldiersByName, config);
+  applyToranutFairnessScoring_(result, soldier, task, context, config);
 
   result.reasons.push('נח ' + formatHours_(prevRest));
   result.reasons.push(Math.round(stats.totalHours) + ' שעות משימה ב־7 ימים');
@@ -1990,6 +2070,31 @@ function applyMagenTagbatzPackageScoring_(result, task, currentAssignmentsForSol
     result.score += config.scoring.magenTagbatzPackageBonus || 0;
     result.reasons.push('משלים מגן+תגב״צ');
   }
+}
+
+/**
+ * v3.9: הוגנות תורנויות. בשונה משאר המשקלים, שנמדדים על חלון של 7-10
+ * ימים, כאן סופרים את *כל* ההיסטוריה ב"כל השבצק": תורנות היא תורנות גם
+ * אם הייתה לפני חודש, ומי שעשה פחות צריך להיות ראשון בתור.
+ *
+ * הקנס לינארי בכמות התורנויות הקודמות ומוגבל בתקרה, כדי שחייל עם
+ * היסטוריה חריגה (18 תורנויות מול חציון 0) לא ייחסם לתמיד.
+ */
+function applyToranutFairnessScoring_(result, soldier, task, context, config) {
+  if (!task || task.category !== 'daily_duty') return;
+
+  const count = (context.toranutHistoryCounts || {})[soldier.nameKey] || 0;
+  result.toranutHistoryCount = count;
+
+  if (!count) {
+    result.reasons.push('✓ לא עשה תורנות עד היום');
+    return;
+  }
+
+  const cap = config.scoring.toranutHistoryCap || 6;
+  const weight = config.scoring.toranutHistoryWeight || 8;
+  result.score += Math.min(count, cap) * weight;
+  result.reasons.push(count + ' תורנויות בעבר');
 }
 
 function applySamePlatoonAsGroupCommanderScoring_(result, soldier, task, group, soldiersByName, config) {
@@ -2679,6 +2784,9 @@ function formatWorkloadSummary_(ev) {
   if (stats.tourCount) parts.push(stats.tourCount + ' סיור');
   if (stats.attackCount) parts.push(stats.attackCount + ' התקפי');
   if (stats.postOfficerCount) parts.push(stats.postOfficerCount + ' קצין מוצב');
+  // v3.9: בשורות תורנות מציגים את הספירה ההיסטורית המלאה - היא מה
+  // שקובע את סדר העדיפות שם, ובלעדיה הדירוג נראה שרירותי.
+  if (ev.toranutHistoryCount) parts.push('סה״כ ' + ev.toranutHistoryCount + ' תורנויות');
   return parts.join(', ');
 }
 
