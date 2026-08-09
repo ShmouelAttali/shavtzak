@@ -1,11 +1,18 @@
 /***************
- * שבצ"ק - ולידציה, מילוי ומצבה (קובץ מאוחד) - v3.12 שעון לחימה 14:00-14:00
+ * שבצ"ק - ולידציה, מילוי ומצבה (קובץ מאוחד) - v3.13 שעון לחימה 14:00-14:00
  *
  * Sheet names:
  * - כל השבצק
  * - מצבת החיילים
  *
- * שינויים בגרסה זו (v3.12) - יציאה קצרה מאושרת:
+ * שינויים בגרסה זו (v3.13):
+ * 1. ההתראה "חייל מסומן כזמין אבל בלי משימה" מדלגת על אנשי המפל"ג
+ *    (UNASSIGNED_ALERT_EXEMPT_UNITS). הם אינם משובצים בשבצ"ק הפלוגתי,
+ *    ולכן ההתראה עליהם הייתה רעש קבוע - 6 מתוך 42 התראות ביום נבדק.
+ * 2. readRoster_ טוען גם מחלקה ותפקיד. שתי העמודות אופציונליות: אם
+ *    אינן קיימות רק הפטור לא יעבוד, והוולידציה ממשיכה כרגיל.
+ *
+ * שינויים ב-v3.12 - יציאה קצרה מאושרת:
  * 1. סטטוס יציאה ב"מצבת החיילים" נקרא כחלון זמן אמיתי, באחת משלוש
  *    צורות בשעות עגולות ובתוך יום קלנדרי אחד:
  *      "יציאה מ10 עד 22" - חלון מפורש
@@ -118,8 +125,16 @@ const CONFIG = {
     type: 'סוג',
     time: 'השעה',
     soldier: 'החייל',
-    rosterFullName: 'שם מלא'
-  }
+    rosterFullName: 'שם מלא',
+    rosterPlatoon: 'מחלקה',
+    rosterRole: 'תפקיד'
+  },
+
+  // v3.13: מי לא נכלל בהתראת "מסומן כזמין אבל בלי משימה". אנשי המפל"ג
+  // (מ"פ, סמ"פ, רס"פ, סרס"פ, מנהלה) אינם משובצים בשבצ"ק הפלוגתי, ולכן
+  // ההתראה עליהם הייתה רעש קבוע. ההשוואה סובלנית לגרשיים, כך שגם
+  // מפל"ג וגם מפל״ג נתפסים.
+  UNASSIGNED_ALERT_EXEMPT_UNITS: ['מפלג']
 };
 
 function onOpen() {
@@ -203,6 +218,10 @@ function readRoster_(sheet, targetDate, errors) {
 
   const headers = values[headerRowIndex].map(normalize_);
   const fullNameCol = headers.indexOf(fullNameHeader);
+  // v3.13: מחלקה/תפקיד אינם חובה - בלעדיהם רק פטור המפל"ג לא יעבוד,
+  // ואין סיבה להכשיל בגללם את כל הוולידציה.
+  const platoonCol = headers.indexOf(CONFIG.HEADER_NAMES.rosterPlatoon);
+  const roleCol = headers.indexOf(CONFIG.HEADER_NAMES.rosterRole);
 
   const dateCol = findRosterDateColumn_(values, headerRowIndex, targetDate);
 
@@ -232,6 +251,8 @@ function readRoster_(sheet, targetDate, errors) {
 
     soldiers.set(name, {
       name,
+      platoon: platoonCol !== -1 ? normalize_(values[i][platoonCol]) : '',
+      role: roleCol !== -1 ? normalize_(values[i][roleCol]) : '',
       status: statusToday,          // תאימות לאחור
       statusToday: statusToday,
       statusTomorrow: statusTomorrow,
@@ -794,6 +815,8 @@ function validateAvailabilityAndMissingAssignments_(targetShifts, roster, errors
   roster.soldiers.forEach(function(soldier){
     if (!soldier.active) return;
     if (assignedNames.has(soldier.name)) return;
+    // v3.13: המפל"ג אינו משובץ בשבצ"ק הפלוגתי - לא התראה.
+    if (isExemptFromUnassignedAlert_(soldier)) return;
 
     // אם זמין רק בחלק אחד של היום, מציינים זאת כדי שההודעה תהיה מדויקת.
     let note;
@@ -859,6 +882,30 @@ function parseDateCell_(value) {
   if (year < 100) year += 2000;
 
   return new Date(year, month, day);
+}
+
+/**
+ * v3.13: השוואת שם יחידה/תפקיד בלי גרשיים. הגיליון כותב מפל"ג עם גרש
+ * כפול ASCII, ולפעמים עם גרשיים עבריים (״), ו-normalize_ אינו מסיר
+ * אותם - כך שהשוואה ישירה מול 'מפלג' הייתה נכשלת.
+ */
+function normalizeUnitText_(value) {
+  return normalize_(value).replace(/["'׳״]/g, '');
+}
+
+/**
+ * v3.13: אנשי המפל"ג לא משובצים בשבצ"ק הפלוגתי, ולכן ההתראה
+ * "מסומן כזמין אבל בלי משימה" עליהם היא רעש ולא ממצא.
+ */
+function isExemptFromUnassignedAlert_(soldier) {
+  const units = CONFIG.UNASSIGNED_ALERT_EXEMPT_UNITS || [];
+  if (!units.length || !soldier) return false;
+
+  const text = normalizeUnitText_(soldier.platoon) + ' ' + normalizeUnitText_(soldier.role);
+  return units.some(function(unit){
+    const key = normalizeUnitText_(unit);
+    return !!key && text.indexOf(key) !== -1;
+  });
 }
 
 function normalize_(value) {
