@@ -184,6 +184,51 @@ fits the residual hours, so it under-fires rather than mis-steering. When the
 exit fits several mission types, nothing is penalised and ordinary factors
 (rotation, same-task-yesterday, load) decide, which is the required behavior.
 
+## The summary block at the top of `שבצק` (J3:K5)
+
+Three live counters sit above the task table — title in J, formula in K:
+
+| | |
+|---|---|
+| `K3` חיילים זמינים | from `מצבת החיילים`, the E1 date column: not חופש / לא מגויס, **מחלקה 1/2/3 only** |
+| `K4` חיילים במגן | distinct pool soldiers currently assigned to a `*מגן*` position on this tab |
+| `K5` חיילים לסיור | `K3 − K4 − 12 סטטיות − 8 התקפי − 2 תורנים − חפק − קצין מוצב`, target 10–12 |
+
+⚠ **Only 3 rows may ever be inserted above the task table.** `resolveScheduleLayout_`
+scans `config.tasks.headerSearchRows` (**6**) rows for the header, which now sits at
+row 6 — exactly at the limit. A 4th row would push it out of range and the engine
+would fail to find its columns. Adding more means raising `headerSearchRows` *and
+pushing the script*. Row 1 (with `E1`) was deliberately left in place: `E1` is
+hardcoded in **8** places across both files.
+
+Measured facts behind the arithmetic (10/08 + 11/08, verified against real data):
+
+- **כרמל and כונן גשש must NOT be subtracted.** Both are standby held *on top of*
+  a real mission — 12 and 3 soldiers respectively, **0 exclusive** on both days.
+  This matches the code giving them `hoursForDailyTotal = 0`.
+- **חמל must NOT be subtracted either** — it is manned entirely by the `חמ"ל`
+  platoon, which is outside the assignment pool (so it is also excluded from K3).
+- סטטיות is 12 = 24 four-hour slots ÷ 2 shifts per soldier.
+- With those rules the decomposition is exact: on 11/08,
+  `45 pool-available − 10 מגן − 12 − 8 − 2 − 3 חפק − 1 קצין = 9 = actual סיור`.
+
+### Google Sheets gotchas that cost real time here
+
+- **`COUNTUNIQUE` does not propagate `FILTER`'s `#N/A`** when nothing matches — it
+  counts the error as one distinct value and returns **1**, so
+  `IFERROR(COUNTUNIQUE(FILTER(…)),0)` silently yields 1 instead of 0. Guard with a
+  separate `SUMPRODUCT`/`COUNTIFS` count first. (`JOIN(FILTER(…))` *does* error, so
+  use it to tell the two cases apart while debugging.)
+- **`מחלקה` is stored as a number**, not text — `=("1")` comparisons are all false.
+  Dates (`E1`, the roster date row) are serial numbers, so `MATCH` on them works.
+- Avoid `{1;2;3}` array literals — the separators are locale-dependent. Use
+  `(x=1)+(x=2)+(x=3)`.
+- The tab is only **42 columns** wide; writing a probe formula beyond that
+  silently returns nothing rather than erroring.
+- Inserting rows rewrites relative same-sheet references (`K4`→`K7`) while leaving
+  `$E$1` and cross-sheet refs alone — so a naive "shift every number" diff reports
+  false damage. Compare computed values, or spot-check.
+
 ## The 14:00 operational day — a grouping, not a second date convention
 
 This one has burned two agents (and this skill's first draft). Get it right:
