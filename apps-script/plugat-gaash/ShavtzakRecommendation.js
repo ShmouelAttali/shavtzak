@@ -1,6 +1,20 @@
 /** @OnlyCurrentDoc */
 /**
- * Shabtzak Recommendations Engine v3.6 - שעון לחימה 14:00-14:00
+ * Shabtzak Recommendations Engine v3.7 - שעון לחימה 14:00-14:00
+ *
+ * שינויים ב-v3.7 - יציאה קצרה מאושרת:
+ * 1. סטטוס "יציאה HH:MM-HH:MM" ב"מצבת החיילים" חוסם רק את חלון הזמן
+ *    שלו, לא את היום כולו (findExitConflict_). הבדיקה חצי-פתוחה:
+ *    חייל שיצא עד 22:00 יכול לעלות למשימה שמתחילה ב-22:00.
+ *    היא נעשית מחוץ ל-availabilityCache, שמפתחו ברזולוציית יום בלבד
+ *    ולכן היה מחזיר את אותה תשובה לשתי משבצות בשעות שונות.
+ * 2. היציאה אינה נכנסת ל-assignments ולכן אינה נספרת בשעות עבודה
+ *    ואינה משפיעה על חישובי מנוחה - היא רק תופסת את חלון הזמן שלה.
+ * 3. exitPackageMisfitPenalty: קנס רך על משימה חלקית שתדרוש משמרת
+ *    משלימה שאין לה חלון פנוי סביב היציאה (למשל עמדת הגנה של 4 שעות
+ *    מול יציאה ארוכה). כשהיציאה מתאימה לכמה סוגי משימות אין קנס לאף
+ *    אחד מהם, והבחירה נשארת בידי שאר השיקולים.
+ *    פירוס הפורמט ב-parseExitStatus_ (מוגדר ב-ShabtzakOps).
  *
  * שינויים ב-v3.6 - משבצת הנהג בסיור:
  * 1. המשבצת האחרונה בכל סיור שמורה לנהג דוד, כפי שהראשונה שמורה
@@ -245,7 +259,15 @@ const SHABTZAK_REC_CONFIG = {
     currentDayWouldExceedPenalty: 28,
     // תקרת עומס יומי: מעבר לזה המועמד יורד ל"בדוחק" (לא נחסם לגמרי,
     // כדי שתמיד תהיה המלצה - אבל תמיד בתחתית ועם אזהרה ברורה).
-    maxSameDayMissionHours: 10
+    maxSameDayMissionHours: 10,
+
+    // v3.6: יציאה קצרה מאושרת ("יציאה HH:MM-HH:MM" במצבת החיילים).
+    // החסימה הקשיחה היא רק על חפיפה בפועל; זהו קנס *רך* על משימה
+    // חלקית שתדרוש משמרת משלימה שאין לה מקום סביב היציאה.
+    // כשהיציאה מתאימה לכמה סוגי משימות - אין קנס לאף אחד מהם,
+    // והבחירה נשארת בידי שאר השיקולים (רוטציה, עומס, מנוחה).
+    exitPackageMisfitPenalty: 45,
+    exitDailyTargetHours: 8
   }
 };
 
@@ -1625,6 +1647,13 @@ function evaluateCandidateForTask_(soldier, task, context) {
   }
   if (!statusCheck.available) return reject_(result, statusCheck.reason);
 
+  // v3.6: יציאה קצרה מאושרת חוסמת רק את חלון הזמן שלה.
+  // בכוונה *מחוץ* ל-availabilityCache: המפתח שם הוא ברזולוציית יום,
+  // ואילו יציאה תלויה בשעות המשבצת - שתי משבצות באותו יום יכולות
+  // לקבל תשובות שונות.
+  const exitConflict = findExitConflict_(soldier, task, context.baseDate);
+  if (exitConflict) return reject_(result, 'ביציאה מאושרת (' + exitConflict.text + ')');
+
   if (task.category === 'static' && config.scoring.seniorCommanderStaticBlock && soldier.isSeniorCommander) {
     return reject_(result, 'מ״מ/סמל לא עולים עמדות הגנה');
   }
@@ -1787,6 +1816,7 @@ function evaluateCandidateForTask_(soldier, task, context) {
   result.sameDayHours = sameDayHours.missionHours;
 
   applySameDayWorkloadScoring_(result, sameDayHours.missionHours, task, config);
+  applyExitPackageScoring_(result, soldier, task, sameDayHours.missionHours, context, config);
 
   result.score += stats.totalHours * config.scoring.totalHourWeight;
   result.score += stats.nightCount * config.scoring.nightWeight;
@@ -1979,6 +2009,103 @@ function applyRoleScoring_(result, soldier, task, group, soldiersByName, current
       result.warnings.push('כבר יש מ״כ/מ״ח בשעה הזו');
     }
   }
+}
+
+/* ============================================================
+ * יציאה קצרה מאושרת
+ * הפורמט נפרס ב-parseExitStatus_ (מוגדר ב-ShabtzakOps, אותו פרויקט).
+ * היציאה אינה משימה: היא לא נספרת בשעות עבודה ולא דורשת מנוחה
+ * סביבה - היא רק תופסת את חלון הזמן שלה.
+ * ============================================================ */
+
+// כל חלונות היציאה הרלוונטיים ליממה, כתאריכים מלאים.
+// נבדקות שלוש עמודות (אתמול/היום/מחר) כי יציאה באותו יום קלנדרי
+// עשויה לחצות את 14:00 ולכן ליפול בשתי יממות מבצעיות.
+function exitWindowsForSoldier_(soldier, baseDate) {
+  if (!soldier || !baseDate) return [];
+
+  const base = dateOnly_(baseDate);
+  const columns = [
+    { status: soldier.statusYesterday, offset: -1 },
+    { status: soldier.statusToday, offset: 0 },
+    { status: soldier.statusTomorrow, offset: 1 }
+  ];
+
+  const windows = [];
+  columns.forEach(function(c) {
+    const exit = parseExitStatus_(c.status);
+    if (!exit) return;
+    const day = addDays_(base, c.offset);
+    windows.push({
+      start: new Date(day.getTime() + exit.startMin * 60000),
+      end: new Date(day.getTime() + exit.endMin * 60000),
+      text: exit.text
+    });
+  });
+  return windows;
+}
+
+// חפיפה בפועל בין המשבצת ליציאה. חצי-פתוח: יציאה שמסתיימת ב-22:00
+// ומשימה שמתחילה ב-22:00 אינן חופפות.
+function findExitConflict_(soldier, task, baseDate) {
+  if (!task || !task.start || !task.end) return null;
+
+  const windows = exitWindowsForSoldier_(soldier, baseDate);
+  for (let i = 0; i < windows.length; i++) {
+    if (task.start < windows[i].end && windows[i].start < task.end) return windows[i];
+  }
+  return null;
+}
+
+/**
+ * v3.6: לחייל עם יציאה מאושרת - עדיפות למשימה שסוגרת לו את היום
+ * במקטע אחד. משימה חלקית (למשל עמדת הגנה של 4 שעות) תדרוש משמרת
+ * משלימה בהמשך היממה; אם היציאה לא מותירה חלון רצוף בגודל המתאים,
+ * החייל ייחסם מהמשלימה - ייווצר חור בשבצ"ק והוא יישאר מתחת לתקרה.
+ *
+ * זהו קנס רך בלבד, ורק כשהמשימה באמת לא מסתדרת: כשהיציאה מתאימה גם
+ * לסיור וגם לסטטיות, אף אחד מהם לא נקנס והבחירה נשארת בידי שאר
+ * השיקולים (רוטציה, אותה משימה אתמול, עומס, מנוחה).
+ */
+function applyExitPackageScoring_(result, soldier, task, sameDayMissionHours, context, config) {
+  if (!task || !task.start || !task.end) return;
+
+  const windows = exitWindowsForSoldier_(soldier, context.baseDate);
+  if (!windows.length) return;
+
+  const target = config.scoring.exitDailyTargetHours || 8;
+  const residual = target - (sameDayMissionHours || 0) - (task.durationHours || 0);
+  if (residual <= 0.01) return; // המשימה סוגרת את היום - אין משלימה
+
+  const dayStart = makeDateWithTime_(
+    getOperationalBaseDateForDate_(task.start), opDayStartHour_(), opDayStartMinute_(), 0);
+  const dayEnd = new Date(dayStart.getTime() + 24 * 60 * 60 * 1000);
+
+  // תפוס = המשימה הנבדקת + חלונות היציאה, חתוכים לגבולות היממה.
+  const busy = [{ start: task.start, end: task.end }].concat(windows);
+  const clipped = [];
+  busy.forEach(function(b) {
+    const s = Math.max(b.start.getTime(), dayStart.getTime());
+    const e = Math.min(b.end.getTime(), dayEnd.getTime());
+    if (e > s) clipped.push({ s: s, e: e });
+  });
+  clipped.sort(function(a, b) { return a.s - b.s; });
+
+  let cursor = dayStart.getTime();
+  let largestGapHours = 0;
+  clipped.forEach(function(b) {
+    if (b.s > cursor) {
+      largestGapHours = Math.max(largestGapHours, (b.s - cursor) / 3600000);
+    }
+    cursor = Math.max(cursor, b.e);
+  });
+  largestGapHours = Math.max(largestGapHours, (dayEnd.getTime() - cursor) / 3600000);
+
+  if (largestGapHours + 0.01 >= residual) return;
+
+  result.score += config.scoring.exitPackageMisfitPenalty || 45;
+  result.warnings.push(
+    'היציאה לא מותירה חלון למשמרת המשלימה (' + formatHours_(residual) + ')');
 }
 
 function getAvailabilityStatus_(soldier, task, config, scheduleBaseDate) {

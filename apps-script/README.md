@@ -31,6 +31,28 @@ deployment is the implicit `@HEAD`. So **a save in the script editor — or a
 next fire). There is no staging and no rollback other than the IDE's project
 history or this git directory.
 
+## ⚠ Sheet-side step this repo cannot do for you
+
+The `יציאה HH:MM-HH:MM` feature needs the **data validation** on the date cells
+of `מצבת החיילים` changed from list-from-range to a custom formula, or the
+officer cannot type the value in the first place. In Data → Data validation, for
+the presence-matrix range, set *Custom formula is* (and keep "Reject input"):
+
+```
+=OR(
+  COUNTIF(אפשרויות!$C$2:$C$12, A1) > 0,
+  AND(
+    REGEXMATCH(A1, "^יציאה ([01]\d|2[0-3]):[0-5]\d-([01]\d|2[0-3]):[0-5]\d$"),
+    TIMEVALUE(MID(A1,7,5)) < TIMEVALUE(MID(A1,13,5))
+  )
+)
+```
+
+`A1` must be the range's top-left cell. `יציאה` is 5 characters, so `MID(A1,7,5)`
+is the start time and `MID(A1,13,5)` the end. The `TIMEVALUE` comparison is what
+enforces "same calendar day" — a regex alone cannot express ordering. Column C of
+`אפשרויות` stays the source for the existing dropdown values.
+
 **The 14:00→14:00 operational day is a grouping, not a date convention.** תאריך
 is always the row's literal calendar day — within one operational day the sheet
 writes 22:00 under `11/08` and 06:00 under `12/08`. `operationalDayOfDateTime_`
