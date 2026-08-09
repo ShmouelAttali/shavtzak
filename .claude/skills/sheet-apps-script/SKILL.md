@@ -194,12 +194,18 @@ Three live counters sit above the task table — title in J, formula in K:
 | `K4` חיילים במגן | distinct pool soldiers currently assigned to a `*מגן*` position on this tab |
 | `K5` חיילים לסיור | `K3 − K4 − 12 סטטיות − 8 התקפי − 2 תורנים − חפק − קצין מוצב`, target 10–12 |
 
-⚠ **Only 3 rows may ever be inserted above the task table.** `resolveScheduleLayout_`
-scans `config.tasks.headerSearchRows` (**6**) rows for the header, which now sits at
-row 6 — exactly at the limit. A 4th row would push it out of range and the engine
-would fail to find its columns. Adding more means raising `headerSearchRows` *and
-pushing the script*. Row 1 (with `E1`) was deliberately left in place: `E1` is
-hardcoded in **8** places across both files.
+⚠ **Rows above the task table are capped by `config.tasks.headerSearchRows`.**
+`resolveScheduleLayout_` scans that many rows for the header; anything below is
+invisible and the engine fails to find its columns. The header now sits at row 6.
+
+The repo is at **20**, but that only helps once it is deployed — **the live script
+is still at 6**, i.e. exactly at the limit with today's 3 inserted rows. So until
+someone runs `gs:push`, a 4th row breaks the recommendations. Check the live value,
+not the repo's, before adding rows.
+
+Row 1 (with `E1`) was deliberately left in place, which is what let the summary
+block ship with no script change at all: `E1` is hardcoded in **8** places across
+both files.
 
 Measured facts behind the arithmetic (10/08 + 11/08, verified against real data):
 
