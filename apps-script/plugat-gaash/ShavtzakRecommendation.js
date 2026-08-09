@@ -1,6 +1,18 @@
 /** @OnlyCurrentDoc */
 /**
- * Shabtzak Recommendations Engine v3.8 - שעון לחימה 14:00-14:00
+ * Shabtzak Recommendations Engine v3.9 - שעון לחימה 14:00-14:00
+ *
+ * שינויים ב-v3.9 - זיכוי מנוחה אחרי התקפי יומי:
+ * 1. כוננות התקפית יומית (התקפי / יומי) תופסת 14:00-14:00 אבל רובה
+ *    המתנה - בוולידציה היא נספרת כ-8 שעות עבודה בלבד. לכן בסיומה
+ *    (14:00) החייל נחשב כמי שכבר נח attackRestCreditHours (4) שעות,
+ *    ולא כמי שיורד ממשמרת רגע לפני המשימה הבאה.
+ * 2. התוצאה המכוונת: הוא כשיר מיד לעמדה סטטית של 4 שעות (מינימום
+ *    מנוחה 4), עם אזהרת "מנוחה קצרה"; משימה ארוכה מ-4 שעות (סיור)
+ *    עדיין נדחית - היא דורשת 8 שעות מנוחה.
+ * 3. הזיכוי חל רק על התקפי *יומי*, לשני הכיוונים (המשימה שאחריו
+ *    ולמשימה שלפני התקפי הבא). פעילות התקפי עם טווח שעות מפורש היא
+ *    משמרת רגילה ואינה מזוכה.
  *
  * שינויים ב-v3.8 - צוותי התקפי:
  * 1. התקפי יוצא בשני צוותים באותה קבוצה (משבצות 1-4 ו-5-8). ההעדפה
@@ -167,7 +179,11 @@ const SHABTZAK_REC_CONFIG = {
     // כונן גשש: הכוננות ברובה שינה/המתנה, ולכן מועמד שאינו "יורד הסיור
     // המיועד" נבדק מול חלון פעילות קצר ולא מול כל המשמרת.
     // יורד הסיור התואם פטור לגמרי מבדיקת מנוחה (ראה trackerAfterTourBonus).
-    trackerEffectiveDurationHours: 1.5
+    trackerEffectiveDurationHours: 1.5,
+    // v3.9: כוננות התקפית יומית (14:00-14:00) היא ברובה המתנה - בוולידציה
+    // היא נספרת כ-8 שעות עבודה בלבד. לכן בסיומה החייל נחשב כמי שכבר נח
+    // כך וכך שעות, כדי שיוכל לעלות מיד לעמדה סטטית (4 שעות).
+    attackRestCreditHours: 4
   },
 
   roles: {
@@ -1220,6 +1236,24 @@ function isRestRelevantAssignment_(assignment) {
   return isMissionRelevantAssignment_(assignment);
 }
 
+/**
+ * v3.9: כוננות התקפית יומית - זיכוי מנוחה בסיומה.
+ * ההתקפי היומי חוסם 14:00-14:00 אבל רובו המתנה (בוולידציה הוא נספר
+ * כ-8 שעות בלבד), ולכן ב-14:00 החייל נחשב כמי שכבר נח את הזיכוי.
+ * התקפי עם טווח שעות מפורש הוא משמרת רגילה - בלי זיכוי.
+ */
+function isDailyAttackAssignment_(taskOrAssignment) {
+  return !!taskOrAssignment &&
+    taskOrAssignment.category === 'attack' &&
+    !!taskOrAssignment.isFullDayByTime;
+}
+
+function restCreditAfter_(taskOrAssignment, config) {
+  if (!isDailyAttackAssignment_(taskOrAssignment)) return 0;
+  const cfg = config || SHABTZAK_REC_CONFIG;
+  return Number(cfg.rest.attackRestCreditHours || 0);
+}
+
 function isMagenCategory_(taskOrAssignment) {
   return !!taskOrAssignment && (
     taskOrAssignment.category === 'magen' ||
@@ -1823,8 +1857,16 @@ function evaluateCandidateForTask_(soldier, task, context) {
   // --- מנוחה ---
   const prev = findPreviousAssignment_(restRelevantAssignmentsForSoldier, task.start);
   const next = findNextCurrentAssignment_(currentRestAssignmentsForSoldier, task.end);
-  const prevRest = prev ? hoursBetween_(prev.end, task.start) : config.rest.maxDisplayedRestHours;
-  const nextRest = next ? hoursBetween_(task.end, next.start) : config.rest.maxDisplayedRestHours;
+  const prevRestRaw = prev ? hoursBetween_(prev.end, task.start) : config.rest.maxDisplayedRestHours;
+  const nextRestRaw = next ? hoursBetween_(task.end, next.start) : config.rest.maxDisplayedRestHours;
+
+  // v3.9: אחרי התקפי יומי (ומיד לפני התקפי יומי) מזכים שעות מנוחה -
+  // הכוננות היא ברובה המתנה, ולכן מי שירד ממנה ב-14:00 כשיר מיד
+  // לעמדה סטטית. השעות "האמיתיות" נשמרות לבונוס הזמינות בלבד.
+  const prevRestCredit = prev ? restCreditAfter_(prev, config) : 0;
+  const nextRestCredit = next ? restCreditAfter_(task, config) : 0;
+  const prevRest = prevRestRaw + prevRestCredit;
+  const nextRest = nextRestRaw + nextRestCredit;
   result.previousAssignment = prev;
   result.previousAssignmentIsToday = !!(prev && sameOperationalDay_(prev.start, task.start));
   result.restBeforeHours = prevRest;
@@ -1855,6 +1897,11 @@ function evaluateCandidateForTask_(soldier, task, context) {
       result.warnings.push(restEvalBefore.warning);
       result.score += config.scoring.shortRestPenalty;
     }
+  }
+
+  if (prevRestCredit > 0) {
+    result.reasons.push('ירד מכוננות התקפית ' + formatTimeOnly_(prev.end) +
+      ' - נחשב כ־' + formatHours_(prevRestCredit) + ' מנוחה');
   }
 
   const restEvalAfter = evaluateRestWindow_(nextRest, next ? next.durationHours : 4, config);
@@ -1888,7 +1935,9 @@ function evaluateCandidateForTask_(soldier, task, context) {
   result.score += stats.tourCount * config.scoring.tourWeight;
   result.score += stats.attackCount * config.scoring.attackWeight;
   result.score += stats.commanderTaskCount * config.scoring.commandTaskWeight;
-  result.score += Math.min(prevRest, 24) * config.scoring.availableRestBonusPerHour;
+  // בונוס הזמינות נמדד על המנוחה בפועל, בלי זיכוי ההתקפי:
+  // הזיכוי פותח את הכשירות, אבל לא הופך מועמד לרענן יותר משהוא.
+  result.score += Math.min(prevRestRaw, 24) * config.scoring.availableRestBonusPerHour;
 
   if (prev) {
     if (normalizeForSearch_(prev.position) && normalizeForSearch_(prev.position) === normalizeForSearch_(task.position)) {
