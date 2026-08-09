@@ -100,8 +100,17 @@ to suspect, and you cannot confirm it from your own account.
 
 ## יציאה קצרה — approved short exits
 
-An approved exit is written by the officer into the `מצבת החיילים` date cell as
-**`יציאה HH:MM-HH:MM`**, one calendar day, end after start. Requests originate in
+An approved exit is written by the officer into the `מצבת החיילים` date cell in
+one of **three whole-hour forms**, always within a single calendar day:
+
+| Cell text | Window |
+|---|---|
+| `יציאה מ10 עד 22` | 10:00 → 22:00 |
+| `יציאה מ20` | 20:00 → midnight ("won't return before the end of the day") |
+| `יציאה עד 10` | midnight → 10:00 |
+
+Hours are 0–23, one or two digits, no minutes — `יציאה 12:00-20:00` is **not** a
+valid form (it was the first design and was replaced). Requests originate in
 the separate *Soldier Deployment Records* doc (see the
 `deployment-requests-sheet` skill), but **approval is manual and neither script
 reads that doc** — which is what lets `ShavtzakRecommendation.js` keep its
