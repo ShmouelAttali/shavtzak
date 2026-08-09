@@ -7,8 +7,8 @@
  *    "אותה מחלקה כמו המפקד" נמדדת מול מפקד הצוות של אותה משבצת:
  *    משבצות 2-4 לפי המפקד במשבצת 1, ומשבצות 6-8 לפי המפקד במשבצת 5.
  *    קודם כל שמונה המשבצות נמדדו מול המפקד שבמשבצת 1.
- * 2. צוות בלי מפקד משלו לא "שואל" את מפקד הצוות השני - אין לו עוגן,
- *    ולכן פשוט אין לו העדפת מחלקה.
+ * 2. אם לצוות אין מפקד משלו (למשל אין מפקד במשבצת 5) חוזרים למפקד
+ *    הקבוצה, כך שגם המשבצות האלה מעדיפות חיילים מאותה מחלקה.
  *
  * שינויים ב-v3.7 - יציאה קצרה מאושרת:
  * 1. סטטוס יציאה ב"מצבת החיילים" ("יציאה מ10 עד 22" / "יציאה מ20" /
@@ -1490,30 +1490,42 @@ function isTaskInSplitTeam_(task, group, config) {
   return !!size && getGroupTasksSortedByRow_(group).length > size;
 }
 
-/**
- * המפקד שאליו מיוחסת המשבצת: המשבצת הראשונה של הצוות, ואם אין בה מפקד -
- * המפקד הראשון בתוך אותו צוות. בהתקפי מפוצל לא "שואלים" את מפקד הצוות
- * השני: לצוות בלי מפקד אין עוגן, ולכן אין העדפת מחלקה.
- */
-function getAssignedGroupCommander_(task, group, soldiersByName, config) {
-  if (!group || !group.tasks) return null;
-
-  const teamTasks = getTeamTasksForTask_(task, group, config);
-  if (!teamTasks.length) return null;
-
-  const firstTask = teamTasks[0];
-  if (firstTask && firstTask.assigned) {
-    const firstSoldier = soldiersByName[normalizeNameKey_(firstTask.assigned)];
-    if (firstSoldier && soldierCanCommandTask_(firstSoldier, task)) return firstSoldier;
-  }
-
-  for (let i = 0; i < teamTasks.length; i++) {
-    const t = teamTasks[i];
+function findCommanderInTasks_(tasks, task, soldiersByName) {
+  for (let i = 0; i < tasks.length; i++) {
+    const t = tasks[i];
     if (!t || !t.assigned) continue;
     const s = soldiersByName[normalizeNameKey_(t.assigned)];
     if (s && soldierCanCommandTask_(s, task)) return s;
   }
   return null;
+}
+
+/**
+ * המפקד שאליו מיוחסת המשבצת, לפי סדר העדיפות:
+ * 1. מפקד הצוות של המשבצת - המשבצת הראשונה של הצוות, ואם אין בה מפקד
+ *    אז המפקד הראשון בתוך אותו צוות (בהתקפי: 1-4 מול משבצת 1,
+ *    5-8 מול משבצת 5).
+ * 2. מפקד הקבוצה - אם לצוות אין מפקד משלו (למשל אין מפקד במשבצת 5),
+ *    נופלים למפקד של הקבוצה כולה, כדי שגם המשבצות האלה יעדיפו חיילים
+ *    מאותה מחלקה.
+ *
+ * fromTeam אומר אם העוגן הוא מפקד הצוות עצמו - רק לצורך ניסוח ההסבר.
+ */
+function resolveCommanderForTask_(task, group, soldiersByName, config) {
+  if (!group || !group.tasks) return { commander: null, fromTeam: false };
+
+  const teamTasks = getTeamTasksForTask_(task, group, config);
+  const teamCommander = findCommanderInTasks_(teamTasks, task, soldiersByName);
+  if (teamCommander) {
+    return { commander: teamCommander, fromTeam: isTaskInSplitTeam_(task, group, config) };
+  }
+
+  const groupTasks = getGroupTasksSortedByRow_(group);
+  return { commander: findCommanderInTasks_(groupTasks, task, soldiersByName), fromTeam: false };
+}
+
+function getAssignedGroupCommander_(task, group, soldiersByName, config) {
+  return resolveCommanderForTask_(task, group, soldiersByName, config).commander;
 }
 
 function isSamePlatoon_(a, b) {
@@ -1981,16 +1993,17 @@ function applyMagenTagbatzPackageScoring_(result, task, currentAssignmentsForSol
 }
 
 function applySamePlatoonAsGroupCommanderScoring_(result, soldier, task, group, soldiersByName, config) {
-  const commander = getAssignedGroupCommander_(task, group, soldiersByName, config);
+  // v3.8: בהתקפי מפוצל העוגן הוא מפקד הצוות של המשבצת; אם לצוות אין
+  // מפקד משלו חוזרים למפקד הקבוצה.
+  const resolved = resolveCommanderForTask_(task, group, soldiersByName, config);
+  const commander = resolved.commander;
   if (!commander) return;
   if (commander.nameKey === soldier.nameKey) return;
   if (!isSamePlatoon_(soldier, commander)) return;
 
   result.score += config.scoring.samePlatoonAsGroupCommanderBonus || -7;
   result.samePlatoonAsGroupCommander = true;
-  // v3.8: בהתקפי מפוצל ההשוואה היא מול מפקד הצוות של המשבצת, לא מול
-  // המפקד של המשבצת הראשונה בקבוצה.
-  result.samePlatoonCommanderLabel = isTaskInSplitTeam_(task, group, config)
+  result.samePlatoonCommanderLabel = resolved.fromTeam
     ? 'אותה מחלקה כמו מפקד הצוות'
     : 'אותה מחלקה כמו המפקד';
   result.reasons.push(result.samePlatoonCommanderLabel);

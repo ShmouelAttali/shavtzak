@@ -88,14 +88,40 @@ test('slots 5-8 follow the commander in slot 5, not slot 1', () => {
   }
 });
 
-test('the second team gets no anchor when it has no commander of its own', () => {
+test('a team with no commander of its own falls back to the group commander', () => {
   // slot 5 holds a rifleman and no one in 5-8 can command
   const names = PEOPLE.map(p => p.name);
   names[4] = 'אילן הרמן';
   const group = attackGroup(names);
 
   assert.equal(commanderFor(group, 1)?.name, 'אסף פרץ', 'team A is unaffected');
-  assert.equal(commanderFor(group, 6), null, 'team B does not borrow team A commander');
+  // slots 6-8 still get a מחלקה preference, now pointing at מחלקה 3
+  for (const slot of [6, 7, 8]) {
+    assert.equal(commanderFor(group, slot)?.name, 'אסף פרץ', `slot ${slot}`);
+  }
+});
+
+test('the fallback label says "המפקד", the team anchor says "מפקד הצוות"', () => {
+  const withTeamCommander = attackGroup(PEOPLE.map(p => p.name));
+  const names = PEOPLE.map(p => p.name);
+  names[4] = 'אילן הרמן';
+  const withoutTeamCommander = attackGroup(names);
+
+  const resolve = (group: any, slot: number) =>
+    ctx.resolveCommanderForTask_(group.tasks[slot - 1], group, soldiersByName, REC);
+
+  assert.equal(resolve(withTeamCommander, 6).fromTeam, true);
+  assert.equal(resolve(withoutTeamCommander, 6).fromTeam, false);
+  // team A always reads as its own team's commander in a split group
+  assert.equal(resolve(withTeamCommander, 2).fromTeam, true);
+});
+
+test('an empty second team still follows the group commander', () => {
+  // slots 5-8 all unassigned — nothing to anchor on inside the team
+  const names = [...PEOPLE.slice(0, 4).map(p => p.name), '', '', '', ''];
+  const group = attackGroup(names);
+
+  assert.equal(commanderFor(group, 6)?.name, 'אסף פרץ');
 });
 
 test('a commander anywhere in the team anchors it when slot 5 is empty', () => {
