@@ -112,14 +112,40 @@ one of **three whole-hour forms**, always within a single calendar day:
 Hours are 0–23, one or two digits, no minutes — `יציאה 12:00-20:00` is **not** a
 valid form (it was the first design and was replaced).
 
-⚠ **The sheet does not enforce this — the scripts are the only gate.** A cell
-carries one validation rule and a custom formula kills the dropdown, so
-`O4:CR145` keeps its `ONE_OF_RANGE` dropdown over `'אפשרויות'!$C$2:$C$30` with
-`strict: false` (warn, don't reject) plus an `inputMessage` listing the three
-forms (owner decision 2026-08-09, applied via the Sheets API). A typo is kept
-with an orange corner. That is exactly why `looksLikeTimedExit_` must keep
-warning on unparseable `יציאה` values — it is the last line of defence, and
-without it a mistyped exit reads as "present". Requests originate in
+⚠⚠ **NEVER rewrite the `מצבת החיילים` validation through the Sheets API.**
+`O4:DG145` carries a `ONE_OF_RANGE` dropdown over `'אפשרויות'!$C$2:$C$30` whose
+options are **coloured chips** (נוכח green, חופש purple, לא מגויס grey). The v4
+API does not expose those colours — a read returns only `condition`, `strict`
+and `showCustomUi` — so any `setDataValidation` write rebuilds the rule from
+those three fields and **silently destroys the colouring across ~11.6k cells**.
+This happened on 2026-08-09.
+
+Things that do *not* work, both verified:
+- `repeatCell` with `fields: "dataValidation.strict"` → 400 *"No conditionType
+  specified"*. The API validates the whole rule even under a narrow field mask,
+  so there is no way to touch `strict` alone.
+- Reading the rule first and writing it back — the colours were never in the read.
+
+What *does* work: **`copyPaste` with `pasteType: PASTE_DATA_VALIDATION`**. It
+copies the rule server-side, colours included, and touches no values. That is how
+the damage was undone — source `CS4`, which sat outside the overwritten block and
+still held the original. Keep that trick in mind: any surviving cell with the
+rule, or the `מצבת החיילים - גיבוי 2` tab, is a restore source.
+
+**Anything that changes this rule must be done in the Sheets UI**
+(נתונים → אימות נתונים → the rule → אפשרויות מתקדמות), which preserves the chips.
+That is how the strict→warn switch was applied on 2026-08-09; the end state is
+13,774 cells on one rule, chips on, `strict: false`.
+
+Driving that dialog over CDP: the `אפשרויות מתקדמות` section is **collapsed by
+default**, and while collapsed the `[role="radio"]` elements exist in the DOM but
+report a zero-size rect, so coordinate clicks silently miss. Expand the section
+first, then click; verify with `aria-checked` on the radios before pressing סיום.
+
+Whichever way the rule ends up, `looksLikeTimedExit_` must keep warning on
+unparseable `יציאה` values — under "show a warning" the sheet accepts typos, and
+that warning is the only thing standing between a mistyped exit and a soldier
+being scheduled while out. Requests originate in
 the separate *Soldier Deployment Records* doc (see the
 `deployment-requests-sheet` skill), but **approval is manual and neither script
 reads that doc** — which is what lets `ShavtzakRecommendation.js` keep its

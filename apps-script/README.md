@@ -43,33 +43,34 @@ whole hours (0–23) within one calendar day:
 | `יציאה עד 10` | not on base from midnight until 10:00 |
 
 **A cell can carry only one validation rule, and a custom formula never renders a
-dropdown.** Making the format strictly enforceable would therefore have cost the
-officer his dropdown on every one of ~11.6k cells, where נוכח/חופש are the
-overwhelming majority of entries. Owner decision 2026-08-09: keep the dropdown.
+dropdown.** Enforcing the format in the sheet would therefore cost the officer his
+dropdown on every one of ~11.6k cells, where נוכח/חופש are the overwhelming
+majority of entries. Owner decision 2026-08-09: keep the dropdown, and let the
+scripts police the format instead.
 
-So the rule on **`O4:CR145`** (the exact footprint, mapped rather than guessed —
-it stops at row 145, and the list range is `C2:C30`, not `C2:C12`) is unchanged
-except that `strict` went from *reject input* to *show warning*:
+**Applied 2026-08-09.** `O4:DG145` — 13,774 cells, one uniform rule:
+`ONE_OF_RANGE` over `'אפשרויות'!$C$2:$C$30`, chip display on, and
+**`strict: false` (show a warning)** so the exit forms can be typed. Changed
+through the Sheets UI, which is the only way that preserves the chip colours:
 
-```jsonc
-{
-  "condition": { "type": "ONE_OF_RANGE",
-                 "values": [{ "userEnteredValue": "='אפשרויות'!$C$2:$C$30" }] },
-  "strict": false,          // show a warning instead of rejecting
-  "showCustomUi": true,     // keep the dropdown
-  "inputMessage": "…the three יציאה forms…"
-}
-```
+> Select the range → **נתונים → אימות נתונים** → click the existing rule →
+> **אפשרויות מתקדמות** → *הצגת אזהרה* → **סיום**.
 
-Consequence: the sheet no longer polices the exit format — a typo is kept with an
-orange corner. **The scripts are the real gate.** `parseExitStatus_` accepts only
-the three forms, and any `יציאה` value with digits that fails to parse raises a
-warning in ולידציה, so a malformed exit surfaces rather than silently reading as
-"present". That warning text is the officer's source of truth for the format.
+⚠️ **Never change this rule through the Sheets API.** Its dropdown options are
+coloured chips, and the v4 API does not expose those colours — a read returns
+only `condition`, `strict` and `showCustomUi`, so any `setDataValidation` write
+rebuilds the rule from those and wipes the colouring across the whole block.
+That happened on 2026-08-09 and had to be undone with a `copyPaste`
+(`pasteType: PASTE_DATA_VALIDATION`) from `CS4`, which had escaped the overwrite.
+`repeatCell` with `fields: "dataValidation.strict"` does not help either — the
+API rejects it with *"No conditionType specified"*. Details in the
+`sheet-apps-script` skill.
 
-Applied via the Sheets API with the service account (which has write access —
-the same one `/api/exits` uses). To re-apply or adjust, a `setDataValidation`
-batchUpdate over `{sheetId: 1046410175, rows 3–145, cols 14–96}` is all it takes.
+Once it is switched, the sheet stops policing the exit format — a typo is kept
+with an orange corner. **The scripts are then the only gate**:
+`parseExitStatus_` accepts only the three forms, and any `יציאה` value with
+digits that fails to parse raises a warning in ולידציה, so a malformed exit
+surfaces rather than silently reading as "present".
 
 **The 14:00→14:00 operational day is a grouping, not a date convention.** תאריך
 is always the row's literal calendar day — within one operational day the sheet
