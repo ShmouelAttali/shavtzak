@@ -110,7 +110,16 @@ one of **three whole-hour forms**, always within a single calendar day:
 | `יציאה עד 10` | midnight → 10:00 |
 
 Hours are 0–23, one or two digits, no minutes — `יציאה 12:00-20:00` is **not** a
-valid form (it was the first design and was replaced). Requests originate in
+valid form (it was the first design and was replaced).
+
+⚠ **The sheet does not enforce this — the scripts are the only gate.** A cell
+carries one validation rule and a custom formula kills the dropdown, so
+`O4:CR145` keeps its `ONE_OF_RANGE` dropdown over `'אפשרויות'!$C$2:$C$30` with
+`strict: false` (warn, don't reject) plus an `inputMessage` listing the three
+forms (owner decision 2026-08-09, applied via the Sheets API). A typo is kept
+with an orange corner. That is exactly why `looksLikeTimedExit_` must keep
+warning on unparseable `יציאה` values — it is the last line of defence, and
+without it a mistyped exit reads as "present". Requests originate in
 the separate *Soldier Deployment Records* doc (see the
 `deployment-requests-sheet` skill), but **approval is manual and neither script
 reads that doc** — which is what lets `ShavtzakRecommendation.js` keep its

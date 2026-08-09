@@ -31,12 +31,10 @@ deployment is the implicit `@HEAD`. So **a save in the script editor — or a
 next fire). There is no staging and no rollback other than the IDE's project
 history or this git directory.
 
-## ⚠ Sheet-side step this repo cannot do for you
+## Data validation on `מצבת החיילים` (already applied)
 
-The approved-exit feature needs the **data validation** on the date cells of
-`מצבת החיילים` changed from list-from-range to a custom formula, or the officer
-cannot type the value in the first place. Three forms are allowed, all in whole
-hours (0–23) within one calendar day:
+Approved exits are typed into the presence cells in one of three forms, all in
+whole hours (0–23) within one calendar day:
 
 | Written in the cell | Means |
 |---|---|
@@ -44,26 +42,34 @@ hours (0–23) within one calendar day:
 | `יציאה מ20` | leaves at 20:00 and does not return before midnight |
 | `יציאה עד 10` | not on base from midnight until 10:00 |
 
-In Data → Data validation, for the presence-matrix range, set *Custom formula is*
-and keep "Reject input":
+**A cell can carry only one validation rule, and a custom formula never renders a
+dropdown.** Making the format strictly enforceable would therefore have cost the
+officer his dropdown on every one of ~11.6k cells, where נוכח/חופש are the
+overwhelming majority of entries. Owner decision 2026-08-09: keep the dropdown.
 
-```
-=OR(
-  COUNTIF(אפשרויות!$C$2:$C$12, A1) > 0,
-  REGEXMATCH(A1, "^יציאה מ(\d|1\d|2[0-3])$"),
-  REGEXMATCH(A1, "^יציאה עד (\d|1\d|2[0-3])$"),
-  AND(
-    REGEXMATCH(A1, "^יציאה מ(\d|1\d|2[0-3]) עד (\d|1\d|2[0-3])$"),
-    VALUE(REGEXEXTRACT(A1, "^יציאה מ(\d{1,2})")) < VALUE(REGEXEXTRACT(A1, "עד (\d{1,2})$"))
-  )
-)
+So the rule on **`O4:CR145`** (the exact footprint, mapped rather than guessed —
+it stops at row 145, and the list range is `C2:C30`, not `C2:C12`) is unchanged
+except that `strict` went from *reject input* to *show warning*:
+
+```jsonc
+{
+  "condition": { "type": "ONE_OF_RANGE",
+                 "values": [{ "userEnteredValue": "='אפשרויות'!$C$2:$C$30" }] },
+  "strict": false,          // show a warning instead of rejecting
+  "showCustomUi": true,     // keep the dropdown
+  "inputMessage": "…the three יציאה forms…"
+}
 ```
 
-`A1` must be the range's top-left cell. The `REGEXEXTRACT` comparison is what
-enforces "ends after it starts" — a regex alone cannot express ordering, so
-without it `יציאה מ22 עד 6` would be accepted by the sheet and then rejected by
-the script. Column C of `אפשרויות` stays the source for the existing dropdown
-values, which keep working unchanged.
+Consequence: the sheet no longer polices the exit format — a typo is kept with an
+orange corner. **The scripts are the real gate.** `parseExitStatus_` accepts only
+the three forms, and any `יציאה` value with digits that fails to parse raises a
+warning in ולידציה, so a malformed exit surfaces rather than silently reading as
+"present". That warning text is the officer's source of truth for the format.
+
+Applied via the Sheets API with the service account (which has write access —
+the same one `/api/exits` uses). To re-apply or adjust, a `setDataValidation`
+batchUpdate over `{sheetId: 1046410175, rows 3–145, cols 14–96}` is all it takes.
 
 **The 14:00→14:00 operational day is a grouping, not a date convention.** תאריך
 is always the row's literal calendar day — within one operational day the sheet
