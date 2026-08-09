@@ -1,0 +1,14 @@
+{
+  "timeZone": "Asia/Jerusalem",
+  "dependencies": {
+  },
+  "exceptionLogging": "STACKDRIVER",
+  "runtimeVersion": "V8",
+  "sheets": {
+    "macros": [{
+      "menuName": "runShabtzakNow",
+      "functionName": "runShabtzakNow",
+      "defaultShortcut": "Ctrl+Alt+Shift+1"
+    }]
+  }
+}
