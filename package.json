@@ -12,6 +12,7 @@
     "gs:status": "./apps-script/sync.sh status",
     "gs:pull": "./apps-script/sync.sh pull",
     "gs:push": "./apps-script/sync.sh push",
+    "gs:validate": "tsx apps-script/tools/offline-validate.mts",
     "test": "node --import tsx --test --test-concurrency=1 tests/*.test.ts"
   },
   "dependencies": {

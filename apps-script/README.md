@@ -31,11 +31,16 @@ deployment is the implicit `@HEAD`. So **a save in the script editor — or a
 next fire). There is no staging and no rollback other than the IDE's project
 history or this git directory.
 
-⚠ **These scripts use a 14:00→14:00 operational day**
-(`CONFIG.OPERATIONAL_DAY_START_HOUR = 14`; header: *"שעות לפני 14:00 שייכות
-קלנדרית ליום שאחרי התאריך הרשום"*). The viewer app deliberately does **not** —
-see "Sheet dates are LITERAL" in `CLAUDE.md`, pinned by
-`tests/shavtzak-display.test.ts`. Do not let one convention leak into the other.
+**The 14:00→14:00 operational day is a grouping, not a date convention.** תאריך
+is always the row's literal calendar day — within one operational day the sheet
+writes 22:00 under `11/08` and 06:00 under `12/08`. `operationalDayOfDateTime_`
+groups those into one day; `normalizeToOperationalDay_` shifts pre-14:00 times by
+24h only on the internal minute axis so shifts can be compared within a day.
+
+That does not contradict "Sheet dates are LITERAL" in `CLAUDE.md` — which forbids
+a *viewer* surface from inventing a rollover, and remains pinned by
+`tests/shavtzak-display.test.ts`. Don't give the viewer an operational day, and
+don't conclude the two halves disagree; see the `sheet-apps-script` skill.
 
 ## Working with it
 
