@@ -1,6 +1,14 @@
 /** @OnlyCurrentDoc */
 /**
- * Shabtzak Recommendations Engine v3.10 - שעון לחימה 14:00-14:00
+ * Shabtzak Recommendations Engine v3.11 - שעון לחימה 14:00-14:00
+ *
+ * שינויים ב-v3.11 - קצין מוצב פתוח לכל מפקד:
+ * 1. עד כה קצין מוצב נדרש סמל או מ״מ (isSeniorCommander), ולכן מ״כים
+ *    ומ״חים נדחו ממנו למרות שהם מפקדים לכל דבר. עכשיו הרף זהה לרף
+ *    של מפקד סיור: soldierCanCommandTask_ מחזיר isCommander לכל
+ *    המשימות הפיקודיות, בלי חריג לקצין מוצב.
+ * 2. גם סטטוס הקבוצה והאזהרה התיישרו: "יש/חסר מפקד" במקום
+ *    "יש/חסר סמל/מ״מ".
  *
  * שינויים ב-v3.10 - תורנות: קבוצת רוטציה והוגנות:
  * 1. תיקון זיהוי: "תורנים" (נו"ן רגילה) לא נתפס ע"י החיפוש 'תורן'
@@ -1552,9 +1560,13 @@ function dudDriverReservedElsewhere_(soldier, task, context) {
   return reserved.some(function(rowNumber) { return rowNumber !== task.rowNumber; });
 }
 
+/**
+ * v3.11: רף אחד לכל המשימות הפיקודיות - כל מי שיכול לפקד על סיור
+ * (מ״מ / סמל / מ״כ / מ״ח) יכול גם להיות קצין מוצב. עד כאן קצין מוצב
+ * נדרש סמל או מ״מ בלבד, וזה חסם מ״כים בלי סיבה.
+ */
 function soldierCanCommandTask_(soldier, task) {
   if (!soldier) return false;
-  if (task && task.category === 'post_officer') return soldier.isSeniorCommander;
   return soldier.isCommander;
 }
 
@@ -1707,8 +1719,8 @@ function getGroupStatusText_(task, group, soldiersByName, config, currentTasks) 
   }
 
   if (task.category === 'post_officer') {
-    const hasSeniorCommander = assignedSoldiers.some(function(s) { return s.isSeniorCommander; });
-    parts.push(hasSeniorCommander ? 'יש סמל/מ״מ' : 'חסר סמל/מ״מ');
+    const hasCommander = assignedSoldiers.some(function(s) { return soldierCanCommandTask_(s, task); });
+    parts.push(hasCommander ? 'יש מפקד' : 'חסר מפקד');
     parts.push('חוסם להמלצות עד סוף יום השבצ״ק');
   }
 
@@ -1835,8 +1847,8 @@ function evaluateCandidateForTask_(soldier, task, context) {
     return reject_(result, 'מ״מ/סמל לא עולים עמדות הגנה');
   }
 
-  if (task.category === 'post_officer' && !soldier.isSeniorCommander) {
-    return reject_(result, 'קצין מוצב יכול להיות רק סמל או מ״מ');
+  if (task.category === 'post_officer' && !soldierCanCommandTask_(soldier, task)) {
+    return reject_(result, 'קצין מוצב יכול להיות רק מפקד');
   }
 
   if (requiresCommanderFirstSlot_(task, config) && isFirstTaskInGroup_(task, context.group) && !soldierCanCommandTask_(soldier, task)) {
@@ -2900,7 +2912,7 @@ function formatTaskSoftWarnings_(task, group, soldiersByName, config) {
     if (!assignedSoldiers.some(function(s) { return s.isTigerDriver; })) warnings.push('חסר נהג טיגריס');
   }
   if (task.category === 'post_officer') {
-    if (!assignedSoldiers.some(function(s) { return s.isSeniorCommander; })) warnings.push('קצין מוצב צריך סמל/מ״מ');
+    if (!assignedSoldiers.some(function(s) { return soldierCanCommandTask_(s, task); })) warnings.push('קצין מוצב צריך מפקד');
     warnings.push('קצין מוצב חוסם את החייל להמשך השבצ״ק');
   } else if (isFullDayBlockingAssignment_(task, config)) {
     warnings.push('יומי בעמודת שעה: מי שמשובץ כאן לא יופיע בהמלצות נוספות');
