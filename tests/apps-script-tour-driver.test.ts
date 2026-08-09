@@ -39,7 +39,9 @@ function tourGroup(date: string, time: string, slots: (string | undefined)[]): T
   return slots.map(soldier => ({ date, position: 'סיור', type: 'סיור', time, soldier }));
 }
 
-function buildSheets(tasks: Task[], roster: Soldier[] = ROSTER) {
+type HistoryRow = { date: string; position: string; type: string; time: string; soldier: string };
+
+function buildSheets(tasks: Task[], roster: Soldier[] = ROSTER, history: HistoryRow[] = []) {
   const dates = [BASE, NEXT].map(d => d.slice(0, 6) + d.slice(8));  // DD/MM/YY
   const rosterRows: string[][] = [
     ['', '', '', '', '', '', '', '', '', ...dates],
@@ -71,7 +73,10 @@ function buildSheets(tasks: Task[], roster: Soldier[] = ROSTER) {
   return {
     'שבצק': scheduleRows,
     'מצבת החיילים': rosterRows,
-    'כל השבצק': [['תאריך', 'העמדה', 'סוג', 'השעה', 'החייל']],
+    'כל השבצק': [
+      ['תאריך', 'העמדה', 'סוג', 'השעה', 'החייל'],
+      ...history.map(h => [h.date, h.position, h.type, h.time, h.soldier]),
+    ],
   } as Record<string, string[][]>;
 }
 
@@ -83,8 +88,8 @@ function a1ToRC(a1: string) {
 }
 
 /** Runs the engine and returns, per task row, the recommendation output. */
-function runEngine(tasks: Task[], roster: Soldier[] = ROSTER) {
-  const grids = buildSheets(tasks, roster);
+function runEngine(tasks: Task[], roster: Soldier[] = ROSTER, history: HistoryRow[] = []) {
+  const grids = buildSheets(tasks, roster, history);
   for (const key of Object.keys(grids)) {
     const w = Math.max(...grids[key].map(r => r.length), 1);
     grids[key] = grids[key].map(r => { const a = [...r]; while (a.length < w) a.push(''); return a; });
@@ -187,6 +192,19 @@ test('a נהג דוד is held back from other positions while a seat he can take
   assert.match(defence.candidates, /לוחם|מפקד/, 'other soldiers are still recommended');
 });
 
+test('a driver is not offered for the ordinary slots of a סיור either, only the driver seat', () => {
+  // slot 2 is an ordinary tour slot, slot 3 is the driver seat — both open
+  const out = runEngine(tourGroup(BASE, '14:00', ['מפקד א', undefined, undefined]));
+
+  const ordinarySlot = out[1];
+  const driverSeat = out[2];
+
+  assert.doesNotMatch(ordinarySlot.candidates, /נהג א|נהג ב/,
+    'drivers must not be offered for an ordinary סיור slot while the driver seat is open');
+  assert.match(ordinarySlot.candidates, /לוחם|מפקד/, 'other soldiers are still offered');
+  assert.match(driverSeat.candidates, /נהג/, 'the driver seat still offers them');
+});
+
 test('once every seat a driver could take is filled, he is free for other positions', () => {
   // both driver seats taken by drivers => nothing left to reserve them for
   const out = runEngine([
@@ -215,6 +233,34 @@ test('a driver who cannot reach any open seat is not held back', () => {
   // rank the driver on his merits (he is busy today, so he may still not win,
   // but he must not be rejected *for being reserved*)
   assert.doesNotMatch(out[3].warnings, /שמור למשבצת הנהג/);
+});
+
+/**
+ * A tired driver is still a driver. Short rest drops a candidate to "בדוחק"
+ * rather than rejecting him, so he still counts as able to take the seat and
+ * stays reserved for it. Only a hard rejection — unavailable, already
+ * assigned today, an actual overlap — releases a driver to other positions.
+ */
+test('short rest does not release a driver: he is offered בדוחק and stays reserved', () => {
+  const out = runEngine(
+    [
+      // 14:00 driver seat is open, but נהג ב only came off a tour at 13:00
+      ...tourGroup(BASE, '14:00', ['מפקד א', 'לוחם א', undefined]),
+      // 22:00 seat already covered by נהג א; its ordinary slot is open
+      ...tourGroup(BASE, '22:00', ['מפקד ב', undefined, 'נהג א']),
+    ],
+    ROSTER,
+    [{ date: BASE, position: 'סיור', type: 'סיור', time: '05:00-13:00', soldier: 'נהג ב' }],
+  );
+
+  const openDriverSeat = out[2];
+  const ordinarySlotLater = out[4];
+
+  // a tired driver beats no driver — offered, flagged בדוחק
+  assert.match(openDriverSeat.candidates, /נהג ב/);
+  assert.match(openDriverSeat.candidates, /בדוחק/);
+  // and he is still held out of the ordinary slot in the other סיור
+  assert.doesNotMatch(ordinarySlotLater.candidates, /נהג ב/);
 });
 
 test('the driver seat rule does not fire on a one-slot סיור (commander wins)', () => {
