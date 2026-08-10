@@ -1,6 +1,21 @@
 /** @OnlyCurrentDoc */
 /**
- * Shabtzak Recommendations Engine v3.18 - שעון לחימה 14:00-14:00
+ * Shabtzak Recommendations Engine v3.19 - שעון לחימה 14:00-14:00
+ *
+ * שינויים ב-v3.19 - "בדוחק" מסביר את עצמו, ומשימה יומית שווה 8 שעות:
+ * 1. תא המועמדים כותב עכשיו "(בדוחק: עומס 16ש׳)" במקום "(בדוחק)" יבש.
+ *    ארבעה כללים שונים מייצרים את אותה מילה, ושלושה מהם אינם נראים
+ *    בשום עמודה: תקרת העומס היומי, מנוחה *אחרי* המשבצת, וייעוד הגשש.
+ *    נמדד על הגיליון החי: 74 מתוך 100 הסימונים היו תקרת העומס, כלומר
+ *    הרוב המכריע של הסימונים לא היה ניתן להסבר מהמסך.
+ * 2. dailyMissionWorkloadHours: 16 -> 8, וכוננות התקפית נספרת ככוננות
+ *    (0 שעות עבודה) בדיוק כמו כונן גשש ב-v3.16. הוולידציה תמיד ספרה
+ *    כך - CONFIG.DAILY_HOURS = 8, ו-hoursForDailyTotal = 0 לכוננות
+ *    התקפית - והמנוע ספר 16. חייל בכוננות התקפית עבר בכך את תקרת
+ *    maxSameDayMissionHours (10) *לפני* שקיבל משבצת כלשהי, ולכן ירד
+ *    ל"בדוחק" בכל משבצת ביממה המבצעית הזאת.
+ * 3. אותו כלל חל על שני מוני השעות (העומס היומי ו-7 הימים), כדי שלא
+ *    ייווצר הפרש חדש בין השניים.
  *
  * שינויים ב-v3.18 - שעת ההחלפה של החופש (06:00, ביום ראשון 09:00):
  * 1. יום היציאה לחופש ויום החזרה ממנו הם ימים חלקיים: ביום הראשון
@@ -399,8 +414,11 @@ const SHABTZAK_REC_CONFIG = {
     // (v3.10) - זה בדיוק אותו כלל תור, על תור אחר.
     trackerHistoryWeight: 8,
     trackerHistoryCap: 6,
-    // v3.0: משימה יומית (14:00-14:00) נספרת בעומס עד 16 שעות, לא 24.
-    dailyMissionWorkloadHours: 16,
+    // v3.19: משימה יומית נספרת בעומס כמו בוולידציה - CONFIG.DAILY_HOURS,
+    // כלומר 8 - ולא 16 כמו ב-v3.0. שני הקבצים חייבים להסכים כמה שווה
+    // משימה, אחרת המנוע מסמן "בדוחק" חיילים שהוולידציה מרוצה מהם.
+    // יש בדיקה שמקבעת את השוויון מול CONFIG.DAILY_HOURS.
+    dailyMissionWorkloadHours: 8,
     magenTagbatzPackageBonus: -12,
     staticCommanderCrowdingPenalty: 25,
     samePlatoonAsGroupCommanderBonus: -12,
@@ -1444,6 +1462,21 @@ function isDailyAttackAssignment_(taskOrAssignment) {
     !!taskOrAssignment.isFullDayByTime;
 }
 
+/**
+ * v3.19: "כוננות התקפית" בעיני הוולידציה - isAttackReadiness_ מוגדרת
+ * ב-ShabtzakOps.js ודורשת גם 'כוננות' וגם 'התקפי' בטקסט. משתמשים בה
+ * ישירות במקום לשכפל את הכלל, כדי ששני הקבצים לא יוכלו להיפרד.
+ * ⚠ זה *לא* אותו דבר כמו isDailyAttackAssignment_: זו שאלת ניסוח
+ * בגיליון (יש 'כוננות'?), וזו שאלת טווח שעות (יומי?).
+ */
+function isAttackReadinessAssignment_(taskOrAssignment) {
+  if (!taskOrAssignment) return false;
+  return isAttackReadiness_({
+    position: taskOrAssignment.position || '',
+    type: taskOrAssignment.type || ''
+  });
+}
+
 function restCreditAfter_(taskOrAssignment, config) {
   if (!isDailyAttackAssignment_(taskOrAssignment)) return 0;
   const cfg = config || SHABTZAK_REC_CONFIG;
@@ -2158,7 +2191,7 @@ function evaluateCandidateForTask_(soldier, task, context) {
     // יורד ל"בדוחק" ולא נחסם - כך המשמרת מתאיישת גם ביום שבו הסיור
     // עדיין לא שובץ, אבל כל יורד סיור זמין תמיד מעליו.
     if (task.category === 'tracker' && config.scoring.trackerRequireTourDescent !== false) {
-      markFallback_(result, 'לא ירד מהסיור - כונן גשש שמור ליורדי הסיור', config);
+      markFallback_(result, 'לא ירד מהסיור - כונן גשש שמור ליורדי הסיור', config, 'לא יורד סיור');
     }
 
     // לגשש בודקים את המנוחה מול חלון הפעילות בפועל, לא מול כל המשמרת.
@@ -2170,7 +2203,7 @@ function evaluateCandidateForTask_(soldier, task, context) {
     if (restEvalBefore.reject) {
       // כשל מנוחה הוא לא חסימה קשיחה - המועמד יוצג "בדוחק"
       // רק אם אין מספיק מועמדים תקינים.
-      markFallback_(result, restEvalBefore.reason, config);
+      markFallback_(result, restEvalBefore.reason, config, 'מנוחה ' + formatHours_(prevRest));
     } else if (restEvalBefore.warning) {
       result.warnings.push(restEvalBefore.warning);
       result.score += config.scoring.shortRestPenalty;
@@ -2187,7 +2220,8 @@ function evaluateCandidateForTask_(soldier, task, context) {
 
   const restEvalAfter = evaluateRestWindow_(nextRest, next ? next.durationHours : 4, config);
   if (restEvalAfter.reject) {
-    markFallback_(result, 'אחר כך ' + restEvalAfter.reason, config);
+    markFallback_(result, 'אחר כך ' + restEvalAfter.reason, config,
+      'מנוחה אחרי ' + formatHours_(nextRest));
   } else if (restEvalAfter.warning) {
     result.warnings.push('אחר כך ' + restEvalAfter.warning);
     result.score += config.scoring.shortRestPenalty / 2;
@@ -2286,9 +2320,13 @@ function reject_(result, reason) {
  * (חפיפה/סטטוס/תפקיד). מקבל קנס ענק כך שתמיד ידורג אחרון,
  * ומוצג רק כשאין מספיק מועמדים תקינים.
  */
-function markFallback_(result, reason, config) {
+function markFallback_(result, reason, config, shortLabel) {
   result.fallback = true;
   if (!result.fallbackReason) result.fallbackReason = reason;
+  // v3.19: תווית קצרה לתא המועמדים. ארבעה כללים שונים מייצרים את אותה
+  // מילה "בדוחק", ושלושה מהם אינם נראים בשום עמודה - עומס יומי, מנוחה
+  // *אחרי* המשבצת, וייעוד הגשש. בלי התווית הזאת המפקד רואה סימון בלי סיבה.
+  if (!result.fallbackShort) result.fallbackShort = shortLabel || '';
   result.score += config.scoring.fallbackBasePenalty || 400;
   result.warnings.push('⚠ ' + reason);
   return result;
@@ -2898,16 +2936,18 @@ function calculateStats_(assignmentsForSoldier, beforeTime, config) {
     // המוחזקת *על גבי* משימה אמיתית. השעות נרשמות ככוננות ולא כמשימה.
     // הקטגוריה עצמה עדיין נספרת למטה (סטטית לרוטציה) - זו ספירת משימות,
     // לא שעות.
-    const isTracker = a.category === 'tracker';
+    // v3.19: כוננות התקפית מצטרפת לגשש - 0 שעות עבודה, ככוננות, בדיוק
+    // כמו שהוולידציה סופרת אותה מאז ומתמיד.
+    const countsAsKonenut = a.category === 'tracker' || isAttackReadinessAssignment_(a);
     const isDailyBlock = isFullDayBlockingAssignment_(a, config);
-    if (isTracker) {
+    if (countsAsKonenut) {
       stats.konenutHours += hours;
     } else {
       stats.totalHours += isDailyBlock
-        ? Math.min(hours, config.scoring.dailyMissionWorkloadHours || 16)
+        ? Math.min(hours, config.scoring.dailyMissionWorkloadHours || 8)
         : hours;
     }
-    if (!isTracker && !isDailyBlock && intervalTouchesNight_(a.start, a.end)) stats.nightCount += 1;
+    if (!countsAsKonenut && !isDailyBlock && intervalTouchesNight_(a.start, a.end)) stats.nightCount += 1;
     if (a.category === 'static') stats.staticCount += 1;
     if (getMissionClass_(a.category, config, a) === 'static') stats.staticMissionClassCount += 1;
     if (getMissionClass_(a.category, config, a) === 'dynamic') stats.dynamicMissionClassCount += 1;
@@ -2940,12 +2980,14 @@ function calculateSameOperationalDayHours_(assignmentsForSoldier, task, config) 
     const end = a.end > day.end ? day.end : a.end;
     const hours = Math.max(0, hoursBetween_(start, end));
 
-    if (isKonenutAssignment_(a) || a.category === 'tracker') {
+    if (isKonenutAssignment_(a) || a.category === 'tracker' || isAttackReadinessAssignment_(a)) {
       // v3.16: הגשש נספר ככוננות, לא כשעות משימה - ראה calculateStats_.
+      // v3.19: וכך גם כוננות התקפית, בדיוק כמו בוולידציה
+      // (hoursForDailyTotal = 0 ב-ShabtzakOps).
       result.konenutHours += hours;
     } else if (isFullDayBlockingAssignment_(a, config)) {
-      // v3.0: משימה יומית - עומס אפקטיבי, לא 24 שעות.
-      result.missionHours += Math.min(hours, config.scoring.dailyMissionWorkloadHours || 16);
+      // v3.19: משימה יומית - עומס אפקטיבי כמו בוולידציה (8), לא 16.
+      result.missionHours += Math.min(hours, config.scoring.dailyMissionWorkloadHours || 8);
     } else {
       result.missionHours += hours;
     }
@@ -2968,7 +3010,8 @@ function applySameDayWorkloadScoring_(result, sameDayMissionHours, task, config)
   const maxHours = Number(config.scoring.maxSameDayMissionHours || 10);
   if (sameDayMissionHours + taskHours > maxHours + 0.01) {
     markFallback_(result, 'יעבור ' + maxHours + 'ש׳ משימה היום (' +
-      formatHours_(sameDayMissionHours + taskHours) + ')', config);
+      formatHours_(sameDayMissionHours + taskHours) + ')', config,
+      'עומס ' + formatHours_(sameDayMissionHours + taskHours));
     return;
   }
 
@@ -3032,7 +3075,9 @@ function formatAssignedOutputRow_(assignedEval, alternatives, groupStatus, warni
 
 function formatRecommendationNamesColumn_(evaluations) {
   return evaluations.map(function(ev, idx) {
-    return (idx + 1) + '. ' + ev.soldier.name + (ev.fallback ? ' (בדוחק)' : '');
+    let mark = '';
+    if (ev.fallback) mark = ev.fallbackShort ? ' (בדוחק: ' + ev.fallbackShort + ')' : ' (בדוחק)';
+    return (idx + 1) + '. ' + ev.soldier.name + mark;
   }).join('\n');
 }
 
