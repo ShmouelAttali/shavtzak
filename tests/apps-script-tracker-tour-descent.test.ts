@@ -413,6 +413,81 @@ test('a heavy גשש history does not make a soldier look loaded next to a peer 
   assert.match(out[3].note, /3 משמרות כונן גשש בעבר/);
 });
 
+/**
+ * v3.14: the גשש belongs to neither rotation class. It is 0-hour sleep standby
+ * held on top of a real mission, so it is not a "static day" that earns a
+ * dynamic one next, and it does not count toward staticMissionClassCount.
+ */
+test('a past גשש shift is not counted as a static mission', () => {
+  const out = runEngine(
+    [
+      { date: BASE, position: 'שג', type: 'עמדות הגנה', time: '18:00-22:00', soldier: 'לוחם א' },
+      { date: BASE, position: 'בונקר', type: 'עמדות הגנה', time: '18:00-22:00', soldier: 'לוחם ב' },
+    ],
+    ROSTER,
+    [
+      { date: PREV, position: 'כונן גשש', type: 'כונן גשש', time: '14:00-22:00', soldier: 'לוחם א' },
+      { date: PREV, position: 'שג', type: 'עמדות הגנה', time: '14:00-18:00', soldier: 'לוחם ב' },
+    ],
+  );
+
+  // לוחם ב did a real static shift yesterday and carries "1 סטטי"
+  assert.match(out[1].note, /1 סטטי/, 'a real static shift still counts as one');
+  // לוחם א only held a גשש, which is neither static nor dynamic
+  assert.doesNotMatch(out[0].note, /סטטי/, 'a גשש shift must not register as a static mission');
+  assert.match(out[0].note, /8ש׳ כוננות/, 'it shows as standby instead');
+});
+
+test('a day whose only mission was a גשש is not a static day in the streak', () => {
+  // op days run 14:00→14:00, so these are the two days before BASE.
+  // Yesterday he held only a גשש — 0 working hours, sleep standby. Before
+  // v3.14 that registered as a static day and stacked into a 2-day static
+  // streak, earning the heavy "must do dynamic" penalty he had not earned.
+  const history = [
+    { date: '09/08/2026', position: 'שג', type: 'עמדות הגנה', time: '14:00-18:00', soldier: 'לוחם א' },
+    { date: PREV, position: 'כונן גשש', type: 'כונן גשש', time: '22:00-07:00', soldier: 'לוחם א' },
+  ];
+  const out = runEngine(
+    [{ date: BASE, position: 'בונקר', type: 'עמדות הגנה', time: '18:00-22:00', soldier: 'לוחם א' }],
+    ROSTER,
+    history,
+  );
+
+  assert.doesNotMatch(out[0].warnings + out[0].note, /ימים סטטיות ברצף/,
+    'a גשש-only day is standby, not a static day');
+});
+
+test('two real static days in a row are still a streak', () => {
+  const history = [
+    { date: '09/08/2026', position: 'שג', type: 'עמדות הגנה', time: '14:00-18:00', soldier: 'לוחם א' },
+    { date: PREV, position: 'שג', type: 'עמדות הגנה', time: '14:00-18:00', soldier: 'לוחם א' },
+  ];
+  const out = runEngine(
+    [{ date: BASE, position: 'בונקר', type: 'עמדות הגנה', time: '18:00-22:00', soldier: 'לוחם א' }],
+    ROSTER,
+    history,
+  );
+
+  assert.match(out[0].warnings + out[0].note, /ימים סטטיות ברצף/,
+    'the streak rule itself is untouched');
+});
+
+test('the גשש slot itself gets neither the static-streak penalty nor the break bonus', () => {
+  const history = [
+    { date: '11/08/2026', position: 'שג', type: 'עמדות הגנה', time: '14:00-18:00', soldier: 'לוחם א' },
+    { date: PREV, position: 'שג', type: 'עמדות הגנה', time: '14:00-18:00', soldier: 'לוחם א' },
+  ];
+  const out = runEngine(
+    [...tour(BASE, '14:00-22:00', ['מפקד א', 'לוחם א', 'לוחם ב']), trackerShift(BASE, '22:00-07:00', 'לוחם א')],
+    ROSTER,
+    history,
+  );
+
+  const shift = out[3];
+  assert.doesNotMatch(shift.note, /ימים סטטיות ברצף/, 'a גשש is not another static day');
+  assert.doesNotMatch(shift.note, /שובר רצף/, 'and it does not break the streak either');
+});
+
 test('each of the three גשש shifts is fed by its own tour', () => {
   // 22:00-07:00 is fed by the tour ending 22:00, not by the one ending 14:00
   const out = runEngine([
