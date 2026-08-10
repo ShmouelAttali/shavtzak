@@ -27,7 +27,6 @@
       "Bash(nohup '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' --user-data-dir=/Users/elyashiv/.claude-chrome/shavtzak *)",
       "Read(//private/tmp/**)",
       "Read(//tmp/**)",
-      "Write(//private/tmp/**)",
       "Edit(//private/tmp/**)"
     ]
   },

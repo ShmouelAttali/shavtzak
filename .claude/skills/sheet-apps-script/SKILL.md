@@ -112,14 +112,40 @@ one of **three whole-hour forms**, always within a single calendar day:
 Hours are 0–23, one or two digits, no minutes — `יציאה 12:00-20:00` is **not** a
 valid form (it was the first design and was replaced).
 
-⚠ **The sheet does not enforce this — the scripts are the only gate.** A cell
-carries one validation rule and a custom formula kills the dropdown, so
-`O4:CR145` keeps its `ONE_OF_RANGE` dropdown over `'אפשרויות'!$C$2:$C$30` with
-`strict: false` (warn, don't reject) plus an `inputMessage` listing the three
-forms (owner decision 2026-08-09, applied via the Sheets API). A typo is kept
-with an orange corner. That is exactly why `looksLikeTimedExit_` must keep
-warning on unparseable `יציאה` values — it is the last line of defence, and
-without it a mistyped exit reads as "present". Requests originate in
+⚠⚠ **NEVER rewrite the `מצבת החיילים` validation through the Sheets API.**
+`O4:DG145` carries a `ONE_OF_RANGE` dropdown over `'אפשרויות'!$C$2:$C$30` whose
+options are **coloured chips** (נוכח green, חופש purple, לא מגויס grey). The v4
+API does not expose those colours — a read returns only `condition`, `strict`
+and `showCustomUi` — so any `setDataValidation` write rebuilds the rule from
+those three fields and **silently destroys the colouring across ~11.6k cells**.
+This happened on 2026-08-09.
+
+Things that do *not* work, both verified:
+- `repeatCell` with `fields: "dataValidation.strict"` → 400 *"No conditionType
+  specified"*. The API validates the whole rule even under a narrow field mask,
+  so there is no way to touch `strict` alone.
+- Reading the rule first and writing it back — the colours were never in the read.
+
+What *does* work: **`copyPaste` with `pasteType: PASTE_DATA_VALIDATION`**. It
+copies the rule server-side, colours included, and touches no values. That is how
+the damage was undone — source `CS4`, which sat outside the overwritten block and
+still held the original. Keep that trick in mind: any surviving cell with the
+rule, or the `מצבת החיילים - גיבוי 2` tab, is a restore source.
+
+**Anything that changes this rule must be done in the Sheets UI**
+(נתונים → אימות נתונים → the rule → אפשרויות מתקדמות), which preserves the chips.
+That is how the strict→warn switch was applied on 2026-08-09; the end state is
+13,774 cells on one rule, chips on, `strict: false`.
+
+Driving that dialog over CDP: the `אפשרויות מתקדמות` section is **collapsed by
+default**, and while collapsed the `[role="radio"]` elements exist in the DOM but
+report a zero-size rect, so coordinate clicks silently miss. Expand the section
+first, then click; verify with `aria-checked` on the radios before pressing סיום.
+
+Whichever way the rule ends up, `looksLikeTimedExit_` must keep warning on
+unparseable `יציאה` values — under "show a warning" the sheet accepts typos, and
+that warning is the only thing standing between a mistyped exit and a soldier
+being scheduled while out. Requests originate in
 the separate *Soldier Deployment Records* doc (see the
 `deployment-requests-sheet` skill), but **approval is manual and neither script
 reads that doc** — which is what lets `ShavtzakRecommendation.js` keep its
@@ -157,6 +183,112 @@ conservative — it fires only when **no** contiguous gap in the operational day
 fits the residual hours, so it under-fires rather than mis-steering. When the
 exit fits several mission types, nothing is penalised and ordinary factors
 (rotation, same-task-yesterday, load) decide, which is the required behavior.
+
+## The summary block at the top of `שבצק` (J3:K5)
+
+Three live counters sit above the task table — title in J, formula in K:
+
+| | |
+|---|---|
+| `K3` חיילים זמינים | from `מצבת החיילים`, the E1 date column: not חופש / לא מגויס, **מחלקה 1/2/3 only** |
+| `K4` חיילים במגן | distinct pool soldiers currently assigned to a `*מגן*` position on this tab |
+| `K5` חיילים לסיור | `K3 − K4 − 12 סטטיות − 8 התקפי − 2 תורנים − חפק − קצין מוצב`, target 10–12 |
+
+⚠ **Rows above the task table are capped by `config.tasks.headerSearchRows`.**
+`resolveScheduleLayout_` scans that many rows for the header; anything below is
+invisible and the engine fails to find its columns. The header now sits at row 6.
+
+The repo is at **20**, but that only helps once it is deployed — **the live script
+is still at 6**, i.e. exactly at the limit with today's 3 inserted rows. So until
+someone runs `gs:push`, a 4th row breaks the recommendations. Check the live value,
+not the repo's, before adding rows.
+
+Row 1 (with `E1`) was deliberately left in place, which is what let the summary
+block ship with no script change at all: `E1` is hardcoded in **8** places across
+both files.
+
+Measured facts behind the arithmetic (10/08 + 11/08, verified against real data):
+
+- **כרמל and כונן גשש must NOT be subtracted.** Both are standby held *on top of*
+  a real mission — 12 and 3 soldiers respectively, **0 exclusive** on both days.
+  This matches the code giving them `hoursForDailyTotal = 0`.
+- **חמל must NOT be subtracted either** — it is manned entirely by the `חמ"ל`
+  platoon, which is outside the assignment pool (so it is also excluded from K3).
+- סטטיות is 12 = 24 four-hour slots ÷ 2 shifts per soldier.
+- With those rules the decomposition is exact: on 11/08,
+  `45 pool-available − 10 מגן − 12 − 8 − 2 − 3 חפק − 1 קצין = 9 = actual סיור`.
+
+### Google Sheets gotchas that cost real time here
+
+- **`COUNTUNIQUE` does not propagate `FILTER`'s `#N/A`** when nothing matches — it
+  counts the error as one distinct value and returns **1**, so
+  `IFERROR(COUNTUNIQUE(FILTER(…)),0)` silently yields 1 instead of 0. Guard with a
+  separate `SUMPRODUCT`/`COUNTIFS` count first. (`JOIN(FILTER(…))` *does* error, so
+  use it to tell the two cases apart while debugging.)
+- **`מחלקה` is stored as a number**, not text — `=("1")` comparisons are all false.
+  Dates (`E1`, the roster date row) are serial numbers, so `MATCH` on them works.
+- Avoid `{1;2;3}` array literals — the separators are locale-dependent. Use
+  `(x=1)+(x=2)+(x=3)`.
+- The tab is only **42 columns** wide; writing a probe formula beyond that
+  silently returns nothing rather than erroring.
+- Inserting rows rewrites relative same-sheet references (`K4`→`K7`) while leaving
+  `$E$1` and cross-sheet refs alone — so a naive "shift every number" diff reports
+  false damage. Compare computed values, or spot-check.
+
+## ⚠ Hebrew keywords lie — check them against the sheet before trusting them
+
+Both scripts classify rows by searching for Hebrew substrings in
+`position + ' ' + type`. Two separate bugs have come from a keyword that simply
+never matched, and **both failed in total silence** — the row just gets no
+category, no group, no exemption, and nothing anywhere says so.
+
+| code literal | real sheet value | matches? | cost |
+|---|---|---|---|
+| `'תורן'` — final nun `ן` | `תורנים` — regular nun `נ` | **no** | 108 rows in `כל השבצק` had no rotation group at all |
+| `'מפלג'` | `מפל"ג` — with גרשיים | **no** | would have silently un-fixed the מפל"ג exemption |
+
+Two traps, and they compose:
+
+- **Final letters.** `ן ם ך ף ץ` are distinct characters from `נ ם כ פ צ`.
+  `'תורן'` cannot match `תורנים`; only `'תורנ'` can. Any keyword whose last
+  letter is a final form matches *only* the word in isolation.
+- **The two files normalize differently.** `normalizeForSearch_` (engine) strips
+  `" ' ״ ׳`; `normalize_` (Ops) strips only directionality marks and whitespace.
+  So the same keyword list is safe in one file and broken in the other. When
+  matching a unit or role on the Ops side, go through `normalizeUnitText_`.
+
+The census is one API call and settles it — list every distinct
+`position || type` in `כל השבצק` with counts before adding a keyword. That is
+how the `תורנים` spelling was found, and how you'd notice a new one appearing.
+Order matters too: `כונן גשש ותורן רס"פ` contains both `גשש` and `תורן`, and the
+גשש check deliberately runs first.
+
+## Verifying an engine change before you deploy it
+
+A push is a live deploy, and the engine is ~2.5k lines of scoring where a
+one-line change can reorder every candidate list. Two committed tools:
+
+```bash
+npx tsx apps-script/tools/offline-validate.mts --last 14   # validators, per op day + blame
+npx tsx apps-script/tools/ab-recommendations.mts           # engine: HEAD vs working tree
+```
+
+`ab-recommendations.mts` runs both versions of the engine over the *same* live
+snapshot in a fake `SpreadsheetApp` and prints only the cells that differ, so
+"6 cells changed, all in the התקפי block" becomes a fact you can paste into the
+commit message. `--base <ref>`, `--only <substring>`, `--full`.
+
+⚠ **The sheet moves under you.** It is rebuilt for the next day constantly, and
+a block you are testing may be empty by the time you run — which yields
+`0 cells changed`, indistinguishable from "no regression" unless you look. The
+tool prints coverage first and exits 2 on an empty comparison for exactly this
+reason. If the block you need is empty, inject a lineup into the snapshot and
+compare that instead of concluding anything from a vacuous run.
+
+Both tools load **both** script files in filename order, because Apps Script
+concatenates them into one global scope; a harness that loads only
+`ShavtzakRecommendation.js` throws `ReferenceError` the moment the engine calls
+something defined in `ShabtzakOps.js`.
 
 ## The 14:00 operational day — a grouping, not a second date convention
 

@@ -1,6 +1,47 @@
 /** @OnlyCurrentDoc */
 /**
- * Shabtzak Recommendations Engine v3.7 - שעון לחימה 14:00-14:00
+ * Shabtzak Recommendations Engine v3.11 - שעון לחימה 14:00-14:00
+ *
+ * שינויים ב-v3.11 - קצין מוצב פתוח לכל מפקד:
+ * 1. עד כה קצין מוצב נדרש סמל או מ״מ (isSeniorCommander), ולכן מ״כים
+ *    ומ״חים נדחו ממנו למרות שהם מפקדים לכל דבר. עכשיו הרף זהה לרף
+ *    של מפקד סיור: soldierCanCommandTask_ מחזיר isCommander לכל
+ *    המשימות הפיקודיות, בלי חריג לקצין מוצב.
+ * 2. גם סטטוס הקבוצה והאזהרה התיישרו: "יש/חסר מפקד" במקום
+ *    "יש/חסר סמל/מ״מ".
+ *
+ * שינויים ב-v3.10 - תורנות: קבוצת רוטציה והוגנות:
+ * 1. תיקון זיהוי: "תורנים" (נו"ן רגילה) לא נתפס ע"י החיפוש 'תורן'
+ *    (נו"ן סופית), ולכן 108 שורות התורנות ב"כל השבצק" - וגם המשבצות
+ *    של היום - נפלו ל-day_blocking בלי שום קבוצת רוטציה. התוצאה:
+ *    סטטיות ואז תורנות לא נחשבו לאותה קבוצה ולא נענשו. שני האיותים
+ *    נמצאים עכשיו ב-toranutKeywords, ותורנות היא daily_duty = סטטית.
+ * 2. הוגנות תורנויות: בשיבוץ תורנות נספרות *כל* התורנויות הקודמות של
+ *    החייל בכל "כל השבצק" (לא רק חלון הלוקבק), וכל אחת מוסיפה קנס.
+ *    כך מי שעשה הכי מעט עולה לראש הרשימה. התקרה מונעת חסימת-לתמיד של
+ *    מי שהיסטורית עשה הרבה.
+ * 3. "כל השבצק" נקרא פעם אחת ומשרת גם את חלון הלוקבק וגם את הספירה
+ *    ההיסטורית, כדי לא לשלם קריאה שנייה על גיליון של ~4700 שורות.
+ *
+ * שינויים ב-v3.9 - זיכוי מנוחה אחרי התקפי יומי:
+ * 1. כוננות התקפית יומית (התקפי / יומי) תופסת 14:00-14:00 אבל רובה
+ *    המתנה - בוולידציה היא נספרת כ-8 שעות עבודה בלבד. לכן בסיומה
+ *    (14:00) החייל נחשב כמי שכבר נח attackRestCreditHours (4) שעות,
+ *    ולא כמי שיורד ממשמרת רגע לפני המשימה הבאה.
+ * 2. התוצאה המכוונת: הוא כשיר מיד לעמדה סטטית של 4 שעות (מינימום
+ *    מנוחה 4), עם אזהרת "מנוחה קצרה"; משימה ארוכה מ-4 שעות (סיור)
+ *    עדיין נדחית - היא דורשת 8 שעות מנוחה.
+ * 3. הזיכוי חל רק על התקפי *יומי*, לשני הכיוונים (המשימה שאחריו
+ *    ולמשימה שלפני התקפי הבא). פעילות התקפי עם טווח שעות מפורש היא
+ *    משמרת רגילה ואינה מזוכה.
+ *
+ * שינויים ב-v3.8 - צוותי התקפי:
+ * 1. התקפי יוצא בשני צוותים באותה קבוצה (משבצות 1-4 ו-5-8). ההעדפה
+ *    "אותה מחלקה כמו המפקד" נמדדת מול מפקד הצוות של אותה משבצת:
+ *    משבצות 2-4 לפי המפקד במשבצת 1, ומשבצות 6-8 לפי המפקד במשבצת 5.
+ *    קודם כל שמונה המשבצות נמדדו מול המפקד שבמשבצת 1.
+ * 2. אם לצוות אין מפקד משלו (למשל אין מפקד במשבצת 5) חוזרים למפקד
+ *    הקבוצה, כך שגם המשבצות האלה מעדיפות חיילים מאותה מחלקה.
  *
  * שינויים ב-v3.7 - יציאה קצרה מאושרת:
  * 1. סטטוס יציאה ב"מצבת החיילים" ("יציאה מ10 עד 22" / "יציאה מ20" /
@@ -110,7 +151,10 @@ const SHABTZAK_REC_CONFIG = {
       time: 'השעה',
       soldier: 'החייל'
     },
-    headerSearchRows: 6
+    // v3.8: היו 6. מעל טבלת המשימות ב"שבצק" יש עכשיו שורות סיכום
+    // (חיילים זמינים / במגן / לסיור), ולכן שורת הכותרות יורדת למטה.
+    // חלון רחב יותר כדי שהוספת שורות בראש הטאב לא תשבור את הזיהוי.
+    headerSearchRows: 20
   },
 
   // כונן גשש: שעה בודדת בעמודת השעה -> משך משמרת מובנה.
@@ -159,7 +203,11 @@ const SHABTZAK_REC_CONFIG = {
     // כונן גשש: הכוננות ברובה שינה/המתנה, ולכן מועמד שאינו "יורד הסיור
     // המיועד" נבדק מול חלון פעילות קצר ולא מול כל המשמרת.
     // יורד הסיור התואם פטור לגמרי מבדיקת מנוחה (ראה trackerAfterTourBonus).
-    trackerEffectiveDurationHours: 1.5
+    trackerEffectiveDurationHours: 1.5,
+    // v3.9: כוננות התקפית יומית (14:00-14:00) היא ברובה המתנה - בוולידציה
+    // היא נספרת כ-8 שעות עבודה בלבד. לכן בסיומה החייל נחשב כמי שכבר נח
+    // כך וכך שעות, כדי שיוכל לעלות מיד לעמדה סטטית (4 שעות).
+    attackRestCreditHours: 4
   },
 
   roles: {
@@ -186,9 +234,20 @@ const SHABTZAK_REC_CONFIG = {
   // המבוססות על יורדי סיור - רושמים טווח שעות בעמודת השעה.
   trackerKeywords: ['כונן גשש', 'גשש'],
 
+  // תורנות. שתי הצורות נחוצות: "תורנים" נכתב בנו"ן רגילה ו-"תורן רס״פ"
+  // בנו"ן סופית, ולכן חיפוש 'תורן' בלבד פספס את 108 שורות ה"תורנים"
+  // שב"כל השבצק". הבדיקה תמיד אחרי הגשש - "כונן גשש ותורן רס״פ" היא
+  // משמרת גשש ולא תורנות.
+  toranutKeywords: ['תורנ', 'תורן'],
+
   postOfficerKeywords: ['קצין מוצב'],
 
   fullDayBlockingTimeKeywords: ['יומי'],
+
+  // v3.7: התקפי יוצא בצוותים של 4 באותה קבוצה - משבצות 1-4 ו-5-8.
+  // המשבצת הראשונה בכל צוות היא מפקד הצוות, ולפיו נקבעת העדפת המחלקה
+  // לשאר משבצות אותו צוות. 0 = בלי חלוקה לצוותים.
+  attackTeamSize: 4,
 
   magenKeywords: ['מגן', 'מגן השומרון'],
   tagbatzKeywords: ['תגבצ', 'תגב״צ', 'תגב"צ'],
@@ -248,6 +307,13 @@ const SHABTZAK_REC_CONFIG = {
     commanderNeededBonus: -26,
     commanderMissingPenalty: 90,
     dudDriverNightBonus: -16,
+    // v3.9 הוגנות תורנויות: קנס לכל תורנות קודמת של החייל בכל
+    // "כל השבצק", לא רק בחלון הלוקבק. ההתפלגות בפועל (09/08/26, 128
+    // חיילים) היא חציון 0 / ממוצע 0.8 / מקסימום 18, ולכן משקל 8 מפריד
+    // היטב בין מי שלא עשה לבין מי שעשה 2-3, והתקרה מונעת ממי שיש לו
+    // היסטוריה חריגה להיחסם לתמיד.
+    toranutHistoryWeight: 8,
+    toranutHistoryCap: 6,
     // v3.6: משבצת הנהג בסיור פתוחה רק לנהגי דוד; הבונוס קובע איזה נהג
     // ייבחר ראשון כשיש כמה, מול שיקולי המנוחה והעומס.
     dudDriverSeatBonus: -30,
@@ -431,7 +497,9 @@ function updateShabtzakRecommendations() {
   const currentTasks = parseCurrentTasks_(taskValues, baseDate, layout, config);
 
   const historySheet = ss.getSheetByName(config.sheets.history);
-  const historyAssignments = historySheet ? parseHistoryAssignments_(historySheet, baseDate, config) : [];
+  const historyValues = historySheet ? readHistoryValues_(historySheet, config) : [];
+  const historyAssignments = parseHistoryAssignments_(historyValues, baseDate, config);
+  const toranutHistoryCounts = countToranutHistory_(historyValues, config);
   const currentAssignments = currentTasks
     .filter(function(t) { return t && t.assigned; })
     .map(function(t) { return taskToAssignment_(t, config); });
@@ -456,6 +524,7 @@ function updateShabtzakRecommendations() {
     assignmentsBySoldier: assignmentsBySoldier,
     currentBySoldier: currentBySoldier,
     baseDate: baseDate,
+    toranutHistoryCounts: toranutHistoryCounts,
     statsCache: {},
     availabilityCache: {},
     config: config
@@ -932,25 +1001,53 @@ function parseCurrentTasks_(values, baseDate, layout, config) {
   return tasks;
 }
 
-function parseHistoryAssignments_(historySheet, currentBaseDate, config) {
+/**
+ * v3.9: קריאה אחת של כל "כל השבצק". שני צרכנים שונים לה - חלון הלוקבק
+ * (parseHistoryAssignments_, שממשיך לבנות אובייקטים רק לזנב) וספירת
+ * התורנויות ההיסטורית, שצריכה את הגיליון כולו.
+ */
+function readHistoryValues_(historySheet, config) {
   const lastRow = historySheet.getLastRow();
-  if (lastRow < config.history.firstDataRow) return [];
-
-  // ביצועים: קוראים רק את זנב הגיליון. מניחים שההיסטוריה נכתבת
-  // כרונולוגית (שורות חדשות למטה); הסינון לפי תאריך בהמשך מגבה בכל מקרה.
-  const maxScan = config.history.maxScanRows || 0;
-  let firstScanRow = config.history.firstDataRow;
-  let rowCount = lastRow - firstScanRow + 1;
-  if (maxScan > 0 && rowCount > maxScan) {
-    firstScanRow = lastRow - maxScan + 1;
-    rowCount = maxScan;
-  }
+  const firstRow = config.history.firstDataRow;
+  if (lastRow < firstRow) return [];
 
   const maxCol = Math.max(
     config.history.dateCol, config.history.positionCol, config.history.typeCol,
     config.history.timeCol, config.history.soldierCol
   );
-  const values = historySheet.getRange(firstScanRow, 1, rowCount, maxCol).getValues();
+  return historySheet.getRange(firstRow, 1, lastRow - firstRow + 1, maxCol).getValues();
+}
+
+/**
+ * v3.9: כמה תורנויות עשה כל חייל בכל ההיסטוריה. משמש להוגנות בשיבוץ
+ * תורנות (applyToranutFairnessScoring_) - שם דווקא כן רוצים את התמונה
+ * המלאה ולא את חלון עשרת הימים.
+ */
+function countToranutHistory_(values, config) {
+  const counts = {};
+  values.forEach(function(row) {
+    const soldier = cleanText_(row[config.history.soldierCol - 1]);
+    if (!soldier) return;
+    if (!isToranutText_(
+      cleanText_(row[config.history.positionCol - 1]),
+      cleanText_(row[config.history.typeCol - 1]),
+      config)) return;
+
+    const key = normalizeNameKey_(soldier);
+    counts[key] = (counts[key] || 0) + 1;
+  });
+  return counts;
+}
+
+function parseHistoryAssignments_(historyValues, currentBaseDate, config) {
+  if (!historyValues || !historyValues.length) return [];
+
+  // ביצועים: בונים אובייקטים רק לזנב הגיליון. מניחים שההיסטוריה נכתבת
+  // כרונולוגית (שורות חדשות למטה); הסינון לפי תאריך בהמשך מגבה בכל מקרה.
+  const maxScan = config.history.maxScanRows || 0;
+  const values = (maxScan > 0 && historyValues.length > maxScan)
+    ? historyValues.slice(historyValues.length - maxScan)
+    : historyValues;
 
   const lookbackStart = addDays_(currentBaseDate, -config.historyLookbackDays - 2);
   // היום המבצעי הנוכחי (מתחיל ב-14:00 של currentBaseDate).
@@ -1129,7 +1226,7 @@ function getTaskCategory_(position, type, timeValue, config) {
   // סדר חשוב: גשש ותורן לפני כוננות/יומי, כדי ששורות כמו
   // "כונן גשש ותורן רס\"פ / יומי" יקבלו את הזמנים הנכונים שלהן.
   if (containsAny_(text, config.trackerKeywords || ['גשש'])) return 'tracker';
-  if (text.indexOf('תורן') !== -1 || text.indexOf('תורנות') !== -1) return 'daily_duty';
+  if (isToranutText_(position, type, config)) return 'daily_duty';
 
   if (containsAny_(text, config.carmelTaskKeywords || [])) return 'carmel';
   if (containsAny_(text, config.ignoredTaskKeywords)) return 'ignored';
@@ -1207,6 +1304,24 @@ function isRestRelevantAssignment_(assignment) {
   return isMissionRelevantAssignment_(assignment);
 }
 
+/**
+ * v3.9: כוננות התקפית יומית - זיכוי מנוחה בסיומה.
+ * ההתקפי היומי חוסם 14:00-14:00 אבל רובו המתנה (בוולידציה הוא נספר
+ * כ-8 שעות בלבד), ולכן ב-14:00 החייל נחשב כמי שכבר נח את הזיכוי.
+ * התקפי עם טווח שעות מפורש הוא משמרת רגילה - בלי זיכוי.
+ */
+function isDailyAttackAssignment_(taskOrAssignment) {
+  return !!taskOrAssignment &&
+    taskOrAssignment.category === 'attack' &&
+    !!taskOrAssignment.isFullDayByTime;
+}
+
+function restCreditAfter_(taskOrAssignment, config) {
+  if (!isDailyAttackAssignment_(taskOrAssignment)) return 0;
+  const cfg = config || SHABTZAK_REC_CONFIG;
+  return Number(cfg.rest.attackRestCreditHours || 0);
+}
+
 function isMagenCategory_(taskOrAssignment) {
   return !!taskOrAssignment && (
     taskOrAssignment.category === 'magen' ||
@@ -1238,10 +1353,31 @@ function isMagenTagbatzComplement_(a, b) {
     (a.category === 'tagbatz' && b.category === 'magen');
 }
 
+/**
+ * v3.9: זיהוי תורנות, במקום אחד. מוגדר אחרי הגשש בכוונה - שורה כמו
+ * "כונן גשש ותורן רס״פ" היא משמרת גשש ולא תורנות.
+ */
+function isToranutText_(position, type, config) {
+  const cfg = config || SHABTZAK_REC_CONFIG;
+  const text = normalizeForSearch_((position || '') + ' ' + (type || ''));
+  if (!text) return false;
+  if (containsAny_(text, cfg.trackerKeywords || ['גשש'])) return false;
+  return containsAny_(text, cfg.toranutKeywords || []);
+}
+
+/**
+ * שתי קבוצות הרוטציה: סטטית (עמדות הגנה, תורנות, כונן גשש) מול דינמית
+ * (סיור, התקפי). אחרי יום בקבוצה אחת מעדיפים לעבור לשנייה - ולכן
+ * סטטיות ואז תורנות *אינה* רוטציה, שתיהן באותה קבוצה.
+ */
 function getMissionClass_(category, config, taskOrAssignment) {
-  const text = taskOrAssignment ? normalizeForSearch_((taskOrAssignment.position || '') + ' ' + (taskOrAssignment.type || '')) : '';
+  const position = taskOrAssignment ? taskOrAssignment.position : '';
+  const type = taskOrAssignment ? taskOrAssignment.type : '';
+  const text = normalizeForSearch_((position || '') + ' ' + (type || ''));
   if (category === 'static' || category === 'tracker' || category === 'daily_duty') return 'static';
-  if (category === 'day_blocking' && (text.indexOf('גשש') !== -1 || text.indexOf('תורן') !== -1 || text.indexOf('תורנות') !== -1)) return 'static';
+  // רשת ביטחון לשורות "יומי" שלא נתפסו בקטגוריה עצמה.
+  if (category === 'day_blocking' &&
+      (text.indexOf('גשש') !== -1 || isToranutText_(position, type, config))) return 'static';
   if (category === 'tour' || category === 'attack') return 'dynamic';
   return '';
 }
@@ -1427,9 +1563,13 @@ function dudDriverReservedElsewhere_(soldier, task, context) {
   return reserved.some(function(rowNumber) { return rowNumber !== task.rowNumber; });
 }
 
+/**
+ * v3.11: רף אחד לכל המשימות הפיקודיות - כל מי שיכול לפקד על סיור
+ * (מ״מ / סמל / מ״כ / מ״ח) יכול גם להיות קצין מוצב. עד כאן קצין מוצב
+ * נדרש סמל או מ״מ בלבד, וזה חסם מ״כים בלי סיבה.
+ */
 function soldierCanCommandTask_(soldier, task) {
   if (!soldier) return false;
-  if (task && task.category === 'post_officer') return soldier.isSeniorCommander;
   return soldier.isCommander;
 }
 
@@ -1447,23 +1587,72 @@ function getFirstSlotCommanderStatus_(task, group, soldiersByName, config) {
   return { required: true, status: 'wrong', text: '⚠ המשבצת הראשונה אינה מפקד' };
 }
 
-function getAssignedGroupCommander_(task, group, soldiersByName, config) {
-  if (!group || !group.tasks) return null;
+/**
+ * v3.7: התקפי יוצא בכמה צוותים באותה קבוצה - כל attackTeamSize משבצות
+ * רצופות הן צוות, והמשבצת הראשונה של כל צוות היא המפקד שלו (1 ו-5
+ * בקבוצה בת 8). לשאר הקטגוריות אין חלוקה כזו והצוות הוא כל הקבוצה.
+ */
+function getTeamSizeForTask_(task, config) {
+  if (task && task.category === 'attack') return config.attackTeamSize || 0;
+  return 0;
+}
 
-  const firstTask = getFirstTaskInGroup_(group);
-  if (firstTask && firstTask.assigned) {
-    const firstSoldier = soldiersByName[normalizeNameKey_(firstTask.assigned)];
-    if (firstSoldier && soldierCanCommandTask_(firstSoldier, task)) return firstSoldier;
+function getTeamTasksForTask_(task, group, config) {
+  const tasks = getGroupTasksSortedByRow_(group);
+  const size = getTeamSizeForTask_(task, config);
+  if (!size || tasks.length <= size) return tasks;
+
+  let index = -1;
+  for (let i = 0; i < tasks.length; i++) {
+    if (task && tasks[i].rowNumber === task.rowNumber) { index = i; break; }
   }
+  if (index === -1) return tasks;
 
-  const sortedTasks = getGroupTasksSortedByRow_(group);
-  for (let i = 0; i < sortedTasks.length; i++) {
-    const t = sortedTasks[i];
+  const start = Math.floor(index / size) * size;
+  return tasks.slice(start, start + size);
+}
+
+function isTaskInSplitTeam_(task, group, config) {
+  const size = getTeamSizeForTask_(task, config);
+  return !!size && getGroupTasksSortedByRow_(group).length > size;
+}
+
+function findCommanderInTasks_(tasks, task, soldiersByName) {
+  for (let i = 0; i < tasks.length; i++) {
+    const t = tasks[i];
     if (!t || !t.assigned) continue;
     const s = soldiersByName[normalizeNameKey_(t.assigned)];
     if (s && soldierCanCommandTask_(s, task)) return s;
   }
   return null;
+}
+
+/**
+ * המפקד שאליו מיוחסת המשבצת, לפי סדר העדיפות:
+ * 1. מפקד הצוות של המשבצת - המשבצת הראשונה של הצוות, ואם אין בה מפקד
+ *    אז המפקד הראשון בתוך אותו צוות (בהתקפי: 1-4 מול משבצת 1,
+ *    5-8 מול משבצת 5).
+ * 2. מפקד הקבוצה - אם לצוות אין מפקד משלו (למשל אין מפקד במשבצת 5),
+ *    נופלים למפקד של הקבוצה כולה, כדי שגם המשבצות האלה יעדיפו חיילים
+ *    מאותה מחלקה.
+ *
+ * fromTeam אומר אם העוגן הוא מפקד הצוות עצמו - רק לצורך ניסוח ההסבר.
+ */
+function resolveCommanderForTask_(task, group, soldiersByName, config) {
+  if (!group || !group.tasks) return { commander: null, fromTeam: false };
+
+  const teamTasks = getTeamTasksForTask_(task, group, config);
+  const teamCommander = findCommanderInTasks_(teamTasks, task, soldiersByName);
+  if (teamCommander) {
+    return { commander: teamCommander, fromTeam: isTaskInSplitTeam_(task, group, config) };
+  }
+
+  const groupTasks = getGroupTasksSortedByRow_(group);
+  return { commander: findCommanderInTasks_(groupTasks, task, soldiersByName), fromTeam: false };
+}
+
+function getAssignedGroupCommander_(task, group, soldiersByName, config) {
+  return resolveCommanderForTask_(task, group, soldiersByName, config).commander;
 }
 
 function isSamePlatoon_(a, b) {
@@ -1533,8 +1722,8 @@ function getGroupStatusText_(task, group, soldiersByName, config, currentTasks) 
   }
 
   if (task.category === 'post_officer') {
-    const hasSeniorCommander = assignedSoldiers.some(function(s) { return s.isSeniorCommander; });
-    parts.push(hasSeniorCommander ? 'יש סמל/מ״מ' : 'חסר סמל/מ״מ');
+    const hasCommander = assignedSoldiers.some(function(s) { return soldierCanCommandTask_(s, task); });
+    parts.push(hasCommander ? 'יש מפקד' : 'חסר מפקד');
     parts.push('חוסם להמלצות עד סוף יום השבצ״ק');
   }
 
@@ -1628,6 +1817,8 @@ function evaluateCandidateForTask_(soldier, task, context) {
     previousAssignment: null,
     previousDayMatch: null,
     samePlatoonAsGroupCommander: false,
+    samePlatoonCommanderLabel: '',
+    toranutHistoryCount: 0,
     stats: null,
     sameDayMissionHours: 0,
     sameDayKonenutHours: 0
@@ -1659,8 +1850,8 @@ function evaluateCandidateForTask_(soldier, task, context) {
     return reject_(result, 'מ״מ/סמל לא עולים עמדות הגנה');
   }
 
-  if (task.category === 'post_officer' && !soldier.isSeniorCommander) {
-    return reject_(result, 'קצין מוצב יכול להיות רק סמל או מ״מ');
+  if (task.category === 'post_officer' && !soldierCanCommandTask_(soldier, task)) {
+    return reject_(result, 'קצין מוצב יכול להיות רק מפקד');
   }
 
   if (requiresCommanderFirstSlot_(task, config) && isFirstTaskInGroup_(task, context.group) && !soldierCanCommandTask_(soldier, task)) {
@@ -1760,8 +1951,16 @@ function evaluateCandidateForTask_(soldier, task, context) {
   // --- מנוחה ---
   const prev = findPreviousAssignment_(restRelevantAssignmentsForSoldier, task.start);
   const next = findNextCurrentAssignment_(currentRestAssignmentsForSoldier, task.end);
-  const prevRest = prev ? hoursBetween_(prev.end, task.start) : config.rest.maxDisplayedRestHours;
-  const nextRest = next ? hoursBetween_(task.end, next.start) : config.rest.maxDisplayedRestHours;
+  const prevRestRaw = prev ? hoursBetween_(prev.end, task.start) : config.rest.maxDisplayedRestHours;
+  const nextRestRaw = next ? hoursBetween_(task.end, next.start) : config.rest.maxDisplayedRestHours;
+
+  // v3.9: אחרי התקפי יומי (ומיד לפני התקפי יומי) מזכים שעות מנוחה -
+  // הכוננות היא ברובה המתנה, ולכן מי שירד ממנה ב-14:00 כשיר מיד
+  // לעמדה סטטית. השעות "האמיתיות" נשמרות לבונוס הזמינות בלבד.
+  const prevRestCredit = prev ? restCreditAfter_(prev, config) : 0;
+  const nextRestCredit = next ? restCreditAfter_(task, config) : 0;
+  const prevRest = prevRestRaw + prevRestCredit;
+  const nextRest = nextRestRaw + nextRestCredit;
   result.previousAssignment = prev;
   result.previousAssignmentIsToday = !!(prev && sameOperationalDay_(prev.start, task.start));
   result.restBeforeHours = prevRest;
@@ -1792,6 +1991,11 @@ function evaluateCandidateForTask_(soldier, task, context) {
       result.warnings.push(restEvalBefore.warning);
       result.score += config.scoring.shortRestPenalty;
     }
+  }
+
+  if (prevRestCredit > 0) {
+    result.reasons.push('ירד מכוננות התקפית ' + formatTimeOnly_(prev.end) +
+      ' - נחשב כ־' + formatHours_(prevRestCredit) + ' מנוחה');
   }
 
   const restEvalAfter = evaluateRestWindow_(nextRest, next ? next.durationHours : 4, config);
@@ -1825,7 +2029,9 @@ function evaluateCandidateForTask_(soldier, task, context) {
   result.score += stats.tourCount * config.scoring.tourWeight;
   result.score += stats.attackCount * config.scoring.attackWeight;
   result.score += stats.commanderTaskCount * config.scoring.commandTaskWeight;
-  result.score += Math.min(prevRest, 24) * config.scoring.availableRestBonusPerHour;
+  // בונוס הזמינות נמדד על המנוחה בפועל, בלי זיכוי ההתקפי:
+  // הזיכוי פותח את הכשירות, אבל לא הופך מועמד לרענן יותר משהוא.
+  result.score += Math.min(prevRestRaw, 24) * config.scoring.availableRestBonusPerHour;
 
   if (prev) {
     if (normalizeForSearch_(prev.position) && normalizeForSearch_(prev.position) === normalizeForSearch_(task.position)) {
@@ -1871,6 +2077,7 @@ function evaluateCandidateForTask_(soldier, task, context) {
   applyMagenTagbatzPackageScoring_(result, task, currentAssignmentsForSoldier, config);
   applyRoleScoring_(result, soldier, task, context.group, context.soldiersByName, context.currentTasks, config);
   applySamePlatoonAsGroupCommanderScoring_(result, soldier, task, context.group, context.soldiersByName, config);
+  applyToranutFairnessScoring_(result, soldier, task, context, config);
 
   result.reasons.push('נח ' + formatHours_(prevRest));
   result.reasons.push(Math.round(stats.totalHours) + ' שעות משימה ב־7 ימים');
@@ -1929,15 +2136,46 @@ function applyMagenTagbatzPackageScoring_(result, task, currentAssignmentsForSol
   }
 }
 
+/**
+ * v3.9: הוגנות תורנויות. בשונה משאר המשקלים, שנמדדים על חלון של 7-10
+ * ימים, כאן סופרים את *כל* ההיסטוריה ב"כל השבצק": תורנות היא תורנות גם
+ * אם הייתה לפני חודש, ומי שעשה פחות צריך להיות ראשון בתור.
+ *
+ * הקנס לינארי בכמות התורנויות הקודמות ומוגבל בתקרה, כדי שחייל עם
+ * היסטוריה חריגה (18 תורנויות מול חציון 0) לא ייחסם לתמיד.
+ */
+function applyToranutFairnessScoring_(result, soldier, task, context, config) {
+  if (!task || task.category !== 'daily_duty') return;
+
+  const count = (context.toranutHistoryCounts || {})[soldier.nameKey] || 0;
+  result.toranutHistoryCount = count;
+
+  if (!count) {
+    result.reasons.push('✓ לא עשה תורנות עד היום');
+    return;
+  }
+
+  const cap = config.scoring.toranutHistoryCap || 6;
+  const weight = config.scoring.toranutHistoryWeight || 8;
+  result.score += Math.min(count, cap) * weight;
+  result.reasons.push(count + ' תורנויות בעבר');
+}
+
 function applySamePlatoonAsGroupCommanderScoring_(result, soldier, task, group, soldiersByName, config) {
-  const commander = getAssignedGroupCommander_(task, group, soldiersByName, config);
+  // v3.8: בהתקפי מפוצל העוגן הוא מפקד הצוות של המשבצת; אם לצוות אין
+  // מפקד משלו חוזרים למפקד הקבוצה.
+  const resolved = resolveCommanderForTask_(task, group, soldiersByName, config);
+  const commander = resolved.commander;
   if (!commander) return;
   if (commander.nameKey === soldier.nameKey) return;
   if (!isSamePlatoon_(soldier, commander)) return;
 
   result.score += config.scoring.samePlatoonAsGroupCommanderBonus || -7;
   result.samePlatoonAsGroupCommander = true;
-  result.reasons.push('אותה מחלקה כמו המפקד');
+  result.samePlatoonCommanderLabel = resolved.fromTeam
+    ? 'אותה מחלקה כמו מפקד הצוות'
+    : 'אותה מחלקה כמו המפקד';
+  result.reasons.push(result.samePlatoonCommanderLabel);
 }
 
 function applyRoleScoring_(result, soldier, task, group, soldiersByName, currentTasks, config) {
@@ -2568,7 +2806,7 @@ function formatCandidateFit_(ev) {
 
   if (soldier.isDudDriver) parts.push('נהג דוד');
   if (soldier.isTigerDriver) parts.push('נהג טיגריס');
-  if (ev.samePlatoonAsGroupCommander) parts.push('אותה מחלקה כמו המפקד');
+  if (ev.samePlatoonAsGroupCommander) parts.push(ev.samePlatoonCommanderLabel || 'אותה מחלקה כמו המפקד');
 
   if (ev.previousDayMatch && ev.previousDayMatch.sameTask) {
     parts.push('⚠ אותה משימה אתמול');
@@ -2610,6 +2848,9 @@ function formatWorkloadSummary_(ev) {
   if (stats.tourCount) parts.push(stats.tourCount + ' סיור');
   if (stats.attackCount) parts.push(stats.attackCount + ' התקפי');
   if (stats.postOfficerCount) parts.push(stats.postOfficerCount + ' קצין מוצב');
+  // v3.9: בשורות תורנות מציגים את הספירה ההיסטורית המלאה - היא מה
+  // שקובע את סדר העדיפות שם, ובלעדיה הדירוג נראה שרירותי.
+  if (ev.toranutHistoryCount) parts.push('סה״כ ' + ev.toranutHistoryCount + ' תורנויות');
   return parts.join(', ');
 }
 
@@ -2674,7 +2915,7 @@ function formatTaskSoftWarnings_(task, group, soldiersByName, config) {
     if (!assignedSoldiers.some(function(s) { return s.isTigerDriver; })) warnings.push('חסר נהג טיגריס');
   }
   if (task.category === 'post_officer') {
-    if (!assignedSoldiers.some(function(s) { return s.isSeniorCommander; })) warnings.push('קצין מוצב צריך סמל/מ״מ');
+    if (!assignedSoldiers.some(function(s) { return soldierCanCommandTask_(s, task); })) warnings.push('קצין מוצב צריך מפקד');
     warnings.push('קצין מוצב חוסם את החייל להמשך השבצ״ק');
   } else if (isFullDayBlockingAssignment_(task, config)) {
     warnings.push('יומי בעמודת שעה: מי שמשובץ כאן לא יופיע בהמלצות נוספות');
