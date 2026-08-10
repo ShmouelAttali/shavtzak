@@ -1,6 +1,19 @@
 /** @OnlyCurrentDoc */
 /**
- * Shabtzak Recommendations Engine v3.14 - שעון לחימה 14:00-14:00
+ * Shabtzak Recommendations Engine v3.15 - שעון לחימה 14:00-14:00
+ *
+ * שינויים ב-v3.15 - שעת ההחלפה של החופש (06:00, ביום ראשון 09:00):
+ * 1. יום היציאה לחופש ויום החזרה ממנו הם ימים חלקיים: ביום הראשון
+ *    ממליצים על משמרת שנגמרת עד שעת ההחלפה, וביום החזרה רק על משמרת
+ *    שמתחילה ממנה ואילך. משמרת 02:00 ביום חזרה נדחית, 06:00 מומלצת.
+ * 2. הבדיקה יושבת *מחוץ* ל-availabilityCache (findVacationChangeConflict_),
+ *    כי הקאש ממופתח ברזולוציית יום והתשובה כאן תלויה בשעות המשבצת -
+ *    בדיוק כמו יציאה קצרה מאושרת ב-v3.6.
+ * 3. getStatusForSlot_ מחזיר גם את סטטוס היום שלפני המשבצת, שהוא מה
+ *    שמבדיל יום ראשון של חופש מיום חזרה.
+ * 4. הלוגיקה המשותפת (isVacationStatusText_, vacationChangeMinutesForDate_,
+ *    vacationTransitionForDay_) מוגדרת ב-ShabtzakOps.js ומשמשת את שני
+ *    הקבצים, כמו parseExitStatus_ ו-rangesOverlap_.
  *
  * שינויים ב-v3.14 - מנוחה לפני כוננות התקפית יומית:
  * 1. הכוננות ההתקפית היומית מזכה 4 שעות מנוחה גם *לפניה*, לא רק
@@ -1880,6 +1893,11 @@ function evaluateCandidateForTask_(soldier, task, context) {
   const exitConflict = findExitConflict_(soldier, task, context.baseDate);
   if (exitConflict) return reject_(result, 'ביציאה מאושרת (' + exitConflict.text + ')');
 
+  // v3.15: יום היציאה לחופש / החזרה ממנו חוסם רק את חלק היום שאחרי או
+  // לפני שעת ההחלפה. גם זה מחוץ ל-availabilityCache, מאותה סיבה.
+  const vacationConflict = findVacationChangeConflict_(soldier, task, context.baseDate);
+  if (vacationConflict) return reject_(result, vacationConflict);
+
   if (task.category === 'static' && config.scoring.seniorCommanderStaticBlock && soldier.isSeniorCommander) {
     return reject_(result, 'מ״מ/סמל לא עולים עמדות הגנה');
   }
@@ -2408,6 +2426,13 @@ function getAvailabilityStatus_(soldier, task, config, scheduleBaseDate) {
   // - משבצת שגולשת ליום הקלנדרי הבא (00:00-14:00, למשל עמדות 06:00) -> "מחר".
   const slotStatus = getStatusForSlot_(soldier, task, scheduleBaseDate);
 
+  // v3.15: ביום היציאה לחופש וביום החזרה ממנו החייל זמין בחלק מהיום,
+  // ולכן ברזולוציית יום התשובה היא "זמין" - השעות עצמן נבדקות מחוץ
+  // לקאש הזה, ב-findVacationChangeConflict_.
+  if (isVacationTransitionDay_(soldier, task, scheduleBaseDate)) {
+    return { available: true, reason: '' };
+  }
+
   if (containsAny_(slotStatus.status, config.unavailableStatusKeywords)) {
     return {
       available: false,
@@ -2418,20 +2443,78 @@ function getAvailabilityStatus_(soldier, task, config, scheduleBaseDate) {
 }
 
 /**
+ * v3.15: שעות המשבצת בדקות מחצות היום הקלנדרי שבו היא *מתחילה*.
+ * משבצת שגולשת אחרי חצות (או משימה יומית 14:00-14:00) מקבלת end מעל
+ * 24 שעות, וכך "מסתיימת עד 06:00" נכשל אצלה כמצופה.
+ */
+function slotMinutesOnItsOwnDay_(task) {
+  const dayStart = dateOnly_(task.start).getTime();
+  return {
+    start: Math.round((task.start.getTime() - dayStart) / 60000),
+    end: Math.round((task.end.getTime() - dayStart) / 60000)
+  };
+}
+
+/**
+ * v3.15: האם היום הקלנדרי של המשבצת הוא יום החלפה - יציאה לחופש או
+ * חזרה ממנו. vacationTransitionForDay_ ו-vacationChangeMinutesForDate_
+ * מוגדרות ב-ShabtzakOps.js ומשמשות את שני הקבצים, כמו parseExitStatus_.
+ */
+function vacationTransitionForSlot_(soldier, task, scheduleBaseDate) {
+  const slotStatus = getStatusForSlot_(soldier, task, scheduleBaseDate);
+  return vacationTransitionForDay_(slotStatus.previousStatus, slotStatus.status);
+}
+
+function isVacationTransitionDay_(soldier, task, scheduleBaseDate) {
+  const t = vacationTransitionForSlot_(soldier, task, scheduleBaseDate);
+  return t === 'start' || t === 'end';
+}
+
+/**
+ * v3.15: החופש מתחלף ב-06:00, וביום ראשון ב-09:00. ביום היציאה החייל
+ * זמין *עד* אז, וביום החזרה *ממנה*. בכוונה מחוץ ל-availabilityCache -
+ * המפתח שם הוא ברזולוציית יום, ואילו התשובה כאן תלויה בשעות המשבצת,
+ * בדיוק כמו ביציאה קצרה מאושרת.
+ * חצי-פתוח: משמרת שנגמרת ב-06:00 ומשמרת שמתחילה ב-06:00 שתיהן תקינות.
+ */
+function findVacationChangeConflict_(soldier, task, scheduleBaseDate) {
+  if (!task || !task.start || !task.end) return '';
+
+  const transition = vacationTransitionForSlot_(soldier, task, scheduleBaseDate);
+  if (transition !== 'start' && transition !== 'end') return '';
+
+  const changeMin = vacationChangeMinutesForDate_(dateOnly_(task.start));
+  const slot = slotMinutesOnItsOwnDay_(task);
+  const changeLabel = minutesToTimeLabel_(changeMin);
+
+  if (transition === 'start') {
+    if (slot.end <= changeMin) return '';
+    return 'יוצא לחופש ב־' + changeLabel;
+  }
+
+  if (slot.start >= changeMin) return '';
+  return 'חוזר מחופש ב־' + changeLabel;
+}
+
+/**
  * v3.4: מחזיר את הסטטוס הרלוונטי למשבצת, לפי היום הקלנדרי שלה.
  * אם אין scheduleBaseDate (למשל בדיקות ישנות) - נופלים ל-statusToday.
  */
 function getStatusForSlot_(soldier, task, scheduleBaseDate) {
+  // v3.15: previousStatus = הסטטוס של היום הקלנדרי שלפני המשבצת, כדי
+  // לזהות יום ראשון של חופש מול יום חזרה. ליום שלפני "אתמול" אין
+  // עמודה, ולכן הוא נשאר ריק - כלומר "לא ידוע", וההתנהגות שם נשארת
+  // כמו לפני v3.15.
   if (!scheduleBaseDate || !task || !task.start) {
-    return { status: soldier.statusToday, label: 'היום' };
+    return { status: soldier.statusToday, previousStatus: soldier.statusYesterday, label: 'היום' };
   }
   const slotDay = dateOnly_(task.start);
   const baseDay = dateOnly_(scheduleBaseDate);
   const diffDays = Math.round((slotDay.getTime() - baseDay.getTime()) / (24 * 60 * 60 * 1000));
 
-  if (diffDays <= -1) return { status: soldier.statusYesterday, label: 'אתמול' };
-  if (diffDays >= 1) return { status: soldier.statusTomorrow, label: 'מחר' };
-  return { status: soldier.statusToday, label: 'היום' };
+  if (diffDays <= -1) return { status: soldier.statusYesterday, previousStatus: '', label: 'אתמול' };
+  if (diffDays >= 1) return { status: soldier.statusTomorrow, previousStatus: soldier.statusToday, label: 'מחר' };
+  return { status: soldier.statusToday, previousStatus: soldier.statusYesterday, label: 'היום' };
 }
 
 /* ============================================================
