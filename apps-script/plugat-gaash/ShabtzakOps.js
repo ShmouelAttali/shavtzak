@@ -1,11 +1,28 @@
 /***************
- * שבצ"ק - ולידציה, מילוי ומצבה (קובץ מאוחד) - v3.14 שעון לחימה 14:00-14:00
+ * שבצ"ק - ולידציה, מילוי ומצבה (קובץ מאוחד) - v3.15 שעון לחימה 14:00-14:00
  *
  * Sheet names:
  * - כל השבצק
  * - מצבת החיילים
  *
- * שינויים בגרסה זו (v3.14) - רוטציה סטטית:
+ * שינויים בגרסה זו (v3.15) - שעת ההחלפה של החופש:
+ * 1. ההחלפה היא ב-06:00, וביום ראשון ב-09:00. לכן יום היציאה לחופש ויום
+ *    החזרה ממנו הם ימים *חלקיים*, ולא ימים חסומים:
+ *      - ביום החופש הראשון אפשר לשבץ משמרת שנגמרת עד שעת ההחלפה
+ *        (02:00-06:00 תקין).
+ *      - ביום החזרה אפשר לשבץ רק משמרת שמתחילה משעת ההחלפה ואילך
+ *        (06:00 תקין, 02:00 לא) - שגיאה חדשה, שקודם לא נתפסה בכלל.
+ *    שעת ההחלפה נקבעת לפי היום הקלנדרי שבו היא קורית.
+ * 2. readRoster_ מאתר גם את עמודת התאריך של *אתמול*, כי בלעדיה אין דרך
+ *    לדעת אם יום חופש הוא הראשון שלו. הגיליון לא משתנה: getDataRange
+ *    קורא ממילא את הטאב כולו, וזה רק אינדוקס של עמודה שכבר בזיכרון.
+ * 3. סטטוס קודם ריק = "לא ידוע", לא "נוכח" - אחרת כל יום חופש היה
+ *    נראה כיום הראשון שלו והחלון היה נפתח באמצע החופש.
+ * 4. "לא מגויס" אינו חופש ואינו מקבל את החלון (VACATION_STATUS_WORDS).
+ * 5. שעת ההחלפה תמיד לפני 14:00, ולכן החלון החלקי נופל בחצי "מחר" של
+ *    היממה המבצעית; חצי "היום" (14:00-24:00) מתנהג כמו קודם.
+ *
+ * שינויים ב-v3.14 - רוטציה סטטית:
  * 1. אזהרה חדשה: חייל שעושה עמדות הגנה MAX_CONSECUTIVE_STATIC_DAYS+1
  *    ימים מבצעיים רצופים. יום בעמדות הגנה הוא שני סבבים של 4 שעות,
  *    ואחריו החייל אמור לעבור לרוטציה דינמית (סיור/התקפי). שלושה ימים
@@ -14,7 +31,7 @@
  *    מבצעיים רחוקים יותר. היסטוריית הרוטציה נקראת עם מאגרי שגיאות
  *    מקומיים: שורה פגומה מלפני שלושה ימים לא תחסום ולידציה של היום.
  *
- * שינויים קודמים (v3.13):
+ * שינויים ב-v3.13:
  * 1. ההתראה "חייל מסומן כזמין אבל בלי משימה" מדלגת על אנשי המפל"ג
  *    (UNASSIGNED_ALERT_EXEMPT_UNITS). הם אינם משובצים בשבצ"ק הפלוגתי,
  *    ולכן ההתראה עליהם הייתה רעש קבוע - 6 מתוך 42 התראות ביום נבדק.
@@ -122,6 +139,15 @@ const CONFIG = {
   },
 
   UNAVAILABLE_STATUS_WORDS: ['חופש', 'לא מגויס'],
+
+  // v3.15: החופש מתחלף ב-06:00, וביום ראשון ב-09:00. כלומר ביום החופש
+  // הראשון החייל עוד זמין *עד* שעת ההחלפה, וביום החזרה הוא זמין רק
+  // *ממנה*. שעת ההחלפה נקבעת לפי היום הקלנדרי שבו ההחלפה מתרחשת:
+  // היום הראשון של החופש ביציאה, ויום החזרה בחזרה.
+  // "לא מגויס" אינו חופש ואינו מקבל את החלון הזה.
+  VACATION_STATUS_WORDS: ['חופש'],
+  VACATION_CHANGE_HOUR: 6,
+  VACATION_CHANGE_HOUR_SUNDAY: 9,
 
   // v3.12: יציאה קצרה מאושרת נרשמת ב"מצבת החיילים" באחת משלוש הצורות
   // (שעות עגולות, יום קלנדרי אחד): "יציאה מ10 עד 22", "יציאה מ20"
@@ -249,6 +275,14 @@ function readRoster_(sheet, targetDate, errors) {
   // גם את עמודת המחר. משבצת שנופלת קלנדרית ב-targetDate+1 נבדקת מולה.
   const tomorrowDateCol = findRosterDateColumn_(values, headerRowIndex, addDays_(targetDate, 1));
 
+  // v3.15: כדי לדעת אם יום חופש הוא היום *הראשון* שלו (ולכן זמין עד
+  // שעת ההחלפה) צריך גם את היום שלפניו. אין כאן שום דרישה מהגיליון:
+  // getDataRange כבר קרא את הטאב כולו, וזה רק איתור של עמודת תאריך
+  // נוספת מתוכו - כמו שהמנוע עושה מאז ומתמיד (colForDate של אתמול).
+  // אם התאריך הזה לא קיים בשורת התאריכים (למשל היום הראשון בטאב),
+  // הסטטוס נשאר ריק = "לא ידוע", והזמינות מתנהגת כמו לפני v3.15.
+  const yesterdayDateCol = findRosterDateColumn_(values, headerRowIndex, addDays_(targetDate, -1));
+
   const isUnavailable = function(statusText) {
     return CONFIG.UNAVAILABLE_STATUS_WORDS.some(function(word){ return statusText.indexOf(word) !== -1; });
   };
@@ -261,6 +295,7 @@ function readRoster_(sheet, targetDate, errors) {
 
     const statusToday = normalize_(values[i][dateCol]);
     const statusTomorrow = tomorrowDateCol !== -1 ? normalize_(values[i][tomorrowDateCol]) : statusToday;
+    const statusYesterday = yesterdayDateCol !== -1 ? normalize_(values[i][yesterdayDateCol]) : '';
     const unavailableToday = isUnavailable(statusToday);
     const unavailableTomorrow = isUnavailable(statusTomorrow);
 
@@ -271,6 +306,8 @@ function readRoster_(sheet, targetDate, errors) {
       status: statusToday,          // תאימות לאחור
       statusToday: statusToday,
       statusTomorrow: statusTomorrow,
+      statusYesterday: statusYesterday,
+      hasYesterdayColumn: yesterdayDateCol !== -1,
       unavailable: unavailableToday, // תאימות לאחור: זמינות "היום"
       unavailableToday: unavailableToday,
       unavailableTomorrow: unavailableTomorrow,
@@ -280,7 +317,9 @@ function readRoster_(sheet, targetDate, errors) {
     });
   }
 
-  return { soldiers };
+  // v3.15: התאריך נשמר כדי שהוולידציה תדע לאיזה יום קלנדרי כל עמודה
+  // שייכת - שעת ההחלפה של החופש תלויה ביום בשבוע.
+  return { soldiers, targetDate: stripTime_(targetDate) };
 }
 
 function buildParsedShifts_(rows, errors, warnings, contextLabel) {
@@ -458,6 +497,54 @@ function looksLikeTimedExit_(text) {
 // ב-22:00 הן תקינות.
 function rangesOverlap_(aStart, aEnd, bStart, bEnd) {
   return aStart < bEnd && bStart < aEnd;
+}
+
+/* ============================================================
+ * v3.15: חופש - שעת ההחלפה
+ * שלוש הפונקציות האלה משמשות גם את מנוע ההמלצות (קובץ אחד, scope
+ * אחד), בדיוק כמו parseExitStatus_ ו-rangesOverlap_. אין להעביר אותן
+ * לקובץ השני - הוא נטען אחרי, ואז ההגדרה שם תדרוס את זו.
+ * ============================================================ */
+
+function isVacationStatusText_(text) {
+  const t = normalize_(text);
+  if (!t) return false;
+  return CONFIG.VACATION_STATUS_WORDS.some(function(word){ return t.indexOf(word) !== -1; });
+}
+
+/**
+ * שעת ההחלפה של החופש, בדקות מחצות, לפי היום הקלנדרי שבו היא קורית:
+ * 06:00, וביום ראשון 09:00.
+ */
+function vacationChangeMinutesForDate_(date) {
+  const sunday = !!date && date.getDay() === 0;
+  const hour = sunday ? CONFIG.VACATION_CHANGE_HOUR_SUNDAY : CONFIG.VACATION_CHANGE_HOUR;
+  return hour * 60;
+}
+
+/**
+ * מה קורה ביום קלנדרי מסוים, לפי הסטטוס שלו ושל היום שלפניו:
+ *   'start'  - היום הראשון של החופש: זמין עד שעת ההחלפה.
+ *   'end'    - יום החזרה מחופש: זמין רק משעת ההחלפה.
+ *   'full'   - יום חופש שלם (או "לא מגויס") - לא זמין בכלל.
+ *   ''       - יום רגיל.
+ *
+ * ⚠ סטטוס קודם ריק = לא ידוע (אין עמודה כזו בגיליון, או שהתא לא מולא),
+ * ולא "נוכח". בלי ההבחנה הזאת כל יום חופש היה נראה כיום הראשון שלו
+ * ברגע שהעמודה חסרה, ומשמרת 02:00-06:00 באמצע חופש הייתה מאושרת.
+ * במקרה הזה חוזרים להתנהגות שלפני v3.15: חופש = יום שלם.
+ */
+function vacationTransitionForDay_(prevStatus, dayStatus) {
+  const onVacation = isVacationStatusText_(dayStatus);
+  const prevKnown = !!normalize_(prevStatus);
+  const prevOnVacation = isVacationStatusText_(prevStatus);
+
+  if (onVacation) {
+    if (prevKnown && !prevOnVacation) return 'start';
+    return 'full';
+  }
+  if (prevKnown && prevOnVacation) return 'end';
+  return '';
 }
 
 // חלון המשבצת על ציר היממה המבצעית (דקות מחצות של יום השבצ"ק).
@@ -800,7 +887,33 @@ function validateAvailabilityAndMissingAssignments_(targetShifts, roster, errors
   const assignedNames = new Set();
   const conflicts = []; // {name, status, part}
   const exitConflicts = []; // {name, status, part, shift}
+  const vacationConflicts = []; // v3.15: {name, part, shift, changeText, kind}
   const badExitFormats = new Set();
+
+  // v3.15: החופש מתחלף ב-06:00 (ביום ראשון 09:00), ולכן יום היציאה ויום
+  // החזרה הם ימים חלקיים. שעת ההחלפה נקבעת לפי היום הקלנדרי של העמודה,
+  // ומתורגמת לציר היממה המבצעית: 06:00 של "היום" יושב לפני תחילת היממה
+  // (14:00), ולכן בפועל החלון החלקי תמיד נופל בחצי "מחר" - וחצי "היום"
+  // ממשיך להתנהג בדיוק כמו לפני v3.15.
+  const dayContextFor = function(soldier, isTomorrow) {
+    const prevStatus = isTomorrow ? soldier.statusToday : soldier.statusYesterday;
+    const dayStatus = isTomorrow ? soldier.statusTomorrow : soldier.statusToday;
+
+    // בלי עמודת מחר שתי העמודות זהות, ואי אפשר לדעת מה קרה "לפני" -
+    // אין להסיק מזה יום ראשון של חופש.
+    if (isTomorrow && !soldier.hasTomorrowColumn) {
+      return { transition: isVacationStatusText_(dayStatus) ? 'full' : '', changeMin: 0 };
+    }
+
+    const dayDate = roster.targetDate ? addDays_(roster.targetDate, isTomorrow ? 1 : 0) : null;
+    const changeMin = vacationChangeMinutesForDate_(dayDate) + (isTomorrow ? 24 * 60 : 0);
+
+    return {
+      transition: vacationTransitionForDay_(prevStatus, dayStatus),
+      changeMin: changeMin,
+      changeText: minutesToTimeLabel_(vacationChangeMinutesForDate_(dayDate))
+    };
+  };
 
   // v3.12: יציאה קצרה נבדקת מול הזמן בפועל, לא מול היום כולו.
   // עמודת "היום" היא היום הקלנדרי של תחילת היממה, ולכן שעותיה יושבות
@@ -843,18 +956,35 @@ function validateAvailabilityAndMissingAssignments_(targetShifts, roster, errors
     const isTomorrow = slotIsTomorrow(s);
     const unavailable = isTomorrow ? soldier.unavailableTomorrow : soldier.unavailableToday;
     const status = isTomorrow ? soldier.statusTomorrow : soldier.statusToday;
+    const part = isTomorrow ? 'מחר' : 'היום';
+
+    const window = shiftWindowOnOpAxis_(s);
+    const dayContext = dayContextFor(soldier, isTomorrow);
 
     if (unavailable) {
-      conflicts.push({
+      // v3.15: ביום הראשון של החופש החייל עוד כאן עד שעת ההחלפה, ולכן
+      // משמרת שמסתיימת עד אז תקינה. חצי-פתוח: משמרת שנגמרת ב-06:00
+      // ומסירה שמתחילה ב-06:00 שתיהן בסדר.
+      const leavesToday = dayContext.transition === 'start' &&
+        window && window.end <= dayContext.changeMin;
+      if (!leavesToday) {
+        conflicts.push({ name: s.soldier, status: status, part: part, shift: describeShift_(s) });
+      }
+      return;
+    }
+
+    // v3.15: ביום החזרה מחופש החייל מגיע רק בשעת ההחלפה - משמרת
+    // שמתחילה לפניה היא שגיאה, גם אם הסטטוס באותו יום הוא "נוכח".
+    if (dayContext.transition === 'end' && window && window.start < dayContext.changeMin) {
+      vacationConflicts.push({
         name: s.soldier,
-        status: status,
-        part: isTomorrow ? 'מחר' : 'היום',
-        shift: describeShift_(s)
+        part: part,
+        shift: describeShift_(s),
+        changeText: dayContext.changeText
       });
       return;
     }
 
-    const window = shiftWindowOnOpAxis_(s);
     if (!window) return;
 
     exitWindowsFor(soldier).forEach(function(w){
@@ -879,6 +1009,14 @@ function validateAvailabilityAndMissingAssignments_(targetShifts, roster, errors
   conflicts.forEach(function(c){
     errors.push(
       'חייל משובץ בזמן שהוא "' + c.status + '" (' + c.part + '): ' +
+      c.name + ' — ' + c.shift + '.'
+    );
+  });
+
+  // v3.15: שיבוץ לפני שעת ההחלפה ביום החזרה מחופש
+  vacationConflicts.forEach(function(c){
+    errors.push(
+      'חייל משובץ לפני שעת ההחלפה ביום חזרתו מחופש (' + c.changeText + ', ' + c.part + '): ' +
       c.name + ' — ' + c.shift + '.'
     );
   });
@@ -1983,6 +2121,7 @@ function runShabzakValidation_(parsedTarget, parsedPrevious, roster, titleDate, 
     '- לא יותר מ־' + CONFIG.MAX_CONSECUTIVE_STATIC_DAYS +
       ' ימים רצופים בעמדות הגנה (רוטציה סטטי/דינמי)',
     '- חופש/לא מגויס מול שיבוץ, ונוכחים בלי משימה',
+    '- שעת ההחלפה של החופש: 06:00, וביום ראשון 09:00',
     '- יציאה קצרה מאושרת ("יציאה מ.. עד ..") מול שעות המשבצת', ''
   ];
   if (returnHtml) return buildValidationResultHtml_(errors, warnings, header);
