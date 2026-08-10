@@ -1,11 +1,20 @@
 /***************
- * שבצ"ק - ולידציה, מילוי ומצבה (קובץ מאוחד) - v3.13 שעון לחימה 14:00-14:00
+ * שבצ"ק - ולידציה, מילוי ומצבה (קובץ מאוחד) - v3.14 שעון לחימה 14:00-14:00
  *
  * Sheet names:
  * - כל השבצק
  * - מצבת החיילים
  *
- * שינויים בגרסה זו (v3.13):
+ * שינויים בגרסה זו (v3.14) - רוטציה סטטית:
+ * 1. אזהרה חדשה: חייל שעושה עמדות הגנה MAX_CONSECUTIVE_STATIC_DAYS+1
+ *    ימים מבצעיים רצופים. יום בעמדות הגנה הוא שני סבבים של 4 שעות,
+ *    ואחריו החייל אמור לעבור לרוטציה דינמית (סיור/התקפי). שלושה ימים
+ *    רצופים אינם אסורים - לפעמים אין ברירה - ולכן אזהרה ולא שגיאה.
+ * 2. getOpDayShifts_ חולצה מ-getPreviousOpDayShifts_ כדי לקרוא גם ימים
+ *    מבצעיים רחוקים יותר. היסטוריית הרוטציה נקראת עם מאגרי שגיאות
+ *    מקומיים: שורה פגומה מלפני שלושה ימים לא תחסום ולידציה של היום.
+ *
+ * שינויים קודמים (v3.13):
  * 1. ההתראה "חייל מסומן כזמין אבל בלי משימה" מדלגת על אנשי המפל"ג
  *    (UNASSIGNED_ALERT_EXEMPT_UNITS). הם אינם משובצים בשבצ"ק הפלוגתי,
  *    ולכן ההתראה עליהם הייתה רעש קבוע - 6 מתוך 42 התראות ביום נבדק.
@@ -86,6 +95,12 @@ const CONFIG = {
   MAX_DAILY_HOURS: 8,
 
   DAILY_HOURS: 8,
+
+  // v3.14: רוטציה. יום בעמדות הגנה (DEFENSE_POSTS) = שני סבבים של 4 שעות,
+  // וביום שאחריו החייל אמור לעבור לרוטציה דינמית (סיור/התקפי). מספר
+  // הימים המבצעיים הרצופים בעמדות הגנה שעדיין נחשבים תקינים; מעבר לזה
+  // עולה אזהרה. 0 מכבה את הבדיקה.
+  MAX_CONSECUTIVE_STATIC_DAYS: 2,
 
   // v3.11: משימה יומית נכתבת ב"כל השבצק" בכמה צורות שוות ערך -
   // "יומי", "14:00-14:00", וגם מפוצלת בהעברה ב-09:00
@@ -694,6 +709,82 @@ function validateDailyHours_(targetShifts, roster, errors, warnings) {
   });
 }
 
+/**
+ * v3.14: רוטציה סטטית - יותר מ-MAX_CONSECUTIVE_STATIC_DAYS ימים מבצעיים
+ * רצופים בעמדות הגנה.
+ *
+ * יום בעמדות הגנה הוא שני סבבים של 4 שעות (למשל 14-18 ו-02-06), ולכן
+ * מספר הסבבים *בתוך* יום נשמר ממילא ע"י תקרת 8 השעות. מה שאינו נבדק הוא
+ * הרוטציה בין הימים: אחרי יום סטטי החייל אמור לקבל יום דינמי (סיור /
+ * התקפי). אזהרה ולא שגיאה - לפעמים אין ברירה.
+ *
+ * history = ימים מבצעיים קודמים לפי סדר עולה של מרחק (אתמול, שלשום, ...),
+ * כל אחד { opDay, shifts }. הרצף נספר מהיום הנבדק אחורה ונעצר ביום הראשון
+ * שאינו בעמדות הגנה - כך "סטטי, דינמי, סטטי" אינו נחשב רצף.
+ */
+function validateConsecutiveStaticDays_(targetShifts, history, warnings) {
+  const maxDays = CONFIG.MAX_CONSECUTIVE_STATIC_DAYS;
+  if (!maxDays) return;
+
+  const previousDays = history || [];
+  if (previousDays.length < maxDays) return;
+
+  const staticSoldiersOn = function(shifts) {
+    const set = new Set();
+    (shifts || [])
+      .filter(isDefensePostShift_)
+      .forEach(function(s) {
+        if (!shouldIgnoreSoldier_(s.soldier)) set.add(normalize_(s.soldier));
+      });
+    return set;
+  };
+
+  const today = staticSoldiersOn(targetShifts);
+  if (!today.size) return;
+
+  const historySets = previousDays.map(function(day) {
+    return { opDay: day.opDay, soldiers: staticSoldiersOn(day.shifts) };
+  });
+
+  // שם החייל להצגה - כפי שנכתב בשבצ"ק של היום.
+  const displayName = new Map();
+  targetShifts.forEach(function(s) {
+    const key = normalize_(s.soldier);
+    if (key && !displayName.has(key)) displayName.set(key, s.soldier);
+  });
+
+  today.forEach(function(key) {
+    const streakDates = [];
+
+    for (let i = 0; i < historySets.length; i++) {
+      if (!historySets[i].soldiers.has(key)) break;
+      streakDates.push(historySets[i].opDay);
+    }
+
+    const streak = streakDates.length + 1;
+    if (streak <= maxDays) return;
+
+    // הרצף נקטע בקצה ההיסטוריה שנקראה - אז הוא ארוך *לפחות* כך.
+    const truncated = streakDates.length === historySets.length;
+    const since = streakDates[streakDates.length - 1];
+
+    warnings.push(
+      (truncated ? 'לפחות ' : '') + streak + ' ימים רצופים בעמדות הגנה: ' +
+      (displayName.get(key) || key) + ' (מ־' + formatDate_(since) + ') - ' +
+      'היום הזה אמור היה להיות רוטציה דינמית (סיור/התקפי).'
+    );
+  });
+}
+
+// v3.14: מהי משבצת "עמדות הגנה". שני הזיהויים נחוצים: העמודה "סוג" היא
+// הכתיב הרגיל ב"כל השבצק", ורשימת DEFENSE_POSTS תופסת גם שורה שבה הסוג
+// נכתב אחרת אבל העמדה עצמה היא שג/מזרחית/בונקר/דרומית.
+function isDefensePostShift_(shift) {
+  if (!shift) return false;
+  if (normalize_(shift.type) === 'עמדות הגנה') return true;
+  return CONFIG.DEFENSE_POSTS.indexOf(normalize_(shift.position)) !== -1;
+}
+
 function validateAvailabilityAndMissingAssignments_(targetShifts, roster, errors, warnings) {
   // v3.7: זמינות נבדקת לפי היום הקלנדרי של כל משבצת.
   // משבצת שמתחילה לפני שעת תחילת היממה (למשל 06:00, 08:00) נופלת
@@ -971,19 +1062,52 @@ function timeStringToMinutes_(text) {
 // (למשל עמדה 10:00-14:00) נחשבת ליום המבצעי שהתחיל אתמול ב-14:00.
 // scheduleOpDay = היום המבצעי של השבצ"ק הנוכחי (stripTime של E1).
 function getPreviousOpDayShifts_(allScheduleRows, scheduleOpDay, errors, warnings) {
-  const prevOpDay = addDays_(scheduleOpDay, -1);
+  return getOpDayShifts_(
+    allScheduleRows, addDays_(scheduleOpDay, -1),
+    errors, warnings, 'כל השבצק - יום מבצעי קודם'
+  );
+}
 
-  const rowsInPrevOpDay = allScheduleRows.filter(function(r) {
+// v3.14: הפילטר עצמו, לכל יום מבצעי - כדי שגם היסטוריית הרוטציה
+// (שלשום ואחורה) תיקרא באותה הלוגיקה בדיוק.
+function getOpDayShifts_(allScheduleRows, opDay, errors, warnings, contextLabel) {
+  const rowsInOpDay = allScheduleRows.filter(function(r) {
     if (!r.date) return false;
     // מזהים לאיזה יום מבצעי שייכת השורה לפי תאריכה הקלנדרי + שעת ההתחלה.
     const t = parseShiftTime_(r, [], 'זיהוי יום מבצעי');
     // אם אין שעה תקינה, נופלים לשיוך לפי התאריך הגולמי (14:00 והלאה = אותו יום).
     const startMin = t.hasRealTimeRange ? (t.startMin % (24 * 60)) : (CONFIG.OPERATIONAL_DAY_START_HOUR * 60);
     const rowOpDay = operationalDayOfDateTime_(r.date, startMin);
-    return sameDate_(rowOpDay, prevOpDay);
+    return sameDate_(rowOpDay, opDay);
   });
 
-  return buildParsedShifts_(rowsInPrevOpDay, errors, warnings, 'כל השבצק - יום מבצעי קודם');
+  return buildParsedShifts_(rowsInOpDay, errors, warnings, contextLabel);
+}
+
+/**
+ * v3.14: הימים המבצעיים שלפני היום הנבדק, לפי סדר עולה של מרחק
+ * (אתמול, שלשום, ...) - הקלט של validateConsecutiveStaticDays_.
+ *
+ * השגיאות והאזהרות של הפירסור נזרקות בכוונה: ההיסטוריה היא רקע לבדיקת
+ * רוטציה בלבד, ושורה פגומה מלפני שלושה ימים לא אמורה לחסום את הוולידציה
+ * של היום (שני מסלולי ההרצה עוצרים כש-errors אינו ריק).
+ */
+function getStaticRotationHistory_(allScheduleRows, scheduleOpDay) {
+  // מספיק לקרוא MAX_CONSECUTIVE_STATIC_DAYS ימים כדי *לזהות* חריגה, אבל
+  // אז ההודעה תמיד תגיד "3 ימים" גם כשהרצף בפועל ארוך יותר. חמישה ימי
+  // מרווח נוספים נותנים את אורך הרצף האמיתי, ומעליהם ההודעה אומרת "לפחות".
+  const daysBack = CONFIG.MAX_CONSECUTIVE_STATIC_DAYS + 5;
+  const history = [];
+
+  for (let i = 1; i <= daysBack; i++) {
+    const opDay = addDays_(scheduleOpDay, -i);
+    history.push({
+      opDay: opDay,
+      shifts: getOpDayShifts_(allScheduleRows, opDay, [], [], 'כל השבצק - היסטוריית רוטציה')
+    });
+  }
+
+  return history;
 }
 
 function operationalDayOfDateTime_(calDate, minutesFromMidnight) {
@@ -1831,7 +1955,9 @@ function makeDateTime_(calDate, minutesFromMidnight) {
  * ============================================================ */
 
 // ליבת הוולידציה - משותפת לשני מסלולי ההרצה (טאב שבצק / כל השבצק).
-function runShabzakValidation_(parsedTarget, parsedPrevious, roster, titleDate, sourceLabel, returnHtml) {
+// v3.14: staticRotationHistory - הימים המבצעיים הקודמים (אתמול, שלשום, ...)
+// לבדיקת הרוטציה הסטטית. אופציונלי: בלעדיו הבדיקה פשוט מדלגת.
+function runShabzakValidation_(parsedTarget, parsedPrevious, roster, titleDate, sourceLabel, returnHtml, staticRotationHistory) {
   const errors = [];
   const warnings = [];
 
@@ -1841,6 +1967,7 @@ function runShabzakValidation_(parsedTarget, parsedPrevious, roster, titleDate, 
   validateCarmelMinimumStaff_(parsedTarget, errors);
   validateTrackerBasedOnTours_(parsedTarget, parsedPrevious, errors);
   validateDailyHours_(parsedTarget, roster, errors, warnings);
+  validateConsecutiveStaticDays_(parsedTarget, staticRotationHistory, warnings);
   validateAvailabilityAndMissingAssignments_(parsedTarget, roster, errors, warnings);
 
   const header = [
@@ -1853,6 +1980,8 @@ function runShabzakValidation_(parsedTarget, parsedPrevious, roster, titleDate, 
     '- לפחות 3 כרמל חטיבה + 1 מפקד כרמל חטיבה בכל משמרת',
     '- כונן גשש על בסיס יורדי סיור (14/22/07)',
     '- לא יותר מ־8 שעות ביום + הערה על פחות מ־8',
+    '- לא יותר מ־' + CONFIG.MAX_CONSECUTIVE_STATIC_DAYS +
+      ' ימים רצופים בעמדות הגנה (רוטציה סטטי/דינמי)',
     '- חופש/לא מגויס מול שיבוץ, ונוכחים בלי משימה',
     '- יציאה קצרה מאושרת ("יציאה מ.. עד ..") מול שעות המשבצת', ''
   ];
@@ -1885,8 +2014,10 @@ function validateCurrentShabzakTab() {
   const roster = readRoster_(rosterSheet, targetDate, errors);
   const parsedTarget = buildParsedShifts_(targetRows, errors, warnings, 'שבצק');
 
+  const staticHistory = getStaticRotationHistory_(allSchedule.rows, scheduleOpDay);
+
   if (errors.length) { showValidationResult_(errors, warnings); return; }
-  runShabzakValidation_(parsedTarget, parsedPrevious, roster, formatDate_(targetDate), 'טאב "שבצק" (E1) + יום מבצעי קודם מ"כל השבצק"');
+  runShabzakValidation_(parsedTarget, parsedPrevious, roster, formatDate_(targetDate), 'טאב "שבצק" (E1) + יום מבצעי קודם מ"כל השבצק"', false, staticHistory);
 }
 
 // v3.5 (בעיה #3): ולידציה ל"כל השבצק" - בורר תאריך, ואז אותה ולידציה.
@@ -1978,7 +2109,8 @@ function runAllShabzakValidationForDate_(targetDate, returnHtml) {
   const parsedTarget = buildParsedShifts_(targetRowsRaw, errors, warnings, 'כל השבצק - יום נבחר');
   const parsedPrevious = getPreviousOpDayShifts_(allSchedule.rows, scheduleOpDay, errors, warnings);
   const roster = readRoster_(rosterSheet, targetDate, errors);
+  const staticHistory = getStaticRotationHistory_(allSchedule.rows, scheduleOpDay);
 
   if (errors.length) { return emit(errors, warnings); }
-  return runShabzakValidation_(parsedTarget, parsedPrevious, roster, formatDate_(targetDate), 'טאב "' + CONFIG.SCHEDULE_SHEET_NAME + '" ליום מבצעי נבחר', returnHtml);
+  return runShabzakValidation_(parsedTarget, parsedPrevious, roster, formatDate_(targetDate), 'טאב "' + CONFIG.SCHEDULE_SHEET_NAME + '" ליום מבצעי נבחר', returnHtml, staticHistory);
 }

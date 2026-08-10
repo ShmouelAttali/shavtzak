@@ -75,17 +75,25 @@ const opDayOf = (r: any) => {
 };
 const label = (d: Date) => `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`;
 
+const shiftDays = (d: Date, days: number) => new Date(d.getFullYear(), d.getMonth(), d.getDate() + days);
+
 function runDay(opDay: Date) {
   const target = rows.filter((r) => ctx.sameDate_(opDayOf(r), opDay));
   if (!target.length) return null;
-  const prev = rows.filter((r) => ctx.sameDate_(opDayOf(r), new Date(opDay.getFullYear(), opDay.getMonth(), opDay.getDate() - 1)));
+  const prev = rows.filter((r) => ctx.sameDate_(opDayOf(r), shiftDays(opDay, -1)));
   const warnings: string[] = [];
   const parsed = ctx.buildParsedShifts_(target, [], warnings, 'target');
   const parsedPrev = ctx.buildParsedShifts_(prev, [], [], 'prev');
   const overlaps: string[] = []; ctx.validateOverlaps_(parsed, overlaps);
   const hours: string[] = []; const hourWarn: string[] = []; ctx.validateDailyHours_(parsed, null, hours, hourWarn);
   const rest: string[] = []; ctx.validateRestBetweenShifts_(parsed, parsedPrev, rest);
-  return { rows: target.length, parsed, overlaps, hours, hourWarn, rest, warnings };
+  // v3.14: הרצף הסטטי - אותה היסטוריה שהסקריפט בונה בגיליון (אתמול, שלשום, ...)
+  const history = Array.from({ length: ctx.CONFIG.MAX_CONSECUTIVE_STATIC_DAYS + 5 }, (_, i) => {
+    const day = shiftDays(opDay, -(i + 1));
+    return { opDay: day, shifts: ctx.buildParsedShifts_(rows.filter((r) => ctx.sameDate_(opDayOf(r), day)), [], [], 'history') };
+  });
+  const staticStreak: string[] = []; ctx.validateConsecutiveStaticDays_(parsed, history, staticStreak);
+  return { rows: target.length, parsed, overlaps, hours, hourWarn, rest, warnings, staticStreak };
 }
 
 const arg = process.argv[2];
@@ -94,13 +102,15 @@ if (arg === '--last') {
   const n = Number(process.argv[3] || 14);
   const opDays = [...new Set(rows.map((r) => opDayOf(r).getTime()))].sort((a, b) => a - b).slice(-n).map((t) => new Date(t));
   const blame = new Map<string, number>();
-  let totals = { overlaps: 0, hours: 0, rest: 0, warnings: 0 };
+  let totals = { overlaps: 0, hours: 0, rest: 0, warnings: 0, staticStreak: 0 };
   for (const day of opDays) {
     const res = runDay(day);
     if (!res) continue;
     totals.overlaps += res.overlaps.length; totals.hours += res.hours.length;
     totals.rest += res.rest.length; totals.warnings += res.warnings.length;
-    console.log(`${label(day)}  rows ${String(res.rows).padStart(3)}   over-8h ${String(res.hours.length).padStart(3)}   overlaps ${String(res.overlaps.length).padStart(3)}   rest ${String(res.rest.length).padStart(2)}   parse-warn ${res.warnings.length}`);
+    totals.staticStreak += res.staticStreak.length;
+    console.log(`${label(day)}  rows ${String(res.rows).padStart(3)}   over-8h ${String(res.hours.length).padStart(3)}   overlaps ${String(res.overlaps.length).padStart(3)}   rest ${String(res.rest.length).padStart(2)}   static-streak ${String(res.staticStreak.length).padStart(2)}   parse-warn ${res.warnings.length}`);
+    res.staticStreak.forEach((w) => console.log(`      ⚠ ${w}`));
     // blame the longest shift of every soldier who breaks the cap
     const by = new Map<string, any[]>();
     res.parsed.filter((s: any) => !s.isCarmel && !s.isTracker && !ctx.shouldIgnoreSoldier_(s.soldier))
@@ -112,7 +122,7 @@ if (arg === '--last') {
       blame.set(k, (blame.get(k) || 0) + 1);
     });
   }
-  console.log(`\nTOTAL over ${opDays.length} op days:  over-8h ${totals.hours}   overlaps ${totals.overlaps}   rest ${totals.rest}   parse-warnings ${totals.warnings}`);
+  console.log(`\nTOTAL over ${opDays.length} op days:  over-8h ${totals.hours}   overlaps ${totals.overlaps}   rest ${totals.rest}   static-streak ${totals.staticStreak}   parse-warnings ${totals.warnings}`);
   console.log('\nover-8h errors blamed on the longest shift (top 12) — one spelling dominating means format drift, not a bad schedule:');
   [...blame.entries()].sort((a, b) => b[1] - a[1]).slice(0, 12).forEach(([k, v]) => console.log(`  ${String(v).padStart(4)}  ${k}`));
 } else {
@@ -124,5 +134,6 @@ if (arg === '--last') {
   show('over 8 hours', res.hours);
   show('overlaps', res.overlaps);
   show('rest', res.rest);
+  show('consecutive static days', res.staticStreak);
   show('parse warnings', res.warnings);
 }
