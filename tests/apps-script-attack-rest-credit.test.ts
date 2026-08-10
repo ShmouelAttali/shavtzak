@@ -64,29 +64,36 @@ function soldier() {
   };
 }
 
-/** history = the given assignments; the slot under test is today's 14:00 */
-function evaluate(slot: any, history: any[], group: any[] = [slot]) {
+/** history = the given assignments; the slot under test is today's 14:00.
+ *  `current` = rows already filled on the sheet being scheduled, which is how
+ *  the "what comes after this slot" side of the rest check is fed. */
+function evaluate(slot: any, history: any[], group: any[] = [slot], current: any[] = [], config: any = REC) {
   const s = soldier();
-  const assignmentsBySoldier: Record<string, any[]> = {};
-  assignmentsBySoldier[s.nameKey] = history.map((t) => {
+  const attach = (source: string) => (t: any) => {
     const a = ctx.taskToAssignment_(t, REC);
-    a.source = 'history';
+    a.source = source;
     a.soldierName = s.name;
     a.soldierKey = s.nameKey;
     return a;
-  });
+  };
+
+  const assignmentsBySoldier: Record<string, any[]> = {};
+  assignmentsBySoldier[s.nameKey] = history.map(attach('history'));
+
+  const currentBySoldier: Record<string, any[]> = {};
+  if (current.length) currentBySoldier[s.nameKey] = current.map(attach('current'));
 
   const soldiersByName: Record<string, any> = {};
   soldiersByName[s.nameKey] = s;
 
   return ctx.evaluateCandidateForTask_(s, slot, {
-    config: REC,
+    config,
     baseDate: TODAY,
     availabilityCache: {},
     statsCache: {},
     assignmentsBySoldier,
-    currentBySoldier: {},
-    currentTasks: [slot],
+    currentBySoldier,
+    currentTasks: [slot].concat(current),
     soldiersByName,
     group: { tasks: group },
     ignoreSameRow: false,
@@ -119,7 +126,10 @@ test('off a daily התקפי at 14:00, a static position is allowed', () => {
   const ev = evaluate(staticSlot(), [dailyAttack()]);
   assert.equal(ev.rejected, false);
   assert.equal(ev.fallback, undefined);
-  assert.equal(ev.restBeforeHours, REC.rest.attackRestCreditHours);
+  // v3.14: the column shows the real gap (0h — the standby ended at 14:00 and the
+  // slot starts at 14:00); the credit is what made the verdict clean, and it is
+  // explained in the reasons rather than folded into the number.
+  assert.equal(ev.restBeforeHours, 0);
   assert.ok(
     ev.reasons.some((r: string) => r.indexOf('ירד מכוננות התקפית') === 0),
     'the credit must be visible in the reasons: ' + JSON.stringify(ev.reasons),
@@ -133,6 +143,89 @@ test('off a daily התקפי at 14:00, an 8-hour סיור still fails on rest', 
   assert.ok(
     (ev.warnings || []).concat(ev.rejectReason || '').join(' ').indexOf('8 שעות מנוחה') !== -1,
     'expected the 8-hour rest rule to bite: ' + JSON.stringify(ev),
+  );
+});
+
+/**
+ * v3.14: the same credit before the standby. Its first hours are waiting too, so
+ * it "really starts" at 18:00 — a soldier who came off a static position at 10:00
+ * has rested 8 hours by then, not 4, and is an ordinary candidate rather than a
+ * בדוחק one. Both directions matter: without the second, the same pairing would
+ * be rejected from the static slot instead.
+ */
+const staticEndingAt10 = () => task('עמדות הגנה', 'מזרחית', '06:00', TODAY, 30);
+/** the standby's first seat is the commander's, so an ordinary לוחם is judged on a later one */
+const attackGroup = () => [40, 41, 42].map((row) => task('התקפי', 'התקפי', 'יומי', TODAY, row));
+const inAttackGroup = (history: any[]) => {
+  const group = attackGroup();
+  return evaluate(group[1], history, group);
+};
+
+test('the before-credit applies to a daily התקפי only', () => {
+  assert.equal(ctx.restCreditBefore_(attackGroup()[1], REC), REC.rest.attackRestCreditBeforeHours);
+  assert.equal(ctx.restCreditBefore_(task('התקפי', 'התקפי', '20:00-24:00', TODAY), REC), 0);
+  assert.equal(ctx.restCreditBefore_(staticEndingAt10(), REC), 0);
+});
+
+test('off a static position at 10:00, the 14:00 daily התקפי counts 8 hours rest', () => {
+  const prev = staticEndingAt10();
+  assert.equal(prev.end.getTime(), new Date(2026, 7, 11, 10, 0).getTime());
+
+  const ev = inAttackGroup([prev]);
+  assert.equal(ev.rejected, false);
+  assert.equal(ev.fallback, undefined, 'must be an ordinary candidate: ' + JSON.stringify(ev.warnings));
+  // the verdict used 4 real + 4 credited = 8; the column keeps showing the real 4
+  assert.equal(ev.restBeforeHours, 4);
+  assert.ok(
+    ev.reasons.some((r: string) => r.indexOf('נח 4ש׳') !== -1),
+    'the "נח" reason must state the real gap: ' + JSON.stringify(ev.reasons),
+  );
+  assert.ok(
+    ev.reasons.some((r: string) => r.indexOf('מתחילה בפועל מאוחר יותר') !== -1),
+    'the credit must be visible in the reasons: ' + JSON.stringify(ev.reasons),
+  );
+});
+
+test('the same pairing was a בדוחק candidate before the credit', () => {
+  const noCredit = Object.assign({}, REC, {
+    rest: Object.assign({}, REC.rest, { attackRestCreditBeforeHours: 0 }),
+  });
+  const group = attackGroup();
+  const ev = evaluate(group[1], [staticEndingAt10()], group, [], noCredit);
+  assert.equal(ev.fallback, true);
+  assert.ok(
+    (ev.warnings || []).join(' ').indexOf('8 שעות מנוחה') !== -1,
+    'expected the 8-hour rule to bite without the credit: ' + JSON.stringify(ev.warnings),
+  );
+});
+
+test('the credit does not paper over a genuinely short rest', () => {
+  // static 08:00-12:00 -> only 2 real hours before the standby; 2+4 < 8
+  const ev = inAttackGroup([task('עמדות הגנה', 'מזרחית', '08:00', TODAY, 30)]);
+  assert.equal(ev.restBeforeHours, 2);
+  assert.equal(ev.fallback, true);
+});
+
+test('two adjoining daily התקפי standbys do not stack their credits', () => {
+  // 0 real hours + max(4,4) = 4, short of the 8 a 24-hour mission needs.
+  // Were the two credits summed it would reach 8 and pass unnoticed.
+  const ev = inAttackGroup([dailyAttack()]);
+  assert.equal(ev.restBeforeHours, 0);
+  assert.equal(ev.fallback, true);
+});
+
+/**
+ * The "after" side needs no matching credit: a soldier already on the daily
+ * standby is rejected outright for anything else, so it never reaches the rest
+ * check as the *next* assignment. This pins that reason, which is what the
+ * v3.14 comment relies on.
+ */
+test('a soldier already on the daily התקפי is not recommended elsewhere at all', () => {
+  const ev = evaluate(staticEndingAt10(), [], [staticEndingAt10()], attackGroup().slice(0, 1));
+  assert.equal(ev.rejected, true);
+  assert.ok(
+    ev.rejectReason.indexOf('כבר משובץ למשימה יומית') !== -1,
+    'unexpected reason: ' + ev.rejectReason,
   );
 });
 
