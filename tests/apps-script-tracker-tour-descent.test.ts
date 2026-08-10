@@ -360,16 +360,57 @@ test('a tour descender is not pushed to בדוחק by the daily-load cap', () =>
   assert.match(shift.warnings, /כבר 8ש׳ היום/);
 });
 
-test('the 22:00-07:00 shift counts as 8h of load, the same as it does in the history', () => {
-  // 9h of wall clock; the cap check must use trackerDailyWorkloadHours (8) for
-  // the candidate task too, not the raw duration it uses for every other task
+test('the 22:00-07:00 shift adds no working hours to the day it is served in', () => {
   const out = runEngine([
     ...tour(BASE, '14:00-22:00', ['מפקד א', 'לוחם א', 'לוחם ב']),
     trackerShift(BASE, '22:00-07:00', 'לוחם א'),
   ]);
 
-  assert.match(out[3].note, /היום משימה 8ש׳/, 'the tour that fed the shift is the 8h of same-day load');
+  // the 8h tour is the whole of the same-day load; the 9h גשש adds nothing
+  assert.match(out[3].note, /היום משימה 8ש׳/, 'only the tour counts as same-day working hours');
   assert.doesNotMatch(out[3].note, /יעבור 10ש׳/, 'the assigned descender is not flagged over the cap');
+});
+
+/**
+ * v3.13: כונן גשש is worth 0 working hours, exactly like כרמל חטיבה — it is
+ * sleep-standby held on top of a real mission. The validator half of the
+ * script has always said so (hoursForDailyTotal = 0, filtered out of
+ * validateDailyHours_); until v3.13 the engine disagreed and charged 8h per
+ * shift, so a tour descender looked like a 16-hour day.
+ */
+test('a past גשש shift adds 0 to the 7-day workload, and shows as כוננות instead', () => {
+  const yesterday = [
+    { date: PREV, position: 'כונן גשש', type: 'כונן גשש', time: '14:00-22:00', soldier: 'לוחם א' },
+    { date: PREV, position: 'שג', type: 'עמדות הגנה', time: '14:00-18:00', soldier: 'לוחם ב' },
+  ];
+  const out = runEngine(
+    [...tour(BASE, '14:00-22:00', ['מפקד א', 'לוחם א', 'לוחם ב']), trackerShift(BASE, '22:00-07:00', 'לוחם א')],
+    ROSTER,
+    yesterday,
+  );
+
+  // לוחם א did an 8h גשש yesterday plus today's 8h tour: only the tour is work
+  assert.match(out[3].note, /עומס 7 ימים: 8ש׳ משימה/,
+    'the גשש shift must not add working hours to the 7-day total');
+  assert.match(out[3].note, /8ש׳ כוננות/, 'it is reported as standby hours instead');
+});
+
+test('a heavy גשש history does not make a soldier look loaded next to a peer who did none', () => {
+  // לוחם א: three past גשש shifts. לוחם ב: nothing. If גשש were charged as
+  // work, לוחם א would carry 24h of phantom workload at totalHourWeight.
+  const history = [
+    ...trackerHistory('לוחם א', 3).map(h => ({ ...h, date: '09/08/2026' })),
+  ];
+  const out = runEngine(
+    [...tour(BASE, '14:00-22:00', ['מפקד א', 'לוחם א', 'לוחם ב']), trackerShift(BASE, '22:00-07:00', 'לוחם א')],
+    ROSTER,
+    history,
+  );
+
+  assert.match(out[3].note, /עומס 7 ימים: 8ש׳ משימה/,
+    'three past גשש shifts contribute no working hours');
+  // the גשש fairness counter — not the hour count — is what ranks him down
+  assert.match(out[3].note, /3 משמרות כונן גשש בעבר/);
 });
 
 test('each of the three גשש shifts is fed by its own tour', () => {
