@@ -290,6 +290,59 @@ concatenates them into one global scope; a harness that loads only
 `ShavtzakRecommendation.js` throws `ReferenceError` the moment the engine calls
 something defined in `ShabtzakOps.js`.
 
+**Read the A/B output, not just its cell count.** It catches design mistakes,
+not only regressions. Making `כונן גשש` require a tour descent looked right in
+the tests and shipped a rule where *every* candidate came out `בדוחק` — the 8h
+tour plus the 8h shift always crossed `maxSameDayMissionHours`, so the marker
+stopped meaning anything. Nothing but the real snapshot showed that. A green
+suite plus "N cells changed" is not evidence the rule does what you meant.
+
+## The two halves model the same concepts separately — and drift
+
+`ShabtzakOps.js` validates and `ShavtzakRecommendation.js` scores, and each
+carries its **own** notion of what a mission is worth. They are not derived from
+one another and nothing flags a disagreement: the validator just keeps passing
+schedules the engine would never recommend, and vice versa.
+
+Found 2026-08-10 on `כונן גשש`: Ops had always given it `hoursForDailyTotal = 0`
+and filtered it out of `validateDailyHours_`, exactly like כרמל — while the
+engine charged **8 hours** per shift into both the 7-day `totalHours` (weight
+1.4/h) and the same-day cap. A tour descender looked like a 16-hour day on one
+side and an 8-hour day on the other. The v2.7 comment shows it was a deliberate
+engine-side choice that Ops never followed; either way, nobody noticed for a
+year.
+
+So when you change how a mission type is **counted** — hours, blocking, rest,
+rotation class — grep the same concept in the other file before assuming your
+side is the whole story. Concretely, `isCarmel / isAttackReadiness / isTracker`
+in Ops answer the same question as `isKonenutCategory_ / trackerKeywords` in the
+engine, and the answers were allowed to differ.
+
+Related trap in the engine alone: `isKonenutCategory_` is not just an hours
+flag. It also drives `isSkippedRecommendationTask_`, the blocking rules and the
+"yesterday" window — folding a category into it to zero its hours silently stops
+that category getting recommendations at all. Change the two hour counters
+(`calculateStats_`, `calculateSameOperationalDayHours_`) instead.
+
+### Writing engine tests: put the history on the right operational day
+
+`tests/apps-script-*.test.ts` drive `updateShabtzakRecommendations()` end to end
+over a synthetic three-tab spreadsheet (copy the harness from
+`apps-script-tour-driver.test.ts` or `apps-script-tracker-tour-descent.test.ts`).
+Two ways a test silently exercises nothing:
+
+- **A pre-14:00 row belongs to the previous op day.** A `06:00-14:00` סיור and a
+  `14:00-22:00` shift on the same date are *not* the same operational day, so
+  same-day load, streaks and "already assigned today" never engage. To test
+  those, pair `14:00-22:00` with `22:00-07:00`. A history row dated on the tab's
+  own base date is dropped entirely — history keeps only op days strictly before
+  the current one.
+- **The candidates cell holds names only.** Reasons (`✓ לא היה כונן גשש עד היום`,
+  workload, warnings) live in the row **note**, and for an unassigned row the
+  note lists just the top few candidates. Assert reasons against an *assigned*
+  row, whose note is that one soldier's full evaluation. Capture notes by
+  recording `setNotes` in the fake sheet, alongside `setValues`.
+
 ## The 14:00 operational day — a grouping, not a second date convention
 
 This one has burned two agents (and this skill's first draft). Get it right:
