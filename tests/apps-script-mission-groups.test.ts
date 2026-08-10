@@ -7,10 +7,10 @@ import path from 'node:path';
 /**
  * The two rotation groups, and the תורנות fairness weighting.
  *
- * Rotation groups: סטטיות + תורנות + כונן גשש are one group ("static"),
- * סיור + התקפי the other ("dynamic"). After a day in one group the engine
- * should push the soldier to the other — so סטטיות followed by תורנות is
- * NOT a rotation, both are the same group.
+ * Rotation groups: סטטיות + תורנות are one group ("static"), סיור + התקפי
+ * the other ("dynamic"). After a day in one group the engine should push the
+ * soldier to the other — so סטטיות followed by תורנות is NOT a rotation,
+ * both are the same group. כונן גשש is in neither (v3.14).
  *
  * This was broken by a spelling trap: the sheet writes "תורנים" with a
  * regular nun, the code searched for "תורן" with a final nun, and the 108
@@ -63,21 +63,34 @@ test('a partial-time תורנות is still a תורנות', () => {
 test('גשש wins over תורן: "כונן גשש ותורן רס״פ" is a tracker shift', () => {
   const { category, missionClass } = classOf('כונן גשש ותורן רס"פ', 'נוספים');
   assert.equal(category, 'tracker');
-  assert.equal(missionClass, 'static', 'tracker still belongs to the static group');
+  // v3.14: the גשש belongs to neither rotation group — see below
+  assert.equal(missionClass, '', 'a tracker shift is unclassified, not static');
 });
 
-test('the static group: עמדות הגנה, תורנות and גשש together', () => {
+test('the static group: עמדות הגנה and תורנות', () => {
   const members = [
     ['שג', 'עמדות הגנה'],
     ['בונקר', 'עמדות הגנה'],
     ['מזרחית', 'עמדות הגנה'],
     ['דרומית', 'עמדות הגנה'],
     ['תורנים', 'נוספים'],
-    ['כונן גשש', 'נוספים'],
   ];
   for (const [position, type] of members) {
     assert.equal(classOf(position, type).missionClass, 'static', `${position} / ${type}`);
   }
+});
+
+/**
+ * v3.14, owner decision: כונן גשש is in NEITHER group. It is 0-hour sleep
+ * standby held on top of a real mission, so it is not a "static day" that
+ * earns a dynamic one next, and it does not count toward staticMissionClassCount.
+ * A גשש written as "יומי" (which falls to day_blocking) is unclassified too.
+ */
+test('כונן גשש belongs to neither rotation group', () => {
+  for (const timeText of ['14:00-22:00', '22:00-07:00', 'יומי']) {
+    assert.equal(classOf('כונן גשש', 'נוספים', timeText).missionClass, '', timeText);
+  }
+  assert.equal(classOf('כונן גשש ותורן רס"פ', 'נוספים', 'יומי').missionClass, '');
 });
 
 test('the dynamic group: סיור and התקפי together', () => {

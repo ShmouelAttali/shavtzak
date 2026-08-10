@@ -1,6 +1,82 @@
 /** @OnlyCurrentDoc */
 /**
- * Shabtzak Recommendations Engine v3.11 - שעון לחימה 14:00-14:00
+ * Shabtzak Recommendations Engine v3.18 - שעון לחימה 14:00-14:00
+ *
+ * שינויים ב-v3.18 - שעת ההחלפה של החופש (06:00, ביום ראשון 09:00):
+ * 1. יום היציאה לחופש ויום החזרה ממנו הם ימים חלקיים: ביום הראשון
+ *    ממליצים על משמרת שנגמרת עד שעת ההחלפה, וביום החזרה רק על משמרת
+ *    שמתחילה ממנה ואילך. משמרת 02:00 ביום חזרה נדחית, 06:00 מומלצת.
+ * 2. הבדיקה יושבת *מחוץ* ל-availabilityCache (findVacationChangeConflict_),
+ *    כי הקאש ממופתח ברזולוציית יום והתשובה כאן תלויה בשעות המשבצת -
+ *    בדיוק כמו יציאה קצרה מאושרת ב-v3.6.
+ * 3. getStatusForSlot_ מחזיר גם את סטטוס היום שלפני המשבצת, שהוא מה
+ *    שמבדיל יום ראשון של חופש מיום חזרה.
+ * 4. הלוגיקה המשותפת (isVacationStatusText_, vacationChangeMinutesForDate_,
+ *    vacationTransitionForDay_) מוגדרת ב-ShabtzakOps.js ומשמשת את שני
+ *    הקבצים, כמו parseExitStatus_ ו-rangesOverlap_. בוולידציה זהו v3.15.
+ *
+ * שינויים ב-v3.17 - כונן גשש אינו משימה סטטית:
+ * 1. getMissionClass_('tracker') מחזיר '' (לא מסווג) במקום 'static'.
+ *    הגשש הוא כוננות שינה של 0 שעות עבודה על גבי משימה אמיתית, ולכן
+ *    אינו שייך לרוטציה סטטי<->דינמי בשום כיוון.
+ * 2. מה שיוצא מזה: הגשש לא נספר ב-staticMissionClassCount (משקל 5),
+ *    לא גורר את קנס "אותה מחלקת משימה אתמול", לא מקבל קנס רצף
+ *    סטטיות ולא בונוס שבירת רצף.
+ * 3. ברצף הסטטיות: יום שכל מה שהיה בו הוא גשש נספר עד כה כיום סטטי
+ *    והאריך את הרצף, ולכן חייל שרק ישן בכוננות קיבל את קנס "חייב
+ *    דינמית". עכשיו יום כזה מתנהג כיום מנוחה ומאפס את הרצף. יום עם
+ *    עמדה סטטית אמיתית ממשיך להיספר בדיוק כמו קודם.
+ *
+ * שינויים ב-v3.16 - כונן גשש = 0 שעות עבודה, כמו כרמל:
+ * 1. שני צדי הסקריפט לא הסכימו. הוולידציה (ShabtzakOps) נותנת לגשש
+ *    hoursForDailyTotal = 0 ומסננת אותו מ-validateDailyHours_ בדיוק
+ *    כמו כרמל; המנוע, לעומת זאת, ספר אותו כ-8 שעות משימה למשמרת
+ *    (trackerDailyWorkloadHours) - גם ב-totalHours של 7 הימים (משקל
+ *    1.4 לשעה) וגם בעומס היומי. יורד סיור נראה שם כמי שעשה 16 שעות.
+ * 2. עכשיו שעות הגשש נרשמות ב-konenutHours בשני מוני השעות, בדיוק
+ *    כמו כרמל: 0 שעות משימה, 0 במשקל השעות, 0 בתקרה היומית. תצוגת
+ *    "עומס 7 ימים" מציגה אותן כ"כוננות".
+ * 3. ההגדרה isKonenutCategory_ *לא* השתנתה - היא שולטת גם בדילוג על
+ *    המלצות ובחסימות, והגשש חייב להמשיך לקבל המלצות. השינוי נקודתי
+ *    לשעות בלבד; ספירת המשימות לרוטציה טופלה בנפרד ב-v3.17.
+ * 4. עם זה ירד גם הפטור הזמני מתקרת העומס שנוסף ב-v3.15: כשהגשש שווה
+ *    0 שעות, 8ש׳ סיור + גשש הם 8 שעות ולא 16, והתקרה פשוט לא נחצית.
+ *
+ * שינויים ב-v3.15 - כונן גשש: רק יורדי הסיור, ולפי הוגנות:
+ * 1. עד כה "ירד מהסיור התואם" היה בונוס (trackerAfterTourBonus) בלבד,
+ *    ולכן חייל שלא היה בסיור יכול היה לעלות לראש רשימת הגשש. עכשיו
+ *    מי שלא ירד מסיור שהסתיים עד trackerTourDescentMaxGapHours לפני
+ *    תחילת המשמרת יורד ל"בדוחק" - כלומר מוצג רק כשאין אף יורד סיור
+ *    זמין, ותמיד בתחתית הרשימה ועם אזהרה. זו לא חסימה קשיחה בכוונה:
+ *    משמרת גשש חייבת להתאייש גם ביום שבו הסיור עדיין לא שובץ.
+ * 2. הוגנות גשש, בדיוק כמו הוגנות תורנויות (v3.10): בין יורדי הסיור
+ *    מדרגים לפי כמה משמרות "כונן גשש" עשה החייל בכל ההיסטוריה של
+ *    "כל השבצק" - לא רק בחלון הלוקבק. קנס לינארי עם תקרה, כך שמי
+ *    שעשה הכי מעט עולה לראש והיסטוריה חריגה לא חוסמת לתמיד.
+ * 3. אותה קריאה יחידה של "כל השבצק" מזינה עכשיו שלושה צרכנים: חלון
+ *    הלוקבק, ספירת התורנויות וספירת הגששים.
+ * 4. תקרת העומס היומי (maxSameDayMissionHours) הפסיקה להוריד את יורד
+ *    הסיור ל"בדוחק": 8ש׳ סיור + 8ש׳ גשש חצו אותה תמיד, ולכן בלי זה
+ *    *כל* מועמד תקין לגשש היה מסומן "בדוחק" והסימון היה מאבד משמעות.
+ *    (v3.16 החליף את הפטור הזה בפתרון השורש - 0 שעות עבודה לגשש.)
+ *
+ * שינויים ב-v3.14 - מנוחה לפני כוננות התקפית יומית:
+ * 1. הכוננות ההתקפית היומית מזכה 4 שעות מנוחה גם *לפניה*, לא רק
+ *    אחריה: שעותיה הראשונות הן המתנה, ולכן היא "מתחילה בפועל"
+ *    ב-18:00. כך מי שירד מעמדה סטטית ב-10:00 נחשב כמי שנח 8 שעות
+ *    ומומלץ כרגיל, במקום להידחות ל"בדוחק" (attackRestCreditBeforeHours).
+ * 2. רק בצד ה"לפני". בצד ה"אחרי" אין צורך: מי שכבר משובץ לכוננות
+ *    יומית נדחה עוד קודם ("כבר משובץ למשימה יומית"), כך שהיא לעולם
+ *    אינה מגיעה לבדיקת המנוחה כמשימה הבאה.
+ * 3. שני זיכויים אינם מצטברים (max): שתי כוננויות צמודות עדיין
+ *    נופלות בבדיקת המנוחה.
+ * 4. הזיכוי פותח כשירות בלבד: בונוס הזמינות, עמודת "מנוחה" והנימוק
+ *    "נח X" ממשיכים להציג את הפער האמיתי בין המשמרות. זה גם שינוי
+ *    מול v3.9, שהציגה שם את השעות כולל הזיכוי - העמודה תואמת עכשיו
+ *    את מה שכתוב בשבצ"ק, וההסבר לזיכוי יושב בעמודת ההתאמה.
+ * ⚠ בוולידציה (ShabtzakOps) הכוננות ההתקפית ממילא שקופה למנוחה
+ *    לגמרי - validateRestBetweenShifts_ מסננת אותה - כך שהשינוי הזה
+ *    מיישר את ההמלצות לוולידציה, ולא להפך.
  *
  * שינויים ב-v3.11 - קצין מוצב פתוח לכל מפקד:
  * 1. עד כה קצין מוצב נדרש סמל או מ״מ (isSeniorCommander), ולכן מ״כים
@@ -96,8 +172,8 @@
  *    רושמים בעמודת השעה טווח (למשל "22:00-07:00").
  *    מי שירד מסיור שמסתיים עד שעה וחצי לפני תחילת המשמרת מקבל בונוס
  *    ייעוד גדול ופטור מבדיקת מנוחה (זו התבנית המתוכננת - הוא ישן בכוננות).
- *    הגשש נספר כעומס משימה (עד 8 שעות למשמרת), לא כלילה, ושקוף
- *    למנוחה של המשימה הבאה.
+ *    הגשש אינו נספר כלילה ושקוף למנוחה של המשימה הבאה.
+ *    (v3.16: הוא גם אינו נספר כשעות עבודה כלל - ראה למעלה.)
  *
  * כולל גם (מגרסאות 2.7-2.8, למקרה שלא הוטמעו אצלך):
  * - התקפי חוסם רק את משבצת הזמן שלו; כמה פעילויות התקפי לא-חופפות
@@ -132,10 +208,19 @@ const SHABTZAK_REC_CONFIG = {
     },
     // שורת הכותרות (ומעליה שורת התאריכים) מזוהות בסריקת השורות הראשונות.
     headerSearchRows: 6,
-    // מאגר המועמדים: רק המחלקות האלה - בדיוק מה שסיננה הנוסחה
-    // שהייתה בעמודה A של "שבצק". רשימה ריקה = כל המצבה.
+    // מאגר המועמדים: רק המחלקות האלה. רשימה ריקה = כל המצבה.
     // (מפל"ג ממילא נחסם בהמשך ע"י excludedPlatoonOrRoleKeywords.)
-    includePlatoons: ['1', '2', '3', 'חמ"ל']
+    //
+    // 2026-08-10, החלטת המפקד: חמ"ל יצא מהמאגר. אנשי החמ"ל מנהלים
+    // משמרות משל עצמם בטאב "שיבוץ חמל", ולכן אינם נספרים ואינם מומלצים
+    // לשום עמדה. עד כה הם נכנסו למאגר ונדחו רק בשלב הזמינות
+    // (excludedPlatoonOrRoleKeywords) - כלומר נבדקו לחינם בכל עמדה.
+    // החסימה ההיא נשארת כרשת ביטחון.
+    //
+    // הרשימה נהגה זהה לנוסחת ה-FILTER בעמודה A של "שבצק", אבל מאז v3.5
+    // המצבה נקראת ישירות מ"מצבת החיילים" ועמודות A:G הן שארית תצוגה
+    // שהסקריפט אינו קורא - ולכן אין צורך לתחזק את השתיים ביחד.
+    includePlatoons: ['1', '2', '3']
   },
 
   // v3.5: עמודות המשימות ב"שבצק" מזוהות לפי הכותרות בשורת הכותרת ולא
@@ -207,7 +292,13 @@ const SHABTZAK_REC_CONFIG = {
     // v3.9: כוננות התקפית יומית (14:00-14:00) היא ברובה המתנה - בוולידציה
     // היא נספרת כ-8 שעות עבודה בלבד. לכן בסיומה החייל נחשב כמי שכבר נח
     // כך וכך שעות, כדי שיוכל לעלות מיד לעמדה סטטית (4 שעות).
-    attackRestCreditHours: 4
+    attackRestCreditHours: 4,
+    // v3.14: אותו היגיון בכיוון ההפוך. השעות הראשונות של הכוננות הן
+    // המתנה, ולכן היא "מתחילה בפועל" מאוחר יותר (14:00 -> 18:00): מי
+    // שירד מעמדה סטטית ב-10:00 נחשב כמי שנח 8 שעות לפניה, ולא 4.
+    // זיכוי ולא שעת התחלה קבועה - כדי שגם כוננות שנכתבה בשעה אחרת
+    // תקבל את אותן 4 השעות.
+    attackRestCreditBeforeHours: 4
   },
 
   roles: {
@@ -289,14 +380,25 @@ const SHABTZAK_REC_CONFIG = {
     // מועמד "בדוחק": נכשל בכללי מנוחה אבל לא בחסימה קשיחה.
     // מוצג רק כשאין מספיק מועמדים תקינים, תמיד בתחתית הרשימה.
     fallbackBasePenalty: 400,
-    // כונן גשש: כל משמרת נספרת כעומס משימה עד 8 שעות.
-    trackerDailyWorkloadHours: 8,
+    // v3.16: כונן גשש = 0 שעות עבודה, כמו כרמל. השעות נרשמות ככוננות
+    // (konenutHours) ולכן אינן נכנסות ל-totalHours, לתקרת העומס היומי
+    // או למשקל השעות. trackerDailyWorkloadHours (8) ירד - הוא היה
+    // הסיבה לכך שיורד סיור נראה כמי שעשה 16 שעות ביום.
     // v3.0: בונוס ייעוד לגשש - מי שירד מסיור שמסתיים עד
     // trackerTourDescentMaxGapHours לפני תחילת המשמרת הוא המיועד
     // (14->14:00-22:00, 22->22:00-07:00, 06->07:00-14:00),
     // ומקבל פטור מבדיקת מנוחה (ישן בכוננות).
     trackerAfterTourBonus: -35,
     trackerTourDescentMaxGapHours: 1.5,
+    // v3.15: הגשש שמור ליורדי הסיור. מי שאינו יורד סיור יורד ל"בדוחק"
+    // (fallback) ולא נחסם - כדי שמשמרת גשש תתאייש גם ביום שבו הסיור
+    // עדיין לא שובץ, אבל תמיד מתחת לכל יורד סיור זמין.
+    trackerRequireTourDescent: true,
+    // v3.15 הוגנות גשש: קנס לכל משמרת "כונן גשש" קודמת של החייל בכל
+    // "כל השבצק", לא רק בחלון הלוקבק. אותם מספרים כמו הוגנות התורנויות
+    // (v3.10) - זה בדיוק אותו כלל תור, על תור אחר.
+    trackerHistoryWeight: 8,
+    trackerHistoryCap: 6,
     // v3.0: משימה יומית (14:00-14:00) נספרת בעומס עד 16 שעות, לא 24.
     dailyMissionWorkloadHours: 16,
     magenTagbatzPackageBonus: -12,
@@ -500,6 +602,7 @@ function updateShabtzakRecommendations() {
   const historyValues = historySheet ? readHistoryValues_(historySheet, config) : [];
   const historyAssignments = parseHistoryAssignments_(historyValues, baseDate, config);
   const toranutHistoryCounts = countToranutHistory_(historyValues, config);
+  const trackerHistoryCounts = countTrackerHistory_(historyValues, config);
   const currentAssignments = currentTasks
     .filter(function(t) { return t && t.assigned; })
     .map(function(t) { return taskToAssignment_(t, config); });
@@ -525,6 +628,7 @@ function updateShabtzakRecommendations() {
     currentBySoldier: currentBySoldier,
     baseDate: baseDate,
     toranutHistoryCounts: toranutHistoryCounts,
+    trackerHistoryCounts: trackerHistoryCounts,
     statsCache: {},
     availabilityCache: {},
     config: config
@@ -779,8 +883,12 @@ function resolveScheduleLayout_(sheet, config) {
  *
  * מבנה הטאב: שורת תאריכים (DD/MM/YY) מעל שורת הכותרות, ואחריה שורה
  * לכל חייל. הסטטוס ליום מסוים = התא בהצטלבות שורת החייל עם עמודת
- * התאריך. הסינון לפי מחלקה (includePlatoons) משחזר בדיוק את מה
- * שנוסחת ה-FILTER בעמודה A של "שבצק" עשתה.
+ * התאריך.
+ *
+ * הסינון לפי מחלקה (includePlatoons) שיחזר במקור בדיוק את נוסחת
+ * ה-FILTER בעמודה A של "שבצק". ⚠ מאז 2026-08-10 הוא כבר לא: חמ"ל
+ * הוצא מהמאגר בלבד, והנוסחה בעמודה A נותרה כשהייתה - עמודות A:G הן
+ * שארית תצוגה שהפונקציה הזו אינה קוראת ממילא.
  *
  * מחזירה { soldiers, missingDateLabels }.
  */
@@ -1024,11 +1132,27 @@ function readHistoryValues_(historySheet, config) {
  * המלאה ולא את חלון עשרת הימים.
  */
 function countToranutHistory_(values, config) {
+  return countHistoryRowsBy_(values, config, isToranutText_);
+}
+
+/**
+ * v3.15: כמה משמרות "כונן גשש" עשה כל חייל בכל ההיסטוריה. משמש להוגנות
+ * בשיבוץ גשש (applyTrackerFairnessScoring_), בדיוק כמו ספירת התורנויות.
+ * שתי הספירות זרות זו לזו: isToranutText_ מחריג שורות גשש.
+ */
+function countTrackerHistory_(values, config) {
+  return countHistoryRowsBy_(values, config, isTrackerText_);
+}
+
+/**
+ * ספירה לפי חייל של שורות "כל השבצק" שעונות על predicate(position, type).
+ */
+function countHistoryRowsBy_(values, config, matches) {
   const counts = {};
   values.forEach(function(row) {
     const soldier = cleanText_(row[config.history.soldierCol - 1]);
     if (!soldier) return;
-    if (!isToranutText_(
+    if (!matches(
       cleanText_(row[config.history.positionCol - 1]),
       cleanText_(row[config.history.typeCol - 1]),
       config)) return;
@@ -1225,7 +1349,7 @@ function getTaskCategory_(position, type, timeValue, config) {
 
   // סדר חשוב: גשש ותורן לפני כוננות/יומי, כדי ששורות כמו
   // "כונן גשש ותורן רס\"פ / יומי" יקבלו את הזמנים הנכונים שלהן.
-  if (containsAny_(text, config.trackerKeywords || ['גשש'])) return 'tracker';
+  if (isTrackerText_(position, type, config)) return 'tracker';
   if (isToranutText_(position, type, config)) return 'daily_duty';
 
   if (containsAny_(text, config.carmelTaskKeywords || [])) return 'carmel';
@@ -1254,8 +1378,12 @@ function isMagenTagbatzText_(text, config) {
 }
 
 function isKonenutCategory_(category) {
-  // v2.7: רק כרמל/כוננות. כונן גשש הוגדר מחדש כמשימה יומית
-  // (כמו תורן) עם עומס אפקטיבי - ראה scoring.trackerDailyWorkloadHours.
+  // רק כרמל/כוננות. הגשש *לא* נכלל כאן בכוונה: ההגדרה הזאת שולטת גם
+  // בדילוג על המלצות, בחסימות ובחלון "אתמול", והגשש חייב להמשיך לקבל
+  // המלצות (isSkippedRecommendationTask_) ולהיספר לרוטציה.
+  // v3.16: שעות העבודה שלו כן מטופלות כמו כרמל - 0 - אבל זה נעשה
+  // נקודתית בשני מוני השעות (calculateStats_ /
+  // calculateSameOperationalDayHours_), לא דרך הדגל הזה.
   return category === 'carmel';
 }
 
@@ -1296,8 +1424,8 @@ function isMissionRelevantAssignment_(assignment) {
 }
 
 // כוננות שקופה למנוחה: מניחים שהחייל ישן.
-// v2.7: גם כונן גשש נשאר שקוף למנוחה (ישן בלילה, זמין למחרת ב-06:00) -
-// למרות שהוא כן נספר כעומס משימה יומי.
+// v2.7: גם כונן גשש נשאר שקוף למנוחה (ישן בלילה, זמין למחרת ב-06:00).
+// v3.16: ובעקבות זה גם 0 שעות עבודה - אותה הנחה בדיוק, שני מקומות.
 function isRestRelevantAssignment_(assignment) {
   if (!assignment) return false;
   if (assignment.category === 'tracker') return false;
@@ -1320,6 +1448,16 @@ function restCreditAfter_(taskOrAssignment, config) {
   if (!isDailyAttackAssignment_(taskOrAssignment)) return 0;
   const cfg = config || SHABTZAK_REC_CONFIG;
   return Number(cfg.rest.attackRestCreditHours || 0);
+}
+
+/**
+ * v3.14: הכיוון ההפוך - זיכוי מנוחה *לפני* כוננות התקפית יומית.
+ * ההערה ב-v3.9 כבר הבטיחה את זה, אבל רק צד ה"אחרי" מומש בפועל.
+ */
+function restCreditBefore_(taskOrAssignment, config) {
+  if (!isDailyAttackAssignment_(taskOrAssignment)) return 0;
+  const cfg = config || SHABTZAK_REC_CONFIG;
+  return Number(cfg.rest.attackRestCreditBeforeHours || 0);
 }
 
 function isMagenCategory_(taskOrAssignment) {
@@ -1354,6 +1492,17 @@ function isMagenTagbatzComplement_(a, b) {
 }
 
 /**
+ * v3.15: זיהוי משמרת "כונן גשש", במקום אחד - משמש גם לסיווג הקטגוריה
+ * וגם לספירת ההיסטוריה להוגנות. תמיד נבדק *לפני* התורנות.
+ */
+function isTrackerText_(position, type, config) {
+  const cfg = config || SHABTZAK_REC_CONFIG;
+  const text = normalizeForSearch_((position || '') + ' ' + (type || ''));
+  if (!text) return false;
+  return containsAny_(text, cfg.trackerKeywords || ['גשש']);
+}
+
+/**
  * v3.9: זיהוי תורנות, במקום אחד. מוגדר אחרי הגשש בכוונה - שורה כמו
  * "כונן גשש ותורן רס״פ" היא משמרת גשש ולא תורנות.
  */
@@ -1361,23 +1510,33 @@ function isToranutText_(position, type, config) {
   const cfg = config || SHABTZAK_REC_CONFIG;
   const text = normalizeForSearch_((position || '') + ' ' + (type || ''));
   if (!text) return false;
-  if (containsAny_(text, cfg.trackerKeywords || ['גשש'])) return false;
+  if (isTrackerText_(position, type, cfg)) return false;
   return containsAny_(text, cfg.toranutKeywords || []);
 }
 
 /**
- * שתי קבוצות הרוטציה: סטטית (עמדות הגנה, תורנות, כונן גשש) מול דינמית
- * (סיור, התקפי). אחרי יום בקבוצה אחת מעדיפים לעבור לשנייה - ולכן
- * סטטיות ואז תורנות *אינה* רוטציה, שתיהן באותה קבוצה.
+ * שתי קבוצות הרוטציה: סטטית (עמדות הגנה, תורנות) מול דינמית (סיור,
+ * התקפי). אחרי יום בקבוצה אחת מעדיפים לעבור לשנייה - ולכן סטטיות ואז
+ * תורנות *אינה* רוטציה, שתיהן באותה קבוצה.
+ *
+ * v3.17: כונן גשש אינו שייך לאף אחת מהשתיים ומחזיר '' (לא מסווג).
+ * הוא כוננות שינה של 0 שעות עבודה המוחזקת על גבי משימה אמיתית, ולכן
+ * אינו "יום סטטי" שצריך רוטציה אחריו ואינו נספר ב-staticMissionClassCount.
+ * כל הצרכנים בודקים במפורש 'static'/'dynamic' או truthiness, ולכן ''
+ * פשוט מוציא את הגשש מכל חשבונות הרוטציה - וזו הכוונה:
+ * - משבצת גשש עצמה לא מקבלת קנס רצף סטטיות ולא בונוס שבירת רצף.
+ * - יום שכל מה שהיה בו הוא גשש אינו יום סטטי ומאפס את רצף הסטטיות,
+ *   כמו יום מנוחה. יום עם עמדה סטטית אמיתית לא הושפע.
  */
 function getMissionClass_(category, config, taskOrAssignment) {
   const position = taskOrAssignment ? taskOrAssignment.position : '';
   const type = taskOrAssignment ? taskOrAssignment.type : '';
-  const text = normalizeForSearch_((position || '') + ' ' + (type || ''));
-  if (category === 'static' || category === 'tracker' || category === 'daily_duty') return 'static';
+  if (category === 'tracker') return '';
+  // גשש שנרשם "יומי" ולכן נפל ל-day_blocking - אותו דין.
+  if (isTrackerText_(position, type, config)) return '';
+  if (category === 'static' || category === 'daily_duty') return 'static';
   // רשת ביטחון לשורות "יומי" שלא נתפסו בקטגוריה עצמה.
-  if (category === 'day_blocking' &&
-      (text.indexOf('גשש') !== -1 || isToranutText_(position, type, config))) return 'static';
+  if (category === 'day_blocking' && isToranutText_(position, type, config)) return 'static';
   if (category === 'tour' || category === 'attack') return 'dynamic';
   return '';
 }
@@ -1703,7 +1862,7 @@ function getGroupStatusText_(task, group, soldiersByName, config, currentTasks) 
 
   if (task.category === 'tracker') {
     parts.push('כונן גשש (משמרת ' + formatTimeOnly_(task.start) + '-' + formatTimeOnly_(task.end) +
-      '): מיועד ליורד הסיור התואם | נספר כמשימה, שקוף למנוחת ההמשך');
+      '): שמור ליורדי הסיור התואם, לפי מי שעשה הכי מעט גשש | 0 שעות עבודה, שקוף למנוחת ההמשך');
     return parts.join(' | ');
   }
 
@@ -1819,6 +1978,7 @@ function evaluateCandidateForTask_(soldier, task, context) {
     samePlatoonAsGroupCommander: false,
     samePlatoonCommanderLabel: '',
     toranutHistoryCount: 0,
+    trackerHistoryCount: 0,
     stats: null,
     sameDayMissionHours: 0,
     sameDayKonenutHours: 0
@@ -1845,6 +2005,11 @@ function evaluateCandidateForTask_(soldier, task, context) {
   // לקבל תשובות שונות.
   const exitConflict = findExitConflict_(soldier, task, context.baseDate);
   if (exitConflict) return reject_(result, 'ביציאה מאושרת (' + exitConflict.text + ')');
+
+  // v3.18: יום היציאה לחופש / החזרה ממנו חוסם רק את חלק היום שאחרי או
+  // לפני שעת ההחלפה. גם זה מחוץ ל-availabilityCache, מאותה סיבה.
+  const vacationConflict = findVacationChangeConflict_(soldier, task, context.baseDate);
+  if (vacationConflict) return reject_(result, vacationConflict);
 
   if (task.category === 'static' && config.scoring.seniorCommanderStaticBlock && soldier.isSeniorCommander) {
     return reject_(result, 'מ״מ/סמל לא עולים עמדות הגנה');
@@ -1957,14 +2122,26 @@ function evaluateCandidateForTask_(soldier, task, context) {
   // v3.9: אחרי התקפי יומי (ומיד לפני התקפי יומי) מזכים שעות מנוחה -
   // הכוננות היא ברובה המתנה, ולכן מי שירד ממנה ב-14:00 כשיר מיד
   // לעמדה סטטית. השעות "האמיתיות" נשמרות לבונוס הזמינות בלבד.
-  const prevRestCredit = prev ? restCreditAfter_(prev, config) : 0;
+  // v3.14: הזיכוי פועל גם בכיוון ההפוך - הכוננות "מתחילה בפועל" ב-18:00,
+  // ולכן היורד מעמדה סטטית ב-10:00 נחשב כמי שנח 8 שעות לפניה.
+  // max ולא סכום - שתי כוננויות צמודות לא יזכו ל-8 שעות זיכוי ויעברו
+  // את בדיקת המנוחה בלי שאיש יראה אותן.
+  // בצד ה"אחרי" אין צורך בזיכוי מקביל: מי שכבר משובץ לכוננות יומית
+  // נדחה קודם לכן ("כבר משובץ למשימה יומית"), ולכן היא לעולם אינה
+  // מגיעה לכאן כמשימה הבאה.
+  const prevCreditAfterPrev = prev ? restCreditAfter_(prev, config) : 0;
+  const prevCreditBeforeTask = prev ? restCreditBefore_(task, config) : 0;
+  const prevRestCredit = Math.max(prevCreditAfterPrev, prevCreditBeforeTask);
   const nextRestCredit = next ? restCreditAfter_(task, config) : 0;
   const prevRest = prevRestRaw + prevRestCredit;
   const nextRest = nextRestRaw + nextRestCredit;
   result.previousAssignment = prev;
   result.previousAssignmentIsToday = !!(prev && sameOperationalDay_(prev.start, task.start));
-  result.restBeforeHours = prevRest;
-  result.restAfterHours = nextRest;
+  // v3.14: עמודת "מנוחה" מציגה את הפער האמיתי בין המשמרות, בלי הזיכוי.
+  // הזיכוי פותח כשירות בלבד, והוא מוסבר בעמודת ההתאמה - כך שמספר
+  // השעות שרואים על המסך תמיד תואם את מה שכתוב בשבצ"ק.
+  result.restBeforeHours = prevRestRaw;
+  result.restAfterHours = nextRestRaw;
 
   // v3.0: משמרת גשש מיועדת ליורד סיור - סיור שמסתיים עד שעה וחצי
   // לפני תחילת המשמרת (14->14:00, 22->22:00, 06->07:00).
@@ -1977,6 +2154,13 @@ function evaluateCandidateForTask_(soldier, task, context) {
     result.score += config.scoring.trackerAfterTourBonus || -35;
     result.reasons.push('✓ ירד מסיור ' + formatTimeOnly_(prev.end) + ' - מיועד לכונן גשש');
   } else {
+    // v3.15: הגשש שמור ליורדי הסיור שהסתיים זה עתה. מי שלא ירד מסיור
+    // יורד ל"בדוחק" ולא נחסם - כך המשמרת מתאיישת גם ביום שבו הסיור
+    // עדיין לא שובץ, אבל כל יורד סיור זמין תמיד מעליו.
+    if (task.category === 'tracker' && config.scoring.trackerRequireTourDescent !== false) {
+      markFallback_(result, 'לא ירד מהסיור - כונן גשש שמור ליורדי הסיור', config);
+    }
+
     // לגשש בודקים את המנוחה מול חלון הפעילות בפועל, לא מול כל המשמרת.
     const restCheckDuration = task.category === 'tracker'
       ? (config.rest.trackerEffectiveDurationHours || 1.5)
@@ -1993,9 +2177,12 @@ function evaluateCandidateForTask_(soldier, task, context) {
     }
   }
 
-  if (prevRestCredit > 0) {
+  if (prevCreditAfterPrev > 0) {
     result.reasons.push('ירד מכוננות התקפית ' + formatTimeOnly_(prev.end) +
-      ' - נחשב כ־' + formatHours_(prevRestCredit) + ' מנוחה');
+      ' - נחשב כ־' + formatHours_(prevCreditAfterPrev) + ' מנוחה');
+  } else if (prevCreditBeforeTask > 0) {
+    result.reasons.push('הכוננות ההתקפית מתחילה בפועל מאוחר יותר - נחשב כ־' +
+      formatHours_(prevCreditBeforeTask) + ' מנוחה נוספת');
   }
 
   const restEvalAfter = evaluateRestWindow_(nextRest, next ? next.durationHours : 4, config);
@@ -2078,8 +2265,9 @@ function evaluateCandidateForTask_(soldier, task, context) {
   applyRoleScoring_(result, soldier, task, context.group, context.soldiersByName, context.currentTasks, config);
   applySamePlatoonAsGroupCommanderScoring_(result, soldier, task, context.group, context.soldiersByName, config);
   applyToranutFairnessScoring_(result, soldier, task, context, config);
+  applyTrackerFairnessScoring_(result, soldier, task, context, config);
 
-  result.reasons.push('נח ' + formatHours_(prevRest));
+  result.reasons.push('נח ' + formatHours_(prevRestRaw));
   result.reasons.push(Math.round(stats.totalHours) + ' שעות משימה ב־7 ימים');
   if (stats.konenutHours) result.reasons.push(formatHours_(stats.konenutHours) + ' כוננות ב־7 ימים');
   if (stats.nightCount) result.reasons.push(stats.nightCount + ' לילות');
@@ -2159,6 +2347,29 @@ function applyToranutFairnessScoring_(result, soldier, task, context, config) {
   const weight = config.scoring.toranutHistoryWeight || 8;
   result.score += Math.min(count, cap) * weight;
   result.reasons.push(count + ' תורנויות בעבר');
+}
+
+/**
+ * v3.15: הוגנות כונן גשש - אותו כלל תור כמו התורנויות, על תור אחר.
+ * כל המועמדים הרלוונטיים ירדו מאותו סיור, ולכן זה המדד שקובע ביניהם:
+ * מי שעשה הכי פחות משמרות גשש בכל ההיסטוריה עולה לראש הרשימה.
+ * הקנס לינארי ומוגבל בתקרה, כדי שוותיק גשש לא ייחסם לתמיד.
+ */
+function applyTrackerFairnessScoring_(result, soldier, task, context, config) {
+  if (!task || task.category !== 'tracker') return;
+
+  const count = (context.trackerHistoryCounts || {})[soldier.nameKey] || 0;
+  result.trackerHistoryCount = count;
+
+  if (!count) {
+    result.reasons.push('✓ לא היה כונן גשש עד היום');
+    return;
+  }
+
+  const cap = config.scoring.trackerHistoryCap || 6;
+  const weight = config.scoring.trackerHistoryWeight || 8;
+  result.score += Math.min(count, cap) * weight;
+  result.reasons.push(count + ' משמרות כונן גשש בעבר');
 }
 
 function applySamePlatoonAsGroupCommanderScoring_(result, soldier, task, group, soldiersByName, config) {
@@ -2359,6 +2570,13 @@ function getAvailabilityStatus_(soldier, task, config, scheduleBaseDate) {
   // - משבצת שגולשת ליום הקלנדרי הבא (00:00-14:00, למשל עמדות 06:00) -> "מחר".
   const slotStatus = getStatusForSlot_(soldier, task, scheduleBaseDate);
 
+  // v3.18: ביום היציאה לחופש וביום החזרה ממנו החייל זמין בחלק מהיום,
+  // ולכן ברזולוציית יום התשובה היא "זמין" - השעות עצמן נבדקות מחוץ
+  // לקאש הזה, ב-findVacationChangeConflict_.
+  if (isVacationTransitionDay_(soldier, task, scheduleBaseDate)) {
+    return { available: true, reason: '' };
+  }
+
   if (containsAny_(slotStatus.status, config.unavailableStatusKeywords)) {
     return {
       available: false,
@@ -2369,20 +2587,78 @@ function getAvailabilityStatus_(soldier, task, config, scheduleBaseDate) {
 }
 
 /**
+ * v3.18: שעות המשבצת בדקות מחצות היום הקלנדרי שבו היא *מתחילה*.
+ * משבצת שגולשת אחרי חצות (או משימה יומית 14:00-14:00) מקבלת end מעל
+ * 24 שעות, וכך "מסתיימת עד 06:00" נכשל אצלה כמצופה.
+ */
+function slotMinutesOnItsOwnDay_(task) {
+  const dayStart = dateOnly_(task.start).getTime();
+  return {
+    start: Math.round((task.start.getTime() - dayStart) / 60000),
+    end: Math.round((task.end.getTime() - dayStart) / 60000)
+  };
+}
+
+/**
+ * v3.18: האם היום הקלנדרי של המשבצת הוא יום החלפה - יציאה לחופש או
+ * חזרה ממנו. vacationTransitionForDay_ ו-vacationChangeMinutesForDate_
+ * מוגדרות ב-ShabtzakOps.js ומשמשות את שני הקבצים, כמו parseExitStatus_.
+ */
+function vacationTransitionForSlot_(soldier, task, scheduleBaseDate) {
+  const slotStatus = getStatusForSlot_(soldier, task, scheduleBaseDate);
+  return vacationTransitionForDay_(slotStatus.previousStatus, slotStatus.status);
+}
+
+function isVacationTransitionDay_(soldier, task, scheduleBaseDate) {
+  const t = vacationTransitionForSlot_(soldier, task, scheduleBaseDate);
+  return t === 'start' || t === 'end';
+}
+
+/**
+ * v3.18: החופש מתחלף ב-06:00, וביום ראשון ב-09:00. ביום היציאה החייל
+ * זמין *עד* אז, וביום החזרה *ממנה*. בכוונה מחוץ ל-availabilityCache -
+ * המפתח שם הוא ברזולוציית יום, ואילו התשובה כאן תלויה בשעות המשבצת,
+ * בדיוק כמו ביציאה קצרה מאושרת.
+ * חצי-פתוח: משמרת שנגמרת ב-06:00 ומשמרת שמתחילה ב-06:00 שתיהן תקינות.
+ */
+function findVacationChangeConflict_(soldier, task, scheduleBaseDate) {
+  if (!task || !task.start || !task.end) return '';
+
+  const transition = vacationTransitionForSlot_(soldier, task, scheduleBaseDate);
+  if (transition !== 'start' && transition !== 'end') return '';
+
+  const changeMin = vacationChangeMinutesForDate_(dateOnly_(task.start));
+  const slot = slotMinutesOnItsOwnDay_(task);
+  const changeLabel = minutesToTimeLabel_(changeMin);
+
+  if (transition === 'start') {
+    if (slot.end <= changeMin) return '';
+    return 'יוצא לחופש ב־' + changeLabel;
+  }
+
+  if (slot.start >= changeMin) return '';
+  return 'חוזר מחופש ב־' + changeLabel;
+}
+
+/**
  * v3.4: מחזיר את הסטטוס הרלוונטי למשבצת, לפי היום הקלנדרי שלה.
  * אם אין scheduleBaseDate (למשל בדיקות ישנות) - נופלים ל-statusToday.
  */
 function getStatusForSlot_(soldier, task, scheduleBaseDate) {
+  // v3.18: previousStatus = הסטטוס של היום הקלנדרי שלפני המשבצת, כדי
+  // לזהות יום ראשון של חופש מול יום חזרה. ליום שלפני "אתמול" אין
+  // עמודה, ולכן הוא נשאר ריק - כלומר "לא ידוע", וההתנהגות שם נשארת
+  // כמו לפני v3.18.
   if (!scheduleBaseDate || !task || !task.start) {
-    return { status: soldier.statusToday, label: 'היום' };
+    return { status: soldier.statusToday, previousStatus: soldier.statusYesterday, label: 'היום' };
   }
   const slotDay = dateOnly_(task.start);
   const baseDay = dateOnly_(scheduleBaseDate);
   const diffDays = Math.round((slotDay.getTime() - baseDay.getTime()) / (24 * 60 * 60 * 1000));
 
-  if (diffDays <= -1) return { status: soldier.statusYesterday, label: 'אתמול' };
-  if (diffDays >= 1) return { status: soldier.statusTomorrow, label: 'מחר' };
-  return { status: soldier.statusToday, label: 'היום' };
+  if (diffDays <= -1) return { status: soldier.statusYesterday, previousStatus: '', label: 'אתמול' };
+  if (diffDays >= 1) return { status: soldier.statusTomorrow, previousStatus: soldier.statusToday, label: 'מחר' };
+  return { status: soldier.statusToday, previousStatus: soldier.statusYesterday, label: 'היום' };
 }
 
 /* ============================================================
@@ -2617,14 +2893,20 @@ function calculateStats_(assignmentsForSoldier, beforeTime, config) {
     }
 
     // v3.0: משימה יומית (14:00-14:00) נספרת עד 16 שעות עומס, לא 24,
-    // ולא כלילה (מניחים שינה). גשש - עד 8 שעות למשמרת, לא לילה.
+    // ולא כלילה (מניחים שינה).
+    // v3.16: כונן גשש = 0 שעות עבודה, בדיוק כמו כרמל - הוא כוננות שינה
+    // המוחזקת *על גבי* משימה אמיתית. השעות נרשמות ככוננות ולא כמשימה.
+    // הקטגוריה עצמה עדיין נספרת למטה (סטטית לרוטציה) - זו ספירת משימות,
+    // לא שעות.
     const isTracker = a.category === 'tracker';
     const isDailyBlock = isFullDayBlockingAssignment_(a, config);
-    let effectiveHours = hours;
-    if (isTracker) effectiveHours = Math.min(hours, config.scoring.trackerDailyWorkloadHours || 8);
-    else if (isDailyBlock) effectiveHours = Math.min(hours, config.scoring.dailyMissionWorkloadHours || 16);
-
-    stats.totalHours += effectiveHours;
+    if (isTracker) {
+      stats.konenutHours += hours;
+    } else {
+      stats.totalHours += isDailyBlock
+        ? Math.min(hours, config.scoring.dailyMissionWorkloadHours || 16)
+        : hours;
+    }
     if (!isTracker && !isDailyBlock && intervalTouchesNight_(a.start, a.end)) stats.nightCount += 1;
     if (a.category === 'static') stats.staticCount += 1;
     if (getMissionClass_(a.category, config, a) === 'static') stats.staticMissionClassCount += 1;
@@ -2658,10 +2940,9 @@ function calculateSameOperationalDayHours_(assignmentsForSoldier, task, config) 
     const end = a.end > day.end ? day.end : a.end;
     const hours = Math.max(0, hoursBetween_(start, end));
 
-    if (isKonenutAssignment_(a)) {
+    if (isKonenutAssignment_(a) || a.category === 'tracker') {
+      // v3.16: הגשש נספר ככוננות, לא כשעות משימה - ראה calculateStats_.
       result.konenutHours += hours;
-    } else if (a.category === 'tracker') {
-      result.missionHours += Math.min(hours, config.scoring.trackerDailyWorkloadHours || 8);
     } else if (isFullDayBlockingAssignment_(a, config)) {
       // v3.0: משימה יומית - עומס אפקטיבי, לא 24 שעות.
       result.missionHours += Math.min(hours, config.scoring.dailyMissionWorkloadHours || 16);
@@ -2677,11 +2958,17 @@ function applySameDayWorkloadScoring_(result, sameDayMissionHours, task, config)
   const threshold = Number(config.scoring.currentDayHighLoadHours || 8);
   if (!sameDayMissionHours || sameDayMissionHours <= 0) return;
 
+  // v3.16: משמרת גשש שווה 0 שעות עבודה (כמו כרמל), ולכן אינה מוסיפה
+  // לעומס היומי הנבדק - וגם לא מופיעה ב-sameDayMissionHours כשיבוץ קיים.
+  // התקרה עדיין נחצית אם *שאר* היום כבר מלא, וזו בדיוק ההתנהגות הרצויה:
+  // 8ש׳ סיור + גשש הם 8ש׳ עבודה, לא 16.
+  const taskHours = task.category === 'tracker' ? 0 : task.durationHours;
+
   // v2.8: תקרה יומית - חצייה שלה מורידה את המועמד ל"בדוחק".
   const maxHours = Number(config.scoring.maxSameDayMissionHours || 10);
-  if (sameDayMissionHours + task.durationHours > maxHours + 0.01) {
+  if (sameDayMissionHours + taskHours > maxHours + 0.01) {
     markFallback_(result, 'יעבור ' + maxHours + 'ש׳ משימה היום (' +
-      formatHours_(sameDayMissionHours + task.durationHours) + ')', config);
+      formatHours_(sameDayMissionHours + taskHours) + ')', config);
     return;
   }
 
@@ -2692,7 +2979,7 @@ function applySameDayWorkloadScoring_(result, sameDayMissionHours, task, config)
     return;
   }
 
-  if (sameDayMissionHours + task.durationHours > threshold + 0.01) {
+  if (sameDayMissionHours + taskHours > threshold + 0.01) {
     result.score += config.scoring.currentDayWouldExceedPenalty || 25;
     result.warnings.push('יעבור 8ש׳ היום בלי כוננות');
   }
