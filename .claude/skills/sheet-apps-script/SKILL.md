@@ -100,8 +100,9 @@ to suspect, and you cannot confirm it from your own account.
 
 ## יציאה קצרה — approved short exits
 
-An approved exit is written by the officer into the `מצבת החיילים` date cell in
-one of **three whole-hour forms**, always within a single calendar day:
+An approved exit is written by the officer into the `מצבת החיילים` date cell.
+`parseExitStatus_` understands **three whole-hour forms**, always within a single
+calendar day:
 
 | Cell text | Window |
 |---|---|
@@ -111,6 +112,37 @@ one of **three whole-hour forms**, always within a single calendar day:
 
 Hours are 0–23, one or two digits, no minutes — `יציאה 12:00-20:00` is **not** a
 valid form (it was the first design and was replaced).
+
+**Since 2026-08-11 the vocabulary is a closed list, not free text** (owner
+decision). `'אפשרויות'!C2:C33` holds 32 options and the dropdown is strict, so
+those three forms can only appear on the **4-hour shift grid**: starts
+`02/06/10/14/18/22`, ends `06/10/14/18/22`, every combination where the end is
+later than the start — 15 windows, 6 open-ended `יציאה מHH`, 5 `יציאה עד HH`.
+
+Two consequences worth knowing before you touch this:
+
+- **An overnight exit is written as a PAIR of cells**, because a window may not
+  cross midnight. Out from 14:00 on the 13th until 14:00 on the 14th is
+  `יציאה מ14` on the 13th plus `יציאה עד 14` on the 14th. Neither cell alone is
+  the absence. That is also the shape the legacy `יציאה ב14:00` / `חזרה ב14:00`
+  pair converted into.
+- **`יציאה מ22` protects only 22:00→24:00.** The 00:00–02:00 tail of that night
+  is unblocked, and no option can express it. Structural, not a data problem.
+- ⚠ `עד 00` does **not** parse: hour 0 is accepted, then rejected because the end
+  is not after the start — so `יציאה מ15 עד 00` silently blocked nothing and the
+  soldier read as fully available. Found live on 2026-08-11. The closed list has
+  no `עד 00` option, so the trap is now unreachable from the UI; it can still
+  arrive by paste or API.
+
+`בקשה ליציאה` (added 2026-08-11, replacing `יציאה בערב` / `יציאה בבוקר`) is a
+**pending request, not an approved exit**: it has no digits, so it parses to
+nothing, blocks nothing, and raises no format warning. That is deliberate — only
+an approved exit with real hours may block a slot.
+
+The removed values (`יציאה בערב`, `יציאה בבוקר`, `יציאה ב14:00`, `חזרה ב14:00`,
+`חזרה בערב`) still sit in **~67 historical cells** on past dates, left alone on
+purpose. Keep them in `CONFIG.LEGACY_EXIT_STATUSES` — dropping them would make
+`looksLikeTimedExit_` start warning about history.
 
 ⚠ **`עד 0` / `עד 00` cannot mean midnight.** `parseExitStatus_` accepts the hour
 (0 is in range) and then rejects the window on `end <= start`, so
