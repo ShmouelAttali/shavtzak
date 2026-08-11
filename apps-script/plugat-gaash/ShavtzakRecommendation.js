@@ -1,6 +1,21 @@
 /** @OnlyCurrentDoc */
 /**
- * Shabtzak Recommendations Engine v3.19 - שעון לחימה 14:00-14:00
+ * Shabtzak Recommendations Engine v3.20 - שעון לחימה 14:00-14:00
+ *
+ * שינויים ב-v3.20 - המשבצת האחרונה בהתקפי שמורה לנהג טיגריס:
+ * 1. אותו כלל שקיים בסיור מאז v3.6 (משבצת אחרונה = נהג דוד), עכשיו גם
+ *    בהתקפי עם נהג טיגריס: מי שאינו נהג טיגריס נדחה מהמשבצת, ונהג
+ *    טיגריס שיכול עדיין לאייש משבצת-נהג פנויה אינו מומלץ לעמדה אחרת.
+ * 2. ⚠ בהתקפי זו המשבצת האחרונה של *הקבוצה כולה*, לא של כל צוות.
+ *    כך הגיליון נכתב בפועל: בבלוקים בני 8 מושבים (07-11/08) הטיגריס
+ *    יושב במושב 8 בלבד, ומושב 4 - סוף הצוות הראשון - לעולם אינו נהג.
+ *    זה שונה מכלל המפקד, שהוא כן לכל צוות (getTeamTasksForTask_).
+ * 3. הכלל מוגדר פעם אחת ב-driverSeatRules ולא כשני עותקים של אותן שש
+ *    פונקציות; שכפול הוא בדיוק איך שכללים כאלה נפרדים זה מזה עם הזמן.
+ *    שמירת הנהגים מכבדת את סוג הנהג - נהג דוד אינו שמור למושב הטיגריס.
+ * 4. סטטוס הקבוצה בהתקפי מדבר עכשיו על *מיקום* הטיגריס. ההודעה הישנה
+ *    ("יש/חסר נהג טיגריס") נשארת רק לקבוצה בת מושב אחד, שבה אין
+ *    "משבצת אחרונה" נפרדת.
  *
  * שינויים ב-v3.19 - "בדוחק" מסביר את עצמו, ומשימה יומית שווה 8 שעות:
  * 1. תא המועמדים כותב עכשיו "(בדוחק: עומס 16ש׳)" במקום "(בדוחק)" יבש.
@@ -355,6 +370,14 @@ const SHABTZAK_REC_CONFIG = {
   // לשאר משבצות אותו צוות. 0 = בלי חלוקה לצוותים.
   attackTeamSize: 4,
 
+  // v3.20: המשבצת האחרונה בקבוצה שמורה לנהג. אותו כלל בשתי המשימות,
+  // רק הנהג שונה. ⚠ בהתקפי זו האחרונה של הקבוצה כולה ולא של כל צוות -
+  // כך הגיליון נכתב בפועל (בבלוק בן 8, הטיגריס במושב 8 בלבד).
+  driverSeatRules: [
+    { category: 'tour', flag: 'isDudDriver', label: 'נהג דוד', groupLabel: 'סיור' },
+    { category: 'attack', flag: 'isTigerDriver', label: 'נהג טיגריס', groupLabel: 'התקפי' }
+  ],
+
   magenKeywords: ['מגן', 'מגן השומרון'],
   tagbatzKeywords: ['תגבצ', 'תגב״צ', 'תגב"צ'],
 
@@ -652,10 +675,11 @@ function updateShabtzakRecommendations() {
     config: config
   };
 
-  // v3.6: נהגי דוד שמורים למשבצות הנהג בסיורים. מחשבים פעם אחת לריצה
-  // לאילו משבצות-נהג פנויות כל נהג *יכול* בפועל להיכנס; רק בגללן הוא
-  // נחסם משאר העמדות (ראה dudDriverReservedElsewhere_).
-  context.dudDriverReservations = computeDudDriverReservations_(soldiers, context);
+  // v3.6: נהגי דוד שמורים למשבצות הנהג בסיורים, ומ-v3.20 גם נהגי טיגריס
+  // למשבצת האחרונה בהתקפי. מחשבים פעם אחת לריצה לאילו משבצות-נהג פנויות
+  // כל נהג *יכול* בפועל להיכנס; רק בגללן הוא נחסם משאר העמדות
+  // (ראה driverReservedElsewhere_).
+  context.driverReservations = computeDriverReservations_(soldiers, context);
 
   const output = [];
   const notes = [];
@@ -1651,40 +1675,61 @@ function requiresCommanderFirstSlot_(task, config) {
  * שמורה למפקד. בקבוצה בת משבצת אחת המפקד גובר - לא דורשים שהחייל
  * היחיד יהיה גם מפקד וגם נהג.
  */
-function requiresDudDriverLastSlot_(task, config) {
-  return !!(task && task.category === 'tour');
+/**
+ * v3.20: שתי משבצות נהג, אותו דפוס בדיוק - המשבצת האחרונה בקבוצה שמורה
+ * לנהג. בסיור זה נהג דוד (v3.6), ובהתקפי נהג טיגריס.
+ *
+ * ⚠ בהתקפי זו המשבצת האחרונה של *הקבוצה כולה*, לא של כל צוות: הגיליון
+ * נכתב כך בפועל - בבלוקים בני 8 מושבים הטיגריס יושב במושב 8 בלבד,
+ * ומושב 4 (סוף הצוות הראשון) אינו נהג. זה שונה מכלל המפקד, שהוא כן
+ * לכל צוות (getTeamTasksForTask_), ולכן אי אפשר לגזור אחד מהשני.
+ *
+ * מוגדר כרשימה אחת ולא כשני עותקים של אותן שש פונקציות - שני עותקים
+ * הם בדיוק איך שכללים כאלה נפרדים זה מזה עם הזמן.
+ */
+function driverSeatRuleForTask_(task, config) {
+  if (!task) return null;
+  const rules = (config && config.driverSeatRules) || SHABTZAK_REC_CONFIG.driverSeatRules || [];
+  for (let i = 0; i < rules.length; i++) {
+    if (rules[i].category === task.category) return rules[i];
+  }
+  return null;
 }
 
-function isDudDriverSlot_(task, group, config) {
-  if (!requiresDudDriverLastSlot_(task, config)) return false;
+function soldierIsDriverFor_(soldier, rule) {
+  return !!(soldier && rule && soldier[rule.flag]);
+}
+
+function isDriverSeat_(task, group, config) {
+  if (!driverSeatRuleForTask_(task, config)) return false;
   const tasks = getGroupTasksSortedByRow_(group);
   if (tasks.length < 2) return false;
   const last = tasks[tasks.length - 1];
   return !!(task && last && task.rowNumber === last.rowNumber);
 }
 
-function getDudDriverSlotStatus_(task, group, soldiersByName, config) {
-  if (!requiresDudDriverLastSlot_(task, config)) {
-    return { required: false, status: 'not_required', text: '' };
-  }
+function getDriverSeatStatus_(task, group, soldiersByName, config) {
+  const rule = driverSeatRuleForTask_(task, config);
+  if (!rule) return { required: false, status: 'not_required', text: '' };
+
   const tasks = getGroupTasksSortedByRow_(group);
   if (tasks.length < 2) return { required: false, status: 'not_required', text: '' };
 
   const lastTask = tasks[tasks.length - 1];
-  if (!lastTask.assigned) return { required: true, status: 'missing', text: 'נהג דוד צריך להיות במשבצת האחרונה' };
+  if (!lastTask.assigned) return { required: true, status: 'missing', text: rule.label + ' צריך להיות במשבצת האחרונה' };
 
   const lastSoldier = soldiersByName[normalizeNameKey_(lastTask.assigned)];
-  if (!lastSoldier) return { required: true, status: 'unknown', text: 'משבצת אחרונה לא מזוהה כנהג דוד' };
-  if (lastSoldier.isDudDriver) return { required: true, status: 'ok', text: 'נהג דוד במשבצת האחרונה' };
-  return { required: true, status: 'wrong', text: '⚠ המשבצת האחרונה אינה נהג דוד' };
+  if (!lastSoldier) return { required: true, status: 'unknown', text: 'משבצת אחרונה לא מזוהה כ' + rule.label };
+  if (soldierIsDriverFor_(lastSoldier, rule)) return { required: true, status: 'ok', text: rule.label + ' במשבצת האחרונה' };
+  return { required: true, status: 'wrong', text: '⚠ המשבצת האחרונה אינה ' + rule.label };
 }
 
 /**
  * משבצות הנהג בסיורים שעדיין אין בהן נהג דוד - ריקות או מאוישות במישהו
  * אחר. אלה המשבצות שבגללן שומרים נהגים משאר העמדות.
  */
-function getUncoveredDudDriverSeats_(context) {
-  if (context.uncoveredDudDriverSeats) return context.uncoveredDudDriverSeats;
+function getUncoveredDriverSeats_(context) {
+  if (context.uncoveredDriverSeats) return context.uncoveredDriverSeats;
 
   const config = context.config;
   const seats = [];
@@ -1693,14 +1738,15 @@ function getUncoveredDudDriverSeats_(context) {
   Object.keys(groups).forEach(function(key) {
     const group = groups[key];
     const last = getLastTaskInGroup_(group);
-    if (!last || !isDudDriverSlot_(last, group, config)) return;
+    if (!last || !isDriverSeat_(last, group, config)) return;
 
+    const rule = driverSeatRuleForTask_(last, config);
     const assigned = last.assigned ? context.soldiersByName[normalizeNameKey_(last.assigned)] : null;
-    if (assigned && assigned.isDudDriver) return;
-    seats.push({ task: last, group: group });
+    if (soldierIsDriverFor_(assigned, rule)) return;
+    seats.push({ task: last, group: group, rule: rule });
   });
 
-  context.uncoveredDudDriverSeats = seats;
+  context.uncoveredDriverSeats = seats;
   return seats;
 }
 
@@ -1710,16 +1756,16 @@ function getUncoveredDudDriverSeats_(context) {
  * לעמדות אחרות. אם אין - הוא משוחרר, ולכן אין קיפאון ביום שבו אין מספיק
  * נהגים לכל הסיורים.
  */
-function computeDudDriverReservations_(soldiers, context) {
+function computeDriverReservations_(soldiers, context) {
   const reservations = {};
-  const seats = getUncoveredDudDriverSeats_(context);
+  const seats = getUncoveredDriverSeats_(context);
   if (!seats.length) return reservations;
 
   soldiers.forEach(function(soldier) {
-    if (!soldier.isDudDriver) return;
-
     const takeable = [];
     seats.forEach(function(seat) {
+      // v3.20: רק מושבים מסוג הנהג שלו - נהג דוד אינו שמור למושב הטיגריס.
+      if (!soldierIsDriverFor_(soldier, seat.rule)) return;
       if (canDriverTakeSeat_(soldier, seat, context)) takeable.push(seat.task.rowNumber);
     });
     if (takeable.length) reservations[soldier.nameKey] = takeable;
@@ -1732,24 +1778,24 @@ function canDriverTakeSeat_(soldier, seat, context) {
   const savedGroup = context.group;
   const savedIgnoreSameRow = context.ignoreSameRow;
   // מונע רקורסיה: בבדיקה הזו כלל השמירה עצמו מושבת.
-  context.skipDudDriverReservation = true;
+  context.skipDriverReservation = true;
   context.group = seat.group;
   context.ignoreSameRow = false;
   try {
     return !evaluateCandidateForTask_(soldier, seat.task, context).rejected;
   } finally {
-    context.skipDudDriverReservation = false;
+    context.skipDriverReservation = false;
     context.group = savedGroup;
     context.ignoreSameRow = savedIgnoreSameRow;
   }
 }
 
-function dudDriverReservedElsewhere_(soldier, task, context) {
-  if (context.skipDudDriverReservation) return false;
-  if (!soldier || !soldier.isDudDriver) return false;
-  if (isDudDriverSlot_(task, context.group, context.config)) return false;
+function driverReservedElsewhere_(soldier, task, context) {
+  if (context.skipDriverReservation) return false;
+  if (!soldier || !(soldier.isDudDriver || soldier.isTigerDriver)) return false;
+  if (isDriverSeat_(task, context.group, context.config)) return false;
 
-  const reserved = (context.dudDriverReservations || {})[soldier.nameKey];
+  const reserved = (context.driverReservations || {})[soldier.nameKey];
   if (!reserved || !reserved.length) return false;
   // המשבצת שמעריכים כרגע היא בעצמה אחת מהמשבצות השמורות - לא חוסמים.
   return reserved.some(function(rowNumber) { return rowNumber !== task.rowNumber; });
@@ -1903,14 +1949,18 @@ function getGroupStatusText_(task, group, soldiersByName, config, currentTasks) 
     const firstSlotStatus = getFirstSlotCommanderStatus_(task, group, soldiersByName, config);
     parts.push(firstSlotStatus.text);
     // v3.6: כל סיור צריך נהג דוד במשבצת האחרונה, לא רק סיור הלילה.
-    const dudSlotStatus = getDudDriverSlotStatus_(task, group, soldiersByName, config);
+    const dudSlotStatus = getDriverSeatStatus_(task, group, soldiersByName, config);
     if (dudSlotStatus.required) parts.push(dudSlotStatus.text);
   }
 
   if (task.category === 'attack') {
     const firstSlotStatus = getFirstSlotCommanderStatus_(task, group, soldiersByName, config);
     parts.push(firstSlotStatus.text);
-    parts.push(hasTigerDriver ? 'יש נהג טיגריס' : 'חסר נהג טיגריס');
+    // v3.20: הכלל הוא *היכן* יושב הטיגריס, לא רק אם יש אחד בקבוצה.
+    // כשהמשבצת האחרונה מדברת, היא הקובעת - אחרת שתי ההודעות סותרות.
+    const tigerSeatStatus = getDriverSeatStatus_(task, group, soldiersByName, config);
+    if (tigerSeatStatus.required) parts.push(tigerSeatStatus.text);
+    else parts.push(hasTigerDriver ? 'יש נהג טיגריס' : 'חסר נהג טיגריס');
   }
 
   if (task.category === 'post_officer') {
@@ -2057,17 +2107,21 @@ function evaluateCandidateForTask_(soldier, task, context) {
   }
 
   // v3.6: המשבצת האחרונה בסיור שמורה לנהג דוד, בדיוק כמו המשבצת
-  // הראשונה למפקד. אם אין נהג פנוי המשבצת תישאר בלי מועמד - זו החלטה
-  // מודעת: עדיף שיהיה גלוי שחסר נהג.
-  if (isDudDriverSlot_(task, context.group, config) && !soldier.isDudDriver) {
-    return reject_(result, 'משבצת אחרונה בסיור שמורה לנהג דוד');
+  // הראשונה למפקד. v3.20: וכך גם המשבצת האחרונה בהתקפי, לנהג טיגריס.
+  // אם אין נהג פנוי המשבצת תישאר בלי מועמד - זו החלטה מודעת: עדיף
+  // שיהיה גלוי שחסר נהג.
+  const driverSeatRule = isDriverSeat_(task, context.group, config)
+    ? driverSeatRuleForTask_(task, config)
+    : null;
+  if (driverSeatRule && !soldierIsDriverFor_(soldier, driverSeatRule)) {
+    return reject_(result, 'משבצת אחרונה ב' + driverSeatRule.groupLabel + ' שמורה ל' + driverSeatRule.label);
   }
 
-  // v3.6: נהג דוד שיכול עדיין לאייש משבצת-נהג פנויה בסיור לא מומלץ
-  // לשום עמדה אחרת, כדי שלא "יבוזבז". ברגע שכל המשבצות שהוא יכול
-  // לקחת מאוישות - הוא משוחרר לשאר העמדות.
-  if (dudDriverReservedElsewhere_(soldier, task, context)) {
-    return reject_(result, 'נהג דוד שמור למשבצת הנהג בסיור');
+  // v3.6: נהג שיכול עדיין לאייש משבצת-נהג פנויה לא מומלץ לשום עמדה
+  // אחרת, כדי שלא "יבוזבז". ברגע שכל המשבצות שהוא יכול לקחת מאוישות -
+  // הוא משוחרר לשאר העמדות.
+  if (driverReservedElsewhere_(soldier, task, context)) {
+    return reject_(result, 'נהג שמור למשבצת הנהג');
   }
 
   // --- שיבוצים נוכחיים של החייל (מהאינדקס, לא סינון כללי) ---
@@ -2458,7 +2512,7 @@ function applyRoleScoring_(result, soldier, task, group, soldiersByName, current
       else result.score += 10;
     }
 
-    if (isDudDriverSlot_(task, group, config) && soldier.isDudDriver) {
+    if (isDriverSeat_(task, group, config) && soldier.isDudDriver) {
       result.score += config.scoring.dudDriverSeatBonus;
     }
   }
@@ -3238,13 +3292,19 @@ function formatTaskSoftWarnings_(task, group, soldiersByName, config) {
     const firstSlotStatus = getFirstSlotCommanderStatus_(task, group, soldiersByName, config);
     if (firstSlotStatus.status !== 'ok') warnings.push(firstSlotStatus.text);
     // v3.6: חסר נהג דוד במשבצת האחרונה - בכל סיור, לא רק בלילה.
-    const dudSlotStatus = getDudDriverSlotStatus_(task, group, soldiersByName, config);
+    const dudSlotStatus = getDriverSeatStatus_(task, group, soldiersByName, config);
     if (dudSlotStatus.required && dudSlotStatus.status !== 'ok') warnings.push(dudSlotStatus.text);
   }
   if (task.category === 'attack') {
     const firstSlotStatus = getFirstSlotCommanderStatus_(task, group, soldiersByName, config);
     if (firstSlotStatus.status !== 'ok') warnings.push(firstSlotStatus.text);
-    if (!assignedSoldiers.some(function(s) { return s.isTigerDriver; })) warnings.push('חסר נהג טיגריס');
+    // v3.20: אותה אזהרה כמו בסיור - הטיגריס במשבצת האחרונה.
+    const tigerSeatStatus = getDriverSeatStatus_(task, group, soldiersByName, config);
+    if (tigerSeatStatus.required) {
+      if (tigerSeatStatus.status !== 'ok') warnings.push(tigerSeatStatus.text);
+    } else if (!assignedSoldiers.some(function(s) { return s.isTigerDriver; })) {
+      warnings.push('חסר נהג טיגריס');
+    }
   }
   if (task.category === 'post_officer') {
     if (!assignedSoldiers.some(function(s) { return soldierCanCommandTask_(s, task); })) warnings.push('קצין מוצב צריך מפקד');
