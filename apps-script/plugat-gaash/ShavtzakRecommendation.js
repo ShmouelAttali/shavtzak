@@ -1,6 +1,20 @@
 /** @OnlyCurrentDoc */
 /**
- * Shabtzak Recommendations Engine v3.20 - שעון לחימה 14:00-14:00
+ * Shabtzak Recommendations Engine v3.21 - שעון לחימה 14:00-14:00
+ *
+ * שינויים ב-v3.21 - "משימה קודמת" מזהה חופש ויציאה ארוכה:
+ * 1. העמודה הציגה תמיד את המשמרת האחרונה בפועל, גם כשהחייל היה בבית
+ *    מאז. "סיור 22:00" מלפני שלושה ימים מטעה את הקצין שקורא את העמודה
+ *    כדי לדעת במה האיש עסוק לאחרונה. עכשיו מוצג "חופש" או
+ *    "יציאה 10:00-22:00" במקומה.
+ * 2. נבדק *רק* הפער שבין סוף המשימה הקודמת לתחילת המשבצת. חופש שנגמר
+ *    לפני המשמרת ההיא אינו רלוונטי, וחלון שחופף לפער תמיד עדכני ממנה.
+ * 3. יציאה קצרה נספרת רק אם היא ארוכה מ-previousColumn.longExitMinHours
+ *    (8) שעות: "יציאה מ10 עד 22" נכנסת, "יציאה מ20" (4 שעות) לא.
+ * 4. כששניהם חלים מנצח המאוחר מביניהם, ובתיקו החופש.
+ * 5. ⚠ במצבת החיילים יש שלוש עמודות בלבד (אתמול/היום/מחר), ולכן חופש
+ *    ישן יותר מזה פשוט אינו נראה - והעמודה נשארת כשהייתה. זו מגבלת
+ *    נתונים, לא בחירה: אין מאיפה לקרוא יום רביעי אחורה.
  *
  * שינויים ב-v3.20 - המשבצת האחרונה בהתקפי שמורה לנהג טיגריס:
  * 1. אותו כלל שקיים בסיור מאז v3.6 (משבצת אחרונה = נהג דוד), עכשיו גם
@@ -310,6 +324,14 @@ const SHABTZAK_REC_CONFIG = {
   recommendationsLimit: 6,
   historyLookbackDays: 10,
   scoreLookbackDays: 7,
+
+  // v3.21: עמודת "משימה קודמת". כשבין המשמרת הקודמת למשבצת החייל היה
+  // בבית, המשמרת הישנה מטעה - ומציגים במקומה חופש/יציאה.
+  // יציאה קצרה נחשבת רק אם היא ארוכה מ-longExitMinHours שעות; יציאה
+  // בת ארבע שעות אינה "מה שהוא עשה לאחרונה".
+  previousColumn: {
+    longExitMinHours: 8
+  },
 
   rest: {
     idealHours: 8,
@@ -2057,6 +2079,7 @@ function evaluateCandidateForTask_(soldier, task, context) {
     restBeforeHours: null,
     restAfterHours: null,
     previousAssignment: null,
+    previousAwayLabel: '',
     previousDayMatch: null,
     samePlatoonAsGroupCommander: false,
     samePlatoonCommanderLabel: '',
@@ -2224,6 +2247,8 @@ function evaluateCandidateForTask_(soldier, task, context) {
   const nextRest = nextRestRaw + nextRestCredit;
   result.previousAssignment = prev;
   result.previousAssignmentIsToday = !!(prev && sameOperationalDay_(prev.start, task.start));
+  // v3.21: אם מאז המשמרת ההיא הוא היה בבית - זה מה שהעמודה תציג.
+  result.previousAwayLabel = previousAwayLabelForSlot_(soldier, prev, task, context.baseDate, config);
   // v3.14: עמודת "מנוחה" מציגה את הפער האמיתי בין המשמרות, בלי הזיכוי.
   // הזיכוי פותח כשירות בלבד, והוא מוסבר בעמודת ההתאמה - כך שמספר
   // השעות שרואים על המסך תמיד תואם את מה שכתוב בשבצ"ק.
@@ -2648,6 +2673,105 @@ function applyExitPackageScoring_(result, soldier, task, sameDayMissionHours, co
   result.score += config.scoring.exitPackageMisfitPenalty || 45;
   result.warnings.push(
     'היציאה לא מותירה חלון למשמרת המשלימה (' + formatHours_(residual) + ')');
+}
+
+/* ============================================================
+ * v3.21: "בבית" - מה שקרה בין המשימה הקודמת למשבצת
+ * ============================================================ */
+
+/**
+ * v3.21: חלונות החופש של החייל כתאריכים מלאים, בדיוק כמו
+ * exitWindowsForSoldier_ עושה ליציאות. שלוש עמודות בלבד קיימות
+ * במצבת החיילים (אתמול/היום/מחר), ולכן זה כל מה שאפשר לראות אחורה.
+ *
+ * יום מעבר הוא יום חלקי: ביום היציאה החייל בבית *מ*שעת ההחלפה, וביום
+ * החזרה *עד* שעת ההחלפה - אותה חלוקה שלפיה v3.18 חוסמת משבצות.
+ * ליום שלפני "אתמול" אין עמודה, ולכן הסטטוס הקודם שלו ריק - בדיוק כמו
+ * ב-getStatusForSlot_, ואז חופש נחשב יום שלם.
+ */
+function vacationWindowsForSoldier_(soldier, baseDate) {
+  if (!soldier || !baseDate) return [];
+
+  const base = dateOnly_(baseDate);
+  const days = [
+    { status: soldier.statusYesterday, previousStatus: '', offset: -1 },
+    { status: soldier.statusToday, previousStatus: soldier.statusYesterday, offset: 0 },
+    { status: soldier.statusTomorrow, previousStatus: soldier.statusToday, offset: 1 }
+  ];
+
+  const windows = [];
+  days.forEach(function(d) {
+    const transition = vacationTransitionForDay_(d.previousStatus, d.status);
+    if (!transition) return;
+
+    const day = addDays_(base, d.offset);
+    const changeMin = vacationChangeMinutesForDate_(day);
+    const startMin = transition === 'start' ? changeMin : 0;
+    const endMin = transition === 'end' ? changeMin : 24 * 60;
+    if (endMin <= startMin) return;
+
+    windows.push({
+      start: new Date(day.getTime() + startMin * 60000),
+      end: new Date(day.getTime() + endMin * 60000)
+    });
+  });
+  return windows;
+}
+
+/**
+ * v3.21: רק יציאה *ארוכה* מספרת משהו על מה שהחייל עשה לאחרונה.
+ * הסף הוא config.previousColumn.longExitMinHours, והשוואה ממש-גדול:
+ * "יציאה מ10 עד 22" (12 שעות) נכנסת, "יציאה מ20" (4 שעות) לא.
+ */
+function longExitWindowsForSoldier_(soldier, baseDate, config) {
+  const minHours = (config && config.previousColumn && config.previousColumn.longExitMinHours) || 8;
+  return exitWindowsForSoldier_(soldier, baseDate).filter(function(w) {
+    return (w.end.getTime() - w.start.getTime()) / 3600000 > minHours + 1e-6;
+  });
+}
+
+/**
+ * v3.21: מה שהחייל עשה בפער שבין סוף המשימה הקודמת לתחילת המשבצת.
+ * הקצין קורא את העמודה כדי לדעת "במה האיש עסוק לאחרונה", ו"סיור 22:00"
+ * מטעה כשמאז הוא היה בבית.
+ *
+ * רק הפער עצמו נבדק: חופש שנגמר *לפני* המשימה הקודמת אינו רלוונטי.
+ * חלון שחופף לפער מסתיים בהכרח אחרי סוף המשימה הקודמת, ולכן הוא תמיד
+ * העדכני מבין השניים. כשאין משימה קודמת כלל הפער פתוח אחורה.
+ *
+ * כששניהם חלים - בוחרים את המאוחר (מה שקרה לאחרונה), ובתיקו החופש קודם.
+ */
+function previousAwayLabelForSlot_(soldier, previousAssignment, task, baseDate, config) {
+  if (!task || !task.start) return '';
+
+  const gapStart = previousAssignment && previousAssignment.end
+    ? previousAssignment.end.getTime()
+    : -Infinity;
+  const gapEnd = task.start.getTime();
+  if (!(gapEnd > gapStart)) return '';
+
+  const candidates = [];
+  vacationWindowsForSoldier_(soldier, baseDate).forEach(function(w) {
+    candidates.push({ label: 'חופש', start: w.start.getTime(), end: w.end.getTime(), rank: 0 });
+  });
+  longExitWindowsForSoldier_(soldier, baseDate, config).forEach(function(w) {
+    candidates.push({
+      label: 'יציאה ' + formatTimeOnly_(w.start) + '-' + formatTimeOnly_(w.end),
+      start: w.start.getTime(),
+      end: w.end.getTime(),
+      rank: 1
+    });
+  });
+
+  let best = null;
+  candidates.forEach(function(c) {
+    if (!(c.start < gapEnd && c.end > gapStart)) return;
+    const endInGap = Math.min(c.end, gapEnd);
+    if (!best || endInGap > best.endInGap || (endInGap === best.endInGap && c.rank < best.rank)) {
+      best = { endInGap: endInGap, rank: c.rank, label: c.label };
+    }
+  });
+  return best ? best.label : '';
 }
 
 function getAvailabilityStatus_(soldier, task, config, scheduleBaseDate) {
@@ -3242,6 +3366,9 @@ function formatWorkloadSummary_(ev) {
 
 function formatPreviousAssignmentForCell_(ev) {
   if (!ev || !ev.soldier) return '';
+  // v3.21: חופש/יציאה ארוכה שקרו *אחרי* המשמרת הקודמת גוברים עליה -
+  // הם עדכניים ממנה בהגדרה, והמשמרת הישנה כבר לא מתארת את החייל.
+  if (ev.previousAwayLabel) return ev.previousAwayLabel;
   if (ev.previousAssignment) {
     const text = shortAssignmentForColumn_(ev.previousAssignment);
     // סימון מפורש כשה"משימה הקודמת" היא מהיום המבצעי הנוכחי -
