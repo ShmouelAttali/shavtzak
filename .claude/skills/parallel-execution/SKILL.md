@@ -60,6 +60,24 @@ git checkout -b fixes/<batch-name>   # off main
 Each agent's prompt MUST start by creating a well-known branch so you can find it
 later: `create+checkout branch agent/<name> off current HEAD`.
 
+⚠ **Never tell an agent to make its own worktree.** An agent spawned with
+`isolation: "worktree"` is *pinned* to the one it was given: Bash refuses any
+command whose cwd resolves outside it, `EnterWorktree` will move the agent's cwd
+to a second worktree but Bash stays pinned to the first — every command then
+fails with "this session is isolated in …" — and `ExitWorktree` refuses outright
+from a pinned agent. The only way out is `EnterWorktree` back to the original.
+A prompt that opens with `git worktree add … && cd …` (a natural thing to write
+when you want the agent isolated) therefore bricks the agent before it starts.
+
+Isolation is the harness's job. Give the agent the **branch** to create, and let
+it work in the worktree it already has. Two more consequences worth knowing:
+
+- `git worktree add … <branch>` run from inside a worktree fails with
+  `fatal: invalid reference` when that branch is checked out elsewhere — pass a
+  commit sha instead if you really need one.
+- Renaming a branch that an agent was told to fork from breaks its setup step.
+  Tell the agent the sha, or tell it about the rename immediately.
+
 ## 4. Isolated test database per agent (critical gotcha)
 
 `scheduler/tests` run **serially against one shared `shavtzak_test` DB** — parallel
