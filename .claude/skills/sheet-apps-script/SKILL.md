@@ -112,6 +112,15 @@ one of **three whole-hour forms**, always within a single calendar day:
 Hours are 0–23, one or two digits, no minutes — `יציאה 12:00-20:00` is **not** a
 valid form (it was the first design and was replaced).
 
+⚠ **`עד 0` / `עד 00` cannot mean midnight.** `parseExitStatus_` accepts the hour
+(0 is in range) and then rejects the window on `end <= start`, so
+`יציאה מ15 עד 00` parses to `null` — the officer's intent ("out from 15:00 to
+midnight") is silently dropped and the soldier reads as fully available. Midnight
+is spelled by *omitting* the end: `יציאה מ15`. One such cell was live on
+12/08/2026 (משה רבינוביץ). `looksLikeTimedExit_` does flag it in ולידציה,
+which is the only thing that catches it. Not fixed — the fix is a parser
+decision the owner has to make, since `עד 0` is ambiguous with "until 00:xx".
+
 ⚠⚠ **NEVER rewrite the `מצבת החיילים` validation through the Sheets API.**
 `O4:DG145` carries a `ONE_OF_RANGE` dropdown over `'אפשרויות'!$C$2:$C$30` whose
 options are **coloured chips** (נוכח green, חופש purple, לא מגויס grey). The v4
@@ -297,6 +306,44 @@ tour plus the 8h shift always crossed `maxSameDayMissionHours`, so the marker
 stopped meaning anything. Nothing but the real snapshot showed that. A green
 suite plus "N cells changed" is not evidence the rule does what you meant.
 
+### A rule that fires rarely: prove the branch, don't infer it
+
+Most engine rules fire on a handful of rows, so "1 cell changed" is the normal
+result and by itself says nothing. Two things turn it into evidence:
+
+- **Count the eligible cases in the snapshot, not the changed cells.** For the
+  v3.21 `משימה קודמת` change, a census of the roster's three date columns showed
+  exactly **one** soldier returning from חופש inside them — and that soldier was
+  the one cell that changed. 1 of 1 is an argument; 1 of unknown is not.
+- **Inject into the snapshot to reach the branch that didn't fire.** The `כל
+  השבצק` and `מצבת החיילים` grids are plain arrays in the tool; splice the
+  anchor line and mutate one before the diff runs:
+
+  ```ts
+  for (const t of TABS) snapshot[t] = await fetchTab(t);
+  snapshot['כל השבצק'] = snapshot['כל השבצק'].filter((r) => !(…));   // injected
+  ```
+
+  Copy `ab-recommendations.mts` to `apps-script/tools/.ab-injected.mts` (the
+  `REPO` constant is relative to that directory, so it must live there), run it,
+  delete it. Removing **one** history row made the long-exit branch produce its
+  cell on real data, and that is what "the branch works, the snapshot just has
+  no case for it today" is allowed to mean.
+
+Whichever you can't show, say so explicitly in the report. "No regression" and
+"the case never occurred" look identical in the output.
+
+### Throwaway snapshot probes
+
+The repo root is full of git-ignored `.<name>.mts` one-offs
+(`.presence-census.mts`, `.probe-engine.mts`, `.tours.mts`, …) — the established
+way to ask the live sheet a question. They all re-implement the same 15 lines:
+read `.env`/`.env.local` by hand, base64-decode `GOOGLE_SERVICE_ACCOUNT_KEY`
+into a `GoogleAuth`, then `values/<tab>?majorDimension=ROWS`. Copy the block at
+the top of `apps-script/tools/ab-recommendations.mts` rather than writing it
+again. ⚠ The file must sit **inside the repo** — `node_modules` is not resolved
+from a scratchpad directory, so `google-auth-library` fails to import there.
+
 ## The two halves model the same concepts separately — and drift
 
 `ShabtzakOps.js` validates and `ShavtzakRecommendation.js` scores, and each
@@ -342,6 +389,21 @@ Two ways a test silently exercises nothing:
   note lists just the top few candidates. Assert reasons against an *assigned*
   row, whose note is that one soldier's full evaluation. Capture notes by
   recording `setNotes` in the fake sheet, alongside `setValues`.
+
+The lighter harness in `apps-script-vacation-change-time.test.ts` /
+`apps-script-previous-away.test.ts` skips the spreadsheet entirely and calls
+`evaluateCandidateForTask_` with a hand-built context. Build its inputs with the
+engine's own constructors — `buildTaskFromFields_` for a task,
+`taskToAssignment_(buildTaskFromFields_(…))` for a history row — so the shapes
+can't drift from what the real reader produces.
+
+⚠ **`assert.deepEqual` against anything the vm built fails on empty arrays and
+plain objects.** `assert/strict` compares prototypes, and `[]` created inside
+`vm.createContext` belongs to that realm's `Array`, not the test's — injecting
+`Array` into the context does not change what a literal uses. `deepEqual(x, [])`
+throws with an unhelpful diff of two identical-looking `[]`. Assert `.length`,
+or compare field by field. `Date` is unaffected, because the harness injects it
+and the scripts call `new Date` rather than using a literal.
 
 ## The 14:00 operational day — a grouping, not a second date convention
 
