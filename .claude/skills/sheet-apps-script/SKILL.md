@@ -175,13 +175,58 @@ rule, or the `מצבת החיילים - גיבוי 2` tab, is a restore source.
 
 **Anything that changes this rule must be done in the Sheets UI**
 (נתונים → אימות נתונים → the rule → אפשרויות מתקדמות), which preserves the chips.
-That is how the strict→warn switch was applied on 2026-08-09; the end state is
-13,774 cells on one rule, chips on, `strict: false`.
+That is how the strict→warn switch was applied on 2026-08-09.
 
-Driving that dialog over CDP: the `אפשרויות מתקדמות` section is **collapsed by
-default**, and while collapsed the `[role="radio"]` elements exist in the DOM but
-report a zero-size rect, so coordinate clicks silently miss. Expand the section
-first, then click; verify with `aria-checked` on the radios before pressing סיום.
+### The rule as of 2026-08-11: a literal list, strict
+
+`O4:DG145` (13,774 cells) now carries **`ONE_OF_LIST` with the 32 values in
+`'אפשרויות'!C2:C33` order, `strict: true`, `showCustomUi: true`** — it is no
+longer range-based. Consequence to internalise: **`אפשרויות'!C` no longer drives
+the dropdown.** It remains the source for the `נוכח` counting formula, so the two
+lists are now separate copies that can drift; adding an option means editing the
+rule *and* the tab.
+
+Colours: `נוכח #D4EDBC`, `חופש #E6CFF2`, `גיוס #54854B`, `שחרור #B7B9BB`,
+`לא מגויס #E6E7E9`, `בקשה ליציאה #FFE5A0`. **The 26 `יציאה…` options are
+deliberately uncoloured** — and they always were. Only ever six values had
+colours; the exits rendering plain is the original design, not a regression.
+
+Why the conversion happened at all: **editing the RANGE of a range-based rule
+destroys every per-item colour — through the UI as well as the API.** Tried on
+2026-08-11 (`$C$2:$C$30` → `$C$2:$C$34`): the API read-back showed the new range
+and 20/20 sampled cells still carrying the rule, so the 09/08 signature did *not*
+occur — the colours die by a different mechanism, and every chip went grey.
+Recovered with one immediate toolbar Undo. A range-based rule also has **no "add
+item" control**, so its colour list can never grow; that is why colouring
+`בקשה ליציאה` was impossible without converting. A **literal** list, by contrast,
+keeps its colours through an edit → סיום → reopen *and* through adding an item
+(verified twice).
+
+**The safe way to change this rule at scale**: build the finished rule on ONE
+scratch cell in the UI, verify it there, then propagate with API `copyPaste` /
+`PASTE_DATA_VALIDATION` across `O4:DG145`. That is one careful edit plus a
+mechanical server-side copy, instead of a fragile dialog edit over 13,774 cells.
+Audit afterwards by sweeping whole columns (`O`, `AZ`, `CS`, `DG` rows 4–145 =
+568 cells) and checking `O3` / `O146` / `N4` for spill.
+
+Strict does **not** rewrite existing cells: the 67 retired values survive it and
+simply show a red invalid marker. Verified — 11,450 non-empty cells and 14
+distinct values before and after.
+
+Driving that dialog over CDP:
+- The `אפשרויות מתקדמות` section is **collapsed by default**, and while collapsed
+  the `[role="radio"]` elements exist in the DOM but report a zero-size rect, so
+  coordinate clicks silently miss. Expand first, then click; verify `aria-checked`
+  before pressing סיום.
+- The custom-colour **hex field ignores `Input.insertText`** — it needs
+  per-character `dispatchKeyEvent` with `text`.
+- With 32 items the panel grows to ~2,650px, and a blind coordinate click near the
+  bottom lands on **`הסרת כלל`**, deleting the rule. Guard every click with
+  `document.elementFromPoint` before firing.
+- Converting a range rule to a literal list **empties the item list** — all values
+  must be typed in. Read them from the sheet; never retype from a chat message.
+- A closed sidebar **stays in the DOM with stale content**. Test visibility, not
+  existence.
 
 Whichever way the rule ends up, `looksLikeTimedExit_` must keep warning on
 unparseable `יציאה` values — under "show a warning" the sheet accepts typos, and
@@ -224,6 +269,39 @@ conservative — it fires only when **no** contiguous gap in the operational day
 fits the residual hours, so it under-fires rather than mis-steering. When the
 exit fits several mission types, nothing is penalised and ordinary factors
 (rotation, same-task-yesterday, load) decide, which is the required behavior.
+
+## Counting presence in `מצבת החיילים` — and three definitions of "absent"
+
+`L` = `סכימה - נוכח`, `N` = `סכימה - חופש`, `M` = `יחס חופש` = `N/L`. Rebuilt
+2026-08-11 because `L` enumerated only the five legacy exit strings, so every
+free-text exit counted as *absent* (5186 vs a correct 5189). It now reads a
+checkbox column:
+
+```
+=COUNTA($O4:$DG4)-SUMPRODUCT(COUNTIF($O4:$DG4,'אפשרויות'!$C$2:$C$40)*('אפשרויות'!$D$2:$D$40=TRUE))
+```
+
+`'אפשרויות'!D` (`לא נספר כנוכח`, `BOOLEAN` validation → real checkboxes) marks the
+statuses that do **not** count: `חופש` and `לא מגויס` only. **The sign is flipped
+on purpose** (owner decision): marking the *absent* statuses means anything not in
+the list — the 67 retired values, and any option added later — still counts as
+present. It fails safe. An inclusion list ("tick what counts") fails the other
+way: forget one tick and days silently vanish, which is exactly the original bug.
+
+⚠ Blanks must not count. All of them belong to soldiers who had not joined yet;
+counting them would credit a man weeks he was not there.
+
+⚠ **Three definitions of "absent" coexist, and two of them disagree:**
+
+| where | says | used by |
+|---|---|---|
+| `'אפשרויות'!D` | חופש, לא מגויס | column `L` (the per-soldier total) |
+| `'אפשרויות'!E` | **גיוס**, לא מגויס, חופש | **410 formulas** — the per-מחלקה daily headcount at the bottom of the tab |
+| `'אפשרויות'!G` | לא מגויס, חופש | **nothing — zero references anywhere** |
+
+So a soldier on `גיוס` counts as present in `L` and absent in the daily headcount.
+Owner is aware (2026-08-11); reconciling means touching 410 formulas. `G` is dead
+weight — do not treat it as authoritative because its title sounds relevant.
 
 ## The summary block at the top of `שבצק` (J3:K5)
 
