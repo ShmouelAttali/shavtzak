@@ -196,11 +196,27 @@ destroys every per-item colour — through the UI as well as the API.** Tried on
 2026-08-11 (`$C$2:$C$30` → `$C$2:$C$34`): the API read-back showed the new range
 and 20/20 sampled cells still carrying the rule, so the 09/08 signature did *not*
 occur — the colours die by a different mechanism, and every chip went grey.
-Recovered with one immediate toolbar Undo. A range-based rule also has **no "add
-item" control**, so its colour list can never grow; that is why colouring
-`בקשה ליציאה` was impossible without converting. A **literal** list, by contrast,
-keeps its colours through an edit → סיום → reopen *and* through adding an item
+Recovered with one immediate toolbar Undo. A **literal** list, by contrast, keeps
+its colours through an edit → סיום → reopen *and* through adding an item
 (verified twice).
+
+⚠ **Correction, 2026-08-12.** A range-based rule *can* be coloured. Opening one
+shows the full item list pulled from the range, each row with its own colour
+swatch, settable and resettable (`התאמה אישית` / `איפוס`). What it lacks is only an
+**add-item** control — the items come from the range, so you cannot invent one.
+An earlier note here claimed the colour list "can never grow" on a range rule and
+used that to justify converting to a literal list; that was wrong, and the
+conversion was avoidable. Colours on a range rule are painted directly onto it —
+they are **not** inherited from a previous literal list:
+
+- literal list → range conversion **loses every colour** (tested 2026-08-12: six
+  exact colours before, all 32 chips `rgb(233,232,232)` after).
+- So the six legacy colours that used to sit on the range rule were painted by
+  hand on that rule, not carried over from its list-shaped ancestor.
+
+Also verified on that conversion: `strict` survives it, and blank rows inside the
+source range are **ignored** — `C2:C60` with 32 filled rows yields exactly 32
+dropdown entries, which is what makes a generous range safe as growing room.
 
 **The safe way to change this rule at scale**: build the finished rule on ONE
 scratch cell in the UI, verify it there, then propagate with API `copyPaste` /
