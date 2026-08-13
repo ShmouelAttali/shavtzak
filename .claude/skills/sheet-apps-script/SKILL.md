@@ -74,11 +74,12 @@ and shared with elyashivlavi@gmail.com, bound to spreadsheet
 `09:00-14:00` (5h). v3.11 classifies any range of `DAILY_MIN_SPAN_HOURS` (12) or
 more as a daily mission — counted as `DAILY_HOURS` (8) toward the cap and
 excluded from overlap checks, exactly like `יומי`. The short complement stays an
-ordinary shift, by owner decision 2026-08-09.
+ordinary shift (owner decision).
 
-Before v3.11 only the literal word `יומי` was handled, so the other spellings
-were counted at 19–24h: **184 over-8h errors and 50 overlap errors across 13 days
-of real data, of which 135 and 34 were false.** Pinned by
+Handling only the literal word `יומי` and counting the other spellings at 19–24h
+produced **184 over-8h errors and 50 overlap errors across 13 days of real data,
+135 and 34 of them false** — the scale to expect if this classification breaks
+again. Pinned by
 `tests/apps-script-daily-mission.test.ts`. If validation output ever looks like
 noise again, check the time-spelling census first — that harness is the fastest
 way to tell a format drift from a real scheduling problem.
@@ -111,10 +112,10 @@ calendar day:
 | `יציאה עד 10` | midnight → 10:00 |
 
 Hours are 0–23, one or two digits, no minutes — `יציאה 12:00-20:00` is **not** a
-valid form (it was the first design and was replaced).
+valid form.
 
-**Since 2026-08-11 the vocabulary is a closed list, not free text** (owner
-decision). `'אפשרויות'!C2:C33` holds 32 options and the dropdown is strict, so
+**The vocabulary is a closed list, not free text** (owner decision).
+`'אפשרויות'!C2:C33` holds 32 options and the dropdown is strict, so
 those three forms can only appear on the **4-hour shift grid**: starts
 `02/06/10/14/18/22`, ends `06/10/14/18/22`, every combination where the end is
 later than the start — 15 windows, 6 open-ended `יציאה מHH`, 5 `יציאה עד HH`.
@@ -129,12 +130,11 @@ Two consequences worth knowing before you touch this:
 - **`יציאה מ22` protects only 22:00→24:00.** The 00:00–02:00 tail of that night
   is unblocked, and no option can express it. Structural, not a data problem.
 - ⚠ `עד 00` does **not** parse: hour 0 is accepted, then rejected because the end
-  is not after the start — so `יציאה מ15 עד 00` silently blocked nothing and the
-  soldier read as fully available. Found live on 2026-08-11. The closed list has
-  no `עד 00` option, so the trap is now unreachable from the UI; it can still
-  arrive by paste or API.
+  is not after the start, so `יציאה מ15 עד 00` blocks nothing and the soldier
+  reads as fully available. The closed list has no `עד 00` option, so this is
+  unreachable from the UI, but it can still arrive by paste or API.
 
-`בקשה ליציאה` (added 2026-08-11, replacing `יציאה בערב` / `יציאה בבוקר`) is a
+`בקשה ליציאה` — which replaced `יציאה בערב` / `יציאה בבוקר` — is a
 **pending request, not an approved exit**: it has no digits, so it parses to
 nothing, blocks nothing, and raises no format warning. That is deliberate — only
 an approved exit with real hours may block a slot.
@@ -159,7 +159,7 @@ options are **coloured chips** (נוכח green, חופש purple, לא מגויס
 API does not expose those colours — a read returns only `condition`, `strict`
 and `showCustomUi` — so any `setDataValidation` write rebuilds the rule from
 those three fields and **silently destroys the colouring across ~11.6k cells**.
-This happened on 2026-08-09.
+Not theoretical — it has happened.
 
 Things that do *not* work, both verified:
 - `repeatCell` with `fields: "dataValidation.strict"` → 400 *"No conditionType
@@ -168,14 +168,19 @@ Things that do *not* work, both verified:
 - Reading the rule first and writing it back — the colours were never in the read.
 
 What *does* work: **`copyPaste` with `pasteType: PASTE_DATA_VALIDATION`**. It
-copies the rule server-side, colours included, and touches no values. That is how
-the damage was undone — source `CS4`, which sat outside the overwritten block and
-still held the original. Keep that trick in mind: any surviving cell with the
-rule, or the `מצבת החיילים - גיבוי 2` tab, is a restore source.
+copies the rule server-side, colours included, and touches no values. **Any**
+surviving cell holding the rule is a restore source, as is the
+`מצבת החיילים - גיבוי 2` tab — that is how the damage above was undone.
 
 **Anything that changes this rule must be done in the Sheets UI**
 (נתונים → אימות נתונים → the rule → אפשרויות מתקדמות), which preserves the chips.
-That is how the strict→warn switch was applied on 2026-08-09.
+
+The safe way to change it at scale: build the finished rule on **one** scratch
+cell in the UI, verify it there, then propagate with `copyPaste` /
+`PASTE_DATA_VALIDATION` across `O4:DG145`. One careful edit plus a mechanical
+server-side copy, instead of a fragile dialog edit over 13,774 cells. Audit
+afterwards by sweeping whole columns (`O`, `AZ`, `CS`, `DG` rows 4–145 = 568
+cells) and checking `O3` / `O146` / `N4` for spill.
 
 ### The rule as of 2026-08-11: a literal list, strict
 
@@ -196,27 +201,28 @@ destroys every per-item colour — through the UI as well as the API.** Tried on
 2026-08-11 (`$C$2:$C$30` → `$C$2:$C$34`): the API read-back showed the new range
 and 20/20 sampled cells still carrying the rule, so the 09/08 signature did *not*
 occur — the colours die by a different mechanism, and every chip went grey.
-Recovered with one immediate toolbar Undo. A **literal** list, by contrast, keeps
-its colours through an edit → סיום → reopen *and* through adding an item
-(verified twice).
+Recovered with one immediate toolbar Undo.
 
-⚠ **Correction, 2026-08-12.** A range-based rule *can* be coloured. Opening one
-shows the full item list pulled from the range, each row with its own colour
-swatch, settable and resettable (`התאמה אישית` / `איפוס`). What it lacks is only an
-**add-item** control — the items come from the range, so you cannot invent one.
-An earlier note here claimed the colour list "can never grow" on a range rule and
-used that to justify converting to a literal list; that was wrong, and the
-conversion was avoidable. Colours on a range rule are painted directly onto it —
-they are **not** inherited from a previous literal list:
+### What each rule shape can and cannot do
 
-- literal list → range conversion **loses every colour** (tested 2026-08-12: six
-  exact colours before, all 32 chips `rgb(233,232,232)` after).
-- So the six legacy colours that used to sit on the range rule were painted by
-  hand on that rule, not carried over from its list-shaped ancestor.
+|  | `ONE_OF_RANGE` | `ONE_OF_LIST` |
+|---|---|---|
+| items come from | `'אפשרויות'!C` — edit the tab, the dropdown follows | the rule itself; the tab is a second copy that can drift |
+| per-item colours | **yes** — settable and resettable | yes |
+| add an item in the dialog | no — items come from the range | yes |
+| survives a colour edit | yes | yes |
+| survives a **range** edit | **no — every colour dies** | n/a |
+| survives conversion to the other shape | **no — every colour dies** | **no — every colour dies** |
 
-Also verified on that conversion: `strict` survives it, and blank rows inside the
-source range are **ignored** — `C2:C60` with 32 filled rows yields exactly 32
-dropdown entries, which is what makes a generous range safe as growing room.
+Colours are painted directly onto whichever rule you have; they are never
+inherited across a conversion. So:
+
+- Pick the shape once. Converting either way costs all colours.
+- With a range rule, **get the range right the first time** — it can never be
+  widened again without repainting. Blank rows inside it are ignored (`C2:C60`
+  holding 32 values yields exactly 32 entries), so a generous range is free
+  growing room.
+- `strict` survives both conversions and colour edits.
 
 **The safe way to change this rule at scale**: build the finished rule on ONE
 scratch cell in the UI, verify it there, then propagate with API `copyPaste` /
@@ -254,7 +260,7 @@ reads that doc** — which is what lets `ShavtzakRecommendation.js` keep its
 `/** @OnlyCurrentDoc */` annotation and its narrow OAuth scopes. The cell text is
 the entire contract.
 
-Semantics, decided by the owner 2026-08-09:
+Semantics (owner decision):
 
 - It **occupies its window only** — not the whole day. Half-open, so an exit
   ending 22:00 and a shift starting 22:00 are both fine.
@@ -288,14 +294,18 @@ exit fits several mission types, nothing is penalised and ordinary factors
 
 ## Counting presence in `מצבת החיילים` — and three definitions of "absent"
 
-`L` = `סכימה - נוכח`, `N` = `סכימה - חופש`, `M` = `יחס חופש` = `N/L`. Rebuilt
-2026-08-11 because `L` enumerated only the five legacy exit strings, so every
-free-text exit counted as *absent* (5186 vs a correct 5189). It now reads a
-checkbox column:
+`L` = `סכימה - נוכח`, `N` = `סכימה - חופש`, `M` = `יחס חופש` = `N/L`. `L` counts
+by **exclusion**, driven by a checkbox column:
 
 ```
-=COUNTA($O4:$DG4)-SUMPRODUCT(COUNTIF($O4:$DG4,'אפשרויות'!$C$2:$C$40)*('אפשרויות'!$D$2:$D$40=TRUE))
+=COUNTA($O4:$DG4)-SUMPRODUCT(COUNTIF($O4:$DG4,'אפשרויות'!$C$2:$C$60)*('אפשרויות'!$D$2:$D$60=TRUE))
 ```
+
+⚠ Do not "simplify" this into an inclusion list (`COUNTIF` of the statuses that
+*do* count). Enumerating the present statuses is what broke it before: three
+soldiers' exits were silently counted as absent because the formula listed only
+the five legacy exit strings. Inclusion fails silently wrong; exclusion fails
+safe, because an option nobody has classified yet still counts as present.
 
 `'אפשרויות'!D` (`לא נספר כנוכח`, `BOOLEAN` validation → real checkboxes) marks the
 statuses that do **not** count: `חופש` and `לא מגויס` only. **The sign is flipped
@@ -316,8 +326,8 @@ counting them would credit a man weeks he was not there.
 | `'אפשרויות'!G` | לא מגויס, חופש | **nothing — zero references anywhere** |
 
 So a soldier on `גיוס` counts as present in `L` and absent in the daily headcount.
-Owner is aware (2026-08-11); reconciling means touching 410 formulas. `G` is dead
-weight — do not treat it as authoritative because its title sounds relevant.
+Owner knows; reconciling means touching 410 formulas. `G` is dead weight — do not
+treat it as authoritative because its title sounds relevant.
 
 ## The summary block at the top of `שבצק` (J3:K5)
 
@@ -477,7 +487,7 @@ carries its **own** notion of what a mission is worth. They are not derived from
 one another and nothing flags a disagreement: the validator just keeps passing
 schedules the engine would never recommend, and vice versa.
 
-Found 2026-08-10 on `כונן גשש`: Ops had always given it `hoursForDailyTotal = 0`
+The worked example, `כונן גשש`: Ops gave it `hoursForDailyTotal = 0`
 and filtered it out of `validateDailyHours_`, exactly like כרמל — while the
 engine charged **8 hours** per shift into both the 7-day `totalHours` (weight
 1.4/h) and the same-day cap. A tour descender looked like a 16-hour day on one
@@ -553,10 +563,8 @@ invent one either. Both are true simultaneously. What is still forbidden: giving
 the viewer an operational-day anchor (pinned by `tests/shavtzak-display.test.ts`,
 `tests/personal-schedule.test.ts`).
 
-The old `calendarDateForOpDaySlot_` carried a comment implying the written date
-was the *op* day. It was never called, it was the source of the confusion, and
-v3.11 deleted it. If you find yourself concluding the two halves disagree,
-re-read this section before acting.
+If you find yourself concluding the two halves disagree, re-read this section
+before acting.
 
 ## Inspecting Google's side
 
@@ -601,6 +609,6 @@ during navigation `document.body` is briefly `null` and the eval throws.
 container `1UTv1ROFinupRG0Kc_p7guui0RTBS238md_MXrprY2LY`) is a *different*
 project on a *different* spreadsheet: a real web app (`doGet` + `Index.html`,
 74 versions, 4 deployments, `executeAs: USER_DEPLOYING`,
-`access: ANYONE_ANONYMOUS` — publicly reachable without sign-in). Owner decision
-2026-08-09: **not mirrored, out of scope.** Do not clone it into the repo, and
+`access: ANYONE_ANONYMOUS` — publicly reachable without sign-in). Owner decision:
+**not mirrored, out of scope.** Do not clone it into the repo, and
 do not confuse its versioned release cycle with the HEAD-live one above.
