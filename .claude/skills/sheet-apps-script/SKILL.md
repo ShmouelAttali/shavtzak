@@ -182,7 +182,7 @@ server-side copy, instead of a fragile dialog edit over 13,774 cells. Audit
 afterwards by sweeping whole columns (`O`, `AZ`, `CS`, `DG` rows 4–145 = 568
 cells) and checking `O3` / `O146` / `N4` for spill.
 
-### The rule as of 2026-08-11: a literal list, strict
+### The live rule: a literal list, strict
 
 `O4:DG145` (13,774 cells) now carries **`ONE_OF_LIST` with the 32 values in
 `'אפשרויות'!C2:C33` order, `strict: true`, `showCustomUi: true`** — it is no
@@ -196,33 +196,39 @@ Colours: `נוכח #D4EDBC`, `חופש #E6CFF2`, `גיוס #54854B`, `שחרור
 deliberately uncoloured** — and they always were. Only ever six values had
 colours; the exits rendering plain is the original design, not a regression.
 
-Why the conversion happened at all: **editing the RANGE of a range-based rule
-destroys every per-item colour — through the UI as well as the API.** Tried on
-2026-08-11 (`$C$2:$C$30` → `$C$2:$C$34`): the API read-back showed the new range
-and 20/20 sampled cells still carrying the rule, so the 09/08 signature did *not*
-occur — the colours die by a different mechanism, and every chip went grey.
-Recovered with one immediate toolbar Undo.
+**Editing the RANGE of a range-based rule destroys every per-item colour —
+through the UI as well as the API.** Widening `$C$2:$C$30` to `$C$2:$C$34` leaves
+the API read-back looking perfectly correct — new range, every sampled cell still
+carrying the rule — while every chip on screen goes grey. It is not the
+`setDataValidation` failure above; it is a second, separate way to lose them, and
+the API cannot see it. Toolbar Undo recovers it if you catch it immediately.
 
 ### What each rule shape can and cannot do
 
 |  | `ONE_OF_RANGE` | `ONE_OF_LIST` |
 |---|---|---|
 | items come from | `'אפשרויות'!C` — edit the tab, the dropdown follows | the rule itself; the tab is a second copy that can drift |
-| per-item colours | **yes** — settable and resettable | yes |
-| add an item in the dialog | no — items come from the range | yes |
-| survives a colour edit | yes | yes |
+| add an item in the dialog | no — items come from the range | yes, and it keeps the colours |
+| survives a colour edit | — | yes |
 | survives a **range** edit | **no — every colour dies** | n/a |
 | survives conversion to the other shape | **no — every colour dies** | **no — every colour dies** |
 
-Colours are painted directly onto whichever rule you have; they are never
-inherited across a conversion. So:
+Colours never survive a conversion in either direction, and a freshly built range
+rule comes up with every chip grey. So:
 
 - Pick the shape once. Converting either way costs all colours.
-- With a range rule, **get the range right the first time** — it can never be
-  widened again without repainting. Blank rows inside it are ignored (`C2:C60`
-  holding 32 values yields exactly 32 entries), so a generous range is free
-  growing room.
-- `strict` survives both conversions and colour edits.
+- With a range rule, **get the range right the first time** — widening it later
+  destroys the colours. Blank rows inside it are ignored (`C2:C60` holding 32
+  values yields exactly 32 entries), so a generous range is free growing room.
+- `strict` survives conversions and colour edits.
+
+⚠ **Open question — do not assume either way.** The rule *originally* here was
+range-based **and** its chips were coloured, yet a range rule built from scratch
+today shows no item list and no swatches. Something else may be supplying that
+colour (conditional formatting on `O4:DG145` is the obvious untested candidate),
+or per-item colours on a range rule may only be creatable by an older Sheets
+build. Until that is settled, do not promise anyone a coloured range-based
+dropdown.
 
 **The safe way to change this rule at scale**: build the finished rule on ONE
 scratch cell in the UI, verify it there, then propagate with API `copyPaste` /
