@@ -213,22 +213,39 @@ the API cannot see it. Toolbar Undo recovers it if you catch it immediately.
 | survives a **range** edit | **no — every colour dies** | n/a |
 | survives conversion to the other shape | **no — every colour dies** | **no — every colour dies** |
 
-Colours never survive a conversion in either direction, and a freshly built range
-rule comes up with every chip grey. So:
+### Where the chip colours actually live
 
-- Pick the shape once. Converting either way costs all colours.
-- With a range rule, **get the range right the first time** — widening it later
-  destroys the colours. Blank rows inside it are ignored (`C2:C60` holding 32
-  values yields exactly 32 entries), so a generous range is free growing room.
-- `strict` survives conversions and colour edits.
+**Inside the validation rule, as a map from item VALUE to colour — and the v4 API
+cannot see it.** Not conditional formatting (the only CF rule on the tab is a
+gradient on a 1×2 block near row 132), not cell backgrounds (every presence cell
+is default white). Keyed by value, not by position, so reordering or resizing the
+source list does not disturb them.
 
-⚠ **Open question — do not assume either way.** The rule *originally* here was
-range-based **and** its chips were coloured, yet a range rule built from scratch
-today shows no item list and no swatches. Something else may be supplying that
-colour (conditional formatting on `O4:DG145` is the obvious untested candidate),
-or per-item colours on a range rule may only be creatable by an older Sheets
-build. Until that is settled, do not promise anyone a coloured range-based
-dropdown.
+That single fact explains every behaviour worth knowing:
+
+- **`setDataValidation` wipes them** — the API rebuilds the rule from the three
+  fields it can see, and the colour map is not one of them.
+- **`copyPaste` / `PASTE_DATA_VALIDATION` keeps them** — it copies the whole rule
+  server-side, invisible map included. This is the only safe way to move the rule
+  across many cells.
+- **A freshly created rule is all grey.** Colours are assignments; a new rule has
+  none. They arrive either by hand or by copying a rule that already has them.
+- **Converting `ONE_OF_LIST` ↔ `ONE_OF_RANGE` drops them**, because the item model
+  is rebuilt.
+- Both shapes support colours, and **both show a swatch per item** in the editor,
+  each opening a palette with presets, custom hex and reset. A range rule's list
+  is populated from the range; what it lacks is only an add-item control.
+
+⚠ If a range rule's editor looks like it has **no item list**, that is the
+stale-sidebar trap, not the truth — a closed sidebar stays in the DOM with old
+content. Test visibility, not existence, and reopen the panel.
+
+⚠ Widening a range rule's range has **once** been observed to grey every chip,
+and has since been repeated without reproducing it. Treat it as possible but not
+certain: before pressing סיום, confirm the swatches still show their colours, and
+if they greyed, repaint them from the same dialog.
+
+`strict` survives conversions and colour edits.
 
 **The safe way to change this rule at scale**: build the finished rule on ONE
 scratch cell in the UI, verify it there, then propagate with API `copyPaste` /
