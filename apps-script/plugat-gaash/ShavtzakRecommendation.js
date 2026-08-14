@@ -2163,6 +2163,19 @@ function evaluateCandidateForTask_(soldier, task, context) {
     sameDayKonenutHours: 0
   };
 
+  // v3.22: המפל"ג מול משבצת החפ"ק הראשונה - שני הכיוונים.
+  // בכוונה *מחוץ* ל-availabilityCache (ולפניו): התשובה תלויה במשבצת,
+  // והמפתח שם ברזולוציית יום בלבד - אותה מלכודת של היציאה הקצרה ב-v3.6.
+  // לפני בדיקת הזמינות ולא אחריה, כדי שאיש מפל"ג יידחה תמיד עם הסיבה
+  // הזאת; אחרת הוא נספר בסיכום הדחיות של כל שורה אחרת ("סטטוס לא זמין"),
+  // ומטה את המונה שהקצין קורא כשאין מועמדים.
+  const commandStaffSeat = isCommandStaffSeat_(task, context.group, config);
+  if (isCommandStaffSoldier_(soldier, config)) {
+    if (!commandStaffSeat) return reject_(result, 'מפל״ג - רק למשבצת החפ״ק הראשונה');
+  } else if (commandStaffSeat) {
+    return reject_(result, 'משבצת החפ״ק הראשונה שמורה למפל״ג');
+  }
+
   // --- זמינות (עם cache לכל הריצה) ---
   // v3.4: מפתח הקאש כולל את היום הקלנדרי של המשבצת, כי הזמינות
   // יכולה להשתנות בין החלק של "היום" לחלק של "מחר" באותו יום שבצ"ק.
@@ -2177,16 +2190,6 @@ function evaluateCandidateForTask_(soldier, task, context) {
     context.availabilityCache[availKey] = statusCheck;
   }
   if (!statusCheck.available) return reject_(result, statusCheck.reason);
-
-  // v3.20: המפל"ג מול משבצת החפ"ק הראשונה - שני הכיוונים.
-  // בכוונה *מחוץ* ל-availabilityCache: התשובה תלויה במשבצת, והמפתח שם
-  // ברזולוציית יום בלבד, בדיוק כמו היציאה הקצרה ב-v3.6.
-  const commandStaffSeat = isCommandStaffSeat_(task, context.group, config);
-  if (isCommandStaffSoldier_(soldier, config)) {
-    if (!commandStaffSeat) return reject_(result, 'מפל״ג - רק למשבצת החפ״ק הראשונה');
-  } else if (commandStaffSeat) {
-    return reject_(result, 'משבצת החפ״ק הראשונה שמורה למפל״ג');
-  }
 
   // v3.6: יציאה קצרה מאושרת חוסמת רק את חלון הזמן שלה.
   // בכוונה *מחוץ* ל-availabilityCache: המפתח שם הוא ברזולוציית יום,

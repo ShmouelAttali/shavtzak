@@ -188,8 +188,13 @@ test('the מפל"ג is read into the roster the engine knows, flagged', () => {
   assert.equal(byName['דני חמל'], undefined);
 });
 
-test('the חמ"ל is still blocked outright, by status not by seat', () => {
+test('the חמ"ל is still blocked outright', () => {
   const hamal = soldier('דני חמל', 'חמ"ל', 'חמל');
+  const staticSlot = task('עמדות הגנה', 'מזרחית', '14:00', 31);
+  assert.match(rejectReason(hamal, staticSlot, [staticSlot]), /חמ״ל/);
+  // and on the reserved seat the seat rule answers first — he is not מפל"ג.
+  // Either way he never gets in; only the wording differs.
   const seats = hafakSeats();
-  assert.match(rejectReason(hamal, seats[0], seats), /חמ״ל/);
+  assert.match(rejectReason(hamal, seats[0], seats), /שמורה למפל״ג/);
+  assert.match(rejectReason(hamal, seats[1], seats), /חמ״ל/);
 });
