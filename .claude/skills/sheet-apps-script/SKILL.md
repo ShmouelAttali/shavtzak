@@ -182,19 +182,26 @@ server-side copy, instead of a fragile dialog edit over 13,774 cells. Audit
 afterwards by sweeping whole columns (`O`, `AZ`, `CS`, `DG` rows 4–145 = 568
 cells) and checking `O3` / `O146` / `N4` for spill.
 
-### The live rule: a literal list, strict
+### The live rule
 
-`O4:DG145` (13,774 cells) now carries **`ONE_OF_LIST` with the 32 values in
-`'אפשרויות'!C2:C33` order, `strict: true`, `showCustomUi: true`** — it is no
-longer range-based. Consequence to internalise: **`אפשרויות'!C` no longer drives
-the dropdown.** It remains the source for the `נוכח` counting formula, so the two
-lists are now separate copies that can drift; adding an option means editing the
-rule *and* the tab.
+`O4:DG145` (13,774 cells) carries **`ONE_OF_RANGE` over `'אפשרויות'!$C$2:$C$60`,
+`strict: true`, `showCustomUi: true`.**
+
+`'אפשרויות'!C` **is** the dropdown. `C2:C33` holds the 32 statuses and `C34:C60`
+is empty growing room — blank rows are ignored, so adding a status is one line of
+typing in that tab and nothing else: no rule edit, no formula edit. The `נוכח`
+formula, its checkbox column `D`, and `validateStatusDropdownMatchesOptions_` all
+span the same `C2:C60` on purpose. **Keep those four in step.**
 
 Colours: `נוכח #D4EDBC`, `חופש #E6CFF2`, `גיוס #54854B`, `שחרור #B7B9BB`,
-`לא מגויס #E6E7E9`, `בקשה ליציאה #FFE5A0`. **The 26 `יציאה…` options are
-deliberately uncoloured** — and they always were. Only ever six values had
-colours; the exits rendering plain is the original design, not a regression.
+`לא מגויס #E6E7E9`. **`בקשה ליציאה` and the 26 `יציאה…` options are deliberately
+uncoloured** (owner decision) — a new status therefore arrives plain, and can be
+coloured later from the same swatch list if wanted.
+
+⚠ Do not widen `$C$2:$C$60` casually — a range edit is the one operation that has
+been seen to grey every chip. 27 spare rows exist precisely so it never needs
+doing. If it ever does: build it on a scratch cell, confirm the swatches there,
+and `copyPaste` the finished rule across, so the live range never takes the edit.
 
 **Editing the RANGE of a range-based rule destroys every per-item colour —
 through the UI as well as the API.** Widening `$C$2:$C$30` to `$C$2:$C$34` leaves
