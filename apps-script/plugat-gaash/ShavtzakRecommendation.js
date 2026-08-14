@@ -1,6 +1,22 @@
 /** @OnlyCurrentDoc */
 /**
- * Shabtzak Recommendations Engine v3.19 - שעון לחימה 14:00-14:00
+ * Shabtzak Recommendations Engine v3.20 - שעון לחימה 14:00-14:00
+ *
+ * שינויים ב-v3.20 - משבצת החפ"ק הראשונה, ומקור המנוחה בעמודה:
+ * 1. משבצת החפ"ק הראשונה שמורה לצוות המפל"ג, ורק לו. הכלל דו-כיווני:
+ *    איש מפל"ג מומלץ *רק* שם, ומי שאינו מפל"ג נדחה משם.
+ *    hafakCommandStaffSeats: 0 מכבה אותו.
+ * 2. בעקבות זה אנשי המפל"ג נקראים למצבה שהמנוע מכיר, גם שהם מחוץ
+ *    ל-includePlatoons. עד כה הם לא נקראו כלל, ולכן הסמ"פ שיושב בחפ"ק
+ *    כל יום קיבל "⚠ החייל לא נמצא במצבת החיילים" - התראה שקרית על
+ *    שיבוץ תקין לגמרי.
+ * 3. המפל"ג ירד מ-excludedPlatoonOrRoleKeywords (שנשאר לחמ"ל בלבד):
+ *    חסימה גורפת שם הייתה גוברת על הכלל התלוי-משבצת. הבדיקה החדשה
+ *    יושבת *מחוץ* ל-availabilityCache, שמפתחו ברזולוציית יום בלבד -
+ *    אותה מלכודת של היציאה הקצרה ב-v3.6.
+ * 4. עמודת "מנוחה" מסמנת "(מהתקפי)" כשהפער נמדד מכוננות התקפית יומית.
+ *    המספר עצמו לא משתנה - v3.14 נשאר בתוקף - אבל בלי הסימון "4ש׳"
+ *    נראה שם כמנוחה קצרה בלי שום רמז לכך שהזיכוי הוא מה שהכשיר אותה.
  *
  * שינויים ב-v3.19 - "בדוחק" מסביר את עצמו, ומשימה יומית שווה 8 שעות:
  * 1. תא המועמדים כותב עכשיו "(בדוחק: עומס 16ש׳)" במקום "(בדוחק)" יבש.
@@ -224,7 +240,11 @@ const SHABTZAK_REC_CONFIG = {
     // שורת הכותרות (ומעליה שורת התאריכים) מזוהות בסריקת השורות הראשונות.
     headerSearchRows: 6,
     // מאגר המועמדים: רק המחלקות האלה. רשימה ריקה = כל המצבה.
-    // (מפל"ג ממילא נחסם בהמשך ע"י excludedPlatoonOrRoleKeywords.)
+    //
+    // v3.20: אנשי המפל"ג נקראים *בנוסף* למחלקות האלה (ראה
+    // commandStaffPlatoonKeywords). הם אינם מועמדים לשום עמדה מלבד
+    // משבצת החפ"ק הראשונה, אבל הם חייבים להיות במצבה שהמנוע מכיר -
+    // אחרת שיבוץ שלהם בחפ"ק נראה כמו חייל שאינו קיים בגיליון.
     //
     // 2026-08-10, החלטת המפקד: חמ"ל יצא מהמאגר. אנשי החמ"ל מנהלים
     // משמרות משל עצמם בטאב "שיבוץ חמל", ולכן אינם נספרים ואינם מומלצים
@@ -326,7 +346,19 @@ const SHABTZAK_REC_CONFIG = {
 
   unavailableStatusKeywords: ['חופש', 'חופשה', 'לא מגויס', 'לא מגוייס'],
 
-  excludedPlatoonOrRoleKeywords: ['מפלג', 'חמל', 'חמ״ל', 'חמ"ל'],
+  // v3.20: המפל"ג ירד מכאן. הוא כבר לא חסום גורף אלא תלוי-משבצת
+  // (isCommandStaffSeat_), וחסימה גורפת כאן הייתה גוברת עליה.
+  // החמ"ל נשאר חסום גורף - הוא מנהל שבצ"ק משל עצמו.
+  excludedPlatoonOrRoleKeywords: ['חמל', 'חמ״ל', 'חמ"ל'],
+
+  // v3.20: משבצת החפ"ק הראשונה שמורה לצוות המפל"ג (מ"פ / סמ"פ / רס"פ /
+  // סרס"פ). הכלל דו-כיווני: איש מפל"ג מומלץ *רק* שם, ומי שאינו מפל"ג
+  // נדחה משם. hafakCommandStaffSeats: 0 מכבה את הכלל כולו.
+  // ⚠ המחלקה בגיליון כתובה מפל"ג עם גרשיים; normalizeForSearch_ מסיר
+  // אותם, ולכן 'מפלג' הוא הכתיב הנכון כאן (ראה מלכודת הכתיב במיומנות).
+  commandStaffPlatoonKeywords: ['מפלג'],
+  hafakKeywords: ['חפק'],
+  hafakCommandStaffSeats: 1,
 
   ignoredTaskKeywords: ['חמל', 'חמ״ל', 'חמ\"ל'],
 
@@ -975,7 +1007,12 @@ function readRosterSoldiers_(ss, baseDate, config) {
     if (!name) continue;
 
     const platoon = cleanText_(row[platoonCol]);
-    if (includePlatoons.length && !includeSet[normalizeForSearch_(platoon)]) continue;
+    // v3.20: המפל"ג נקרא תמיד, גם כשהוא מחוץ ל-includePlatoons. הוא
+    // אינו מועמד לשום עמדה חוץ ממשבצת החפ"ק הראשונה (הסינון עצמו
+    // ב-evaluateCandidateForTask_), אבל בלי שיהיה במצבה, שיבוץ שלו
+    // בחפ"ק היה מקבל "החייל לא נמצא במצבת החיילים".
+    const isCommandStaff = containsAny_(platoon, config.commandStaffPlatoonKeywords || []);
+    if (includePlatoons.length && !includeSet[normalizeForSearch_(platoon)] && !isCommandStaff) continue;
 
     const role = cleanText_(row[roleCol]);
     const soldier = {
@@ -989,6 +1026,7 @@ function readRosterSoldiers_(ss, baseDate, config) {
       statusTomorrow: statusAt(row, tomorrowCol)
     };
 
+    soldier.isCommandStaff = isCommandStaff;
     soldier.isCommander = containsAny_(role, config.roles.commanderKeywords);
     soldier.isSeniorCommander = containsAny_(role, config.roles.seniorCommanderKeywords);
     soldier.isStaticCommander = containsAny_(role, config.roles.staticCommanderKeywords);
@@ -1655,6 +1693,40 @@ function requiresDudDriverLastSlot_(task, config) {
   return !!(task && task.category === 'tour');
 }
 
+/**
+ * v3.20: משבצת החפ"ק הראשונה שמורה לצוות המפל"ג.
+ *
+ * שלוש פונקציות קטנות במקום אחת, כי כל אחת נשאלת בנפרד: מי הוא איש
+ * מפל"ג, מהי משימת חפ"ק, ואיזו משבצת בתוכה שמורה. הכלל עצמו דו-כיווני
+ * ויושב ב-evaluateCandidateForTask_.
+ */
+function isCommandStaffSoldier_(soldier, config) {
+  const cfg = config || SHABTZAK_REC_CONFIG;
+  if (!soldier) return false;
+  if (soldier.isCommandStaff !== undefined) return !!soldier.isCommandStaff;
+  return containsAny_(soldier.platoon, cfg.commandStaffPlatoonKeywords || []);
+}
+
+function isHafakTask_(task, config) {
+  const cfg = config || SHABTZAK_REC_CONFIG;
+  if (!task) return false;
+  return containsAny_(cleanText_(task.position + ' ' + task.type), cfg.hafakKeywords || []);
+}
+
+function isCommandStaffSeat_(task, group, config) {
+  const cfg = config || SHABTZAK_REC_CONFIG;
+  const seats = cfg.hafakCommandStaffSeats || 0;
+  if (!seats || !isHafakTask_(task, cfg)) return false;
+
+  const tasks = getGroupTasksSortedByRow_(group);
+  // בלי קבוצה (למשל שורת חפ"ק בודדת) המשבצת עצמה היא הראשונה.
+  if (!tasks.length) return true;
+  for (let i = 0; i < Math.min(seats, tasks.length); i++) {
+    if (task.rowNumber === tasks[i].rowNumber) return true;
+  }
+  return false;
+}
+
 function isDudDriverSlot_(task, group, config) {
   if (!requiresDudDriverLastSlot_(task, config)) return false;
   const tasks = getGroupTasksSortedByRow_(group);
@@ -2006,6 +2078,7 @@ function evaluateCandidateForTask_(soldier, task, context) {
     rejectReason: '',
     restBeforeHours: null,
     restAfterHours: null,
+    restBeforeFromAttackReadiness: false,
     previousAssignment: null,
     previousDayMatch: null,
     samePlatoonAsGroupCommander: false,
@@ -2031,6 +2104,16 @@ function evaluateCandidateForTask_(soldier, task, context) {
     context.availabilityCache[availKey] = statusCheck;
   }
   if (!statusCheck.available) return reject_(result, statusCheck.reason);
+
+  // v3.20: המפל"ג מול משבצת החפ"ק הראשונה - שני הכיוונים.
+  // בכוונה *מחוץ* ל-availabilityCache: התשובה תלויה במשבצת, והמפתח שם
+  // ברזולוציית יום בלבד, בדיוק כמו היציאה הקצרה ב-v3.6.
+  const commandStaffSeat = isCommandStaffSeat_(task, context.group, config);
+  if (isCommandStaffSoldier_(soldier, config)) {
+    if (!commandStaffSeat) return reject_(result, 'מפל״ג - רק למשבצת החפ״ק הראשונה');
+  } else if (commandStaffSeat) {
+    return reject_(result, 'משבצת החפ״ק הראשונה שמורה למפל״ג');
+  }
 
   // v3.6: יציאה קצרה מאושרת חוסמת רק את חלון הזמן שלה.
   // בכוונה *מחוץ* ל-availabilityCache: המפתח שם הוא ברזולוציית יום,
@@ -2175,6 +2258,10 @@ function evaluateCandidateForTask_(soldier, task, context) {
   // השעות שרואים על המסך תמיד תואם את מה שכתוב בשבצ"ק.
   result.restBeforeHours = prevRestRaw;
   result.restAfterHours = nextRestRaw;
+  // v3.20: המספר נשאר הפער האמיתי, אבל עמודת המנוחה מסמנת שהוא בא
+  // אחרי כוננות התקפית יומית - אחרת "4 שעות" נראה שם כמנוחה קצרה
+  // בלי שום רמז לכך שהזיכוי הוא מה שהכשיר אותה.
+  result.restBeforeFromAttackReadiness = prevCreditAfterPrev > 0;
 
   // v3.0: משמרת גשש מיועדת ליורד סיור - סיור שמסתיים עד שעה וחצי
   // לפני תחילת המשמרת (14->14:00, 22->22:00, 06->07:00).
@@ -2599,7 +2686,7 @@ function applyExitPackageScoring_(result, soldier, task, sameDayMissionHours, co
 function getAvailabilityStatus_(soldier, task, config, scheduleBaseDate) {
   const unitText = cleanText_(soldier.platoon + ' ' + soldier.role);
   if (containsAny_(unitText, config.excludedPlatoonOrRoleKeywords)) {
-    return { available: false, reason: 'לא לוקחים מהמפלג/חמ״ל' };
+    return { available: false, reason: 'לא לוקחים מהחמ״ל' };
   }
 
   // v3.4: תחת שעון 14:00 יום השבצ"ק חוצה שני ימים קלנדריים.
@@ -3066,7 +3153,7 @@ function formatAssignedOutputRow_(assignedEval, alternatives, groupStatus, warni
   return [
     'משובץ: ' + assignedEval.soldier.name,
     formatPreviousAssignmentForCell_(assignedEval),
-    formatRestShort_(assignedEval.restBeforeHours),
+    formatRestCell_(assignedEval),
     formatWorkloadSummary_(assignedEval),
     fitParts.join('\n'),
     groupStatus
@@ -3083,7 +3170,7 @@ function formatRecommendationNamesColumn_(evaluations) {
 
 function formatRecommendationRestColumn_(evaluations) {
   return evaluations.map(function(ev, idx) {
-    return (idx + 1) + '. ' + formatRestShort_(ev.restBeforeHours);
+    return (idx + 1) + '. ' + formatRestCell_(ev);
   }).join('\n');
 }
 
@@ -3160,6 +3247,18 @@ function formatCandidateFit_(ev) {
   }
 
   return parts.join(' | ');
+}
+
+/**
+ * v3.20: תא עמודת "מנוחה" - הפער האמיתי, ואחריו מקור המנוחה כשהוא
+ * כוננות התקפית יומית ("4 שעות (מהתקפי)"). המספר לא משתנה: הזיכוי
+ * מוסבר, לא מוסתר בתוך הספרה.
+ */
+function formatRestCell_(ev) {
+  if (!ev) return '';
+  const text = formatRestShort_(ev.restBeforeHours);
+  if (!text || !ev.restBeforeFromAttackReadiness) return text;
+  return text + ' (מהתקפי)';
 }
 
 function formatRestShort_(hours) {
