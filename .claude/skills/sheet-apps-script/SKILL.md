@@ -190,8 +190,13 @@ cells) and checking `O3` / `O146` / `N4` for spill.
 `'אפשרויות'!C` **is** the dropdown. `C2:C33` holds the 32 statuses and `C34:C60`
 is empty growing room — blank rows are ignored, so adding a status is one line of
 typing in that tab and nothing else: no rule edit, no formula edit. The `נוכח`
-formula, its checkbox column `D`, and `validateStatusDropdownMatchesOptions_` all
-span the same `C2:C60` on purpose. **Keep those four in step.**
+formula and its checkbox column `D` span the same `C2:C60` on purpose — **keep
+those two in step with the rule.**
+
+Because the rule reads the tab directly, the list and the counting definition
+cannot silently diverge. That guarantee is the reason to keep it range-based: a
+literal list would need a checker to catch a status added in one place and not
+the other.
 
 Colours: `נוכח #D4EDBC`, `חופש #E6CFF2`, `גיוס #54854B`, `שחרור #B7B9BB`,
 `לא מגויס #E6E7E9`. **`בקשה ליציאה` and the 26 `יציאה…` options are deliberately
