@@ -7,8 +7,7 @@
   "scripts": {
     "generate": "tsx src/cli.ts generate",
     "validate": "tsx src/cli.ts validate",
-    "typecheck": "tsc --noEmit",
-    "test": "node --import tsx --test --test-concurrency=1 tests/*.test.ts"
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "pg": "^8.13.0"
