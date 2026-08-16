@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import type { SheetData } from '../types';
 import { ScheduleGrid } from './ScheduleGrid';
+import { ScheduleLegend } from './ScheduleLegend';
 import { getStationBadgeColors } from '../utils/stationColors';
 import { todayShavtzakStr } from '../hooks/useShavtzak';
 import { timeOfDayMinutes } from './Shavtzak';
@@ -213,12 +214,15 @@ export function PersonalSchedule({ data, shavtzakAll }: Props) {
 
       {/* Schedule */}
       {selectedSoldier && filteredDates.length > 0 && (
-        <ScheduleGrid
-          soldiers={[selectedSoldier]}
-          dates={filteredDates}
-          dayNames={dayNames}
-          showName={false}
-        />
+        <>
+          <ScheduleGrid
+            soldiers={[selectedSoldier]}
+            dates={filteredDates}
+            dayNames={dayNames}
+            showName={false}
+          />
+          <ScheduleLegend soldiers={[selectedSoldier]} dates={filteredDates} />
+        </>
       )}
 
       {selectedSoldier && filteredDates.length === 0 && (
@@ -230,9 +234,6 @@ export function PersonalSchedule({ data, shavtzakAll }: Props) {
           <p className="text-lg">בחר חייל להצגת הלוז</p>
         </div>
       )}
-
-      {/* Legend */}
-      <Legend />
     </div>
   );
 }
@@ -352,25 +353,6 @@ function InfoField({ label, value }: { label: string; value: string }) {
     <div>
       <dt className="text-xs font-medium text-gray-500">{label}</dt>
       <dd className="text-sm font-semibold text-gray-800">{value || '—'}</dd>
-    </div>
-  );
-}
-
-function Legend() {
-  const items = [
-    { bg: 'bg-green-100', text: 'text-green-800', label: 'נוכח' },
-    { bg: 'bg-blue-100', text: 'text-blue-800', label: 'חופש' },
-    { bg: 'bg-purple-100', text: 'text-purple-800', label: 'שחרור' },
-    { bg: 'bg-red-100', text: 'text-red-800', label: 'לא מגיע' },
-    { bg: 'bg-orange-100', text: 'text-orange-800', label: 'יציאה בערב' },
-  ];
-  return (
-    <div className="flex flex-wrap gap-2 text-xs">
-      {items.map((i) => (
-        <span key={i.label} className={`rounded px-2 py-0.5 font-medium ${i.bg} ${i.text}`}>
-          {i.label}
-        </span>
-      ))}
     </div>
   );
 }
