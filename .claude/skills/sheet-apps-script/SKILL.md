@@ -64,17 +64,44 @@ proven otherwise.
 and shared with elyashivlavi@gmail.com, bound to spreadsheet
 `1FCuaQsOvDzrHcVhlYy49Mr5p6gTyTjEF1GqnW5frXDg`.
 
-- `ShabtzakOps.js` (~1.8k lines) — header `v3.11 שעון לחימה 14:00-14:00`.
-  Validation (rest between shifts, overlaps, כרמל based on defense posts, כרמל
-  minimum staff, tracker based on tours, daily hours, availability), the כרמל
-  fills, and the roster-status diff dialog.
+- `ShabtzakOps.js` (~1.9k lines) — header `v3.17 שעון לחימה 14:00-14:00`.
+  Validation (rest between shifts, overlaps, daily-mission exclusivity, כרמל
+  based on defense posts, כרמל minimum staff, tracker based on tours, daily
+  hours, availability), the כרמל fills, and the roster-status diff dialog.
 
 **Daily missions are written four ways** and all of them mean the same thing:
 `יומי`, `14:00-14:00`, and the split-at-09:00 pair `14:00-09:00` (19h) +
 `09:00-14:00` (5h). v3.11 classifies any range of `DAILY_MIN_SPAN_HOURS` (12) or
 more as a daily mission — counted as `DAILY_HOURS` (8) toward the cap and
 excluded from overlap checks, exactly like `יומי`. The short complement stays an
-ordinary shift (owner decision).
+ordinary shift (owner decision). ⚠ Since v3.17 a **split** daily keeps its
+written range (`spanStartMin/spanEndMin`, surfaced by `shiftWindowOnOpAxis_`) —
+it owns only that window, not the whole day; only `יומי`/`14:00-14:00` own the
+full 14:00→14:00. Exclusivity, availability and exit checks all measure against
+that owned window. Measured before shipping: the blanket "daily = whole day"
+rule produced 4 false parallel-errors (the deliberate split+tail pattern) and a
+false חופש conflict on a row ending exactly at the changeover.
+
+**Daily missions are exclusive by default — keyed on time shape, never Hebrew
+keywords** (owner decision 2026-08-16). The sheet renamed the daily standby from
+`כוננות|התקפי` to `התקפי|התקפי` on 09/08 and every keyword-keyed rule silently
+flipped: the standby stopped blocking and started over-blocking in new ways.
+Now `validateDailyMissionExclusivity_` (Ops) errors on any time-overlapping pair
+where one row is daily, with the exemptions in ONE commented list
+(`isExemptFromDailyExclusivity_`): tracker, carmel, and standby↔activity —
+**the attack standby team is who executes התקפי activities** (תגבצ/פטרול rows
+with real hours), so that pair is legal in both scripts and both directions.
+Engine-side the standby is `isDailyAttackAssignment_` (attack + `יומי` or ≥24h
+range) and counts as konenut hours (0 work) in both hour counters, matching
+Ops's `hoursForDailyTotal = 0` — the v3.19 fix finished for the modern spelling.
+A daily row is also checked against **both** roster status columns: tomorrow's
+חופש/לא מגויס means the soldier leaves at the 06:00 changeover (Sunday 09:00)
+and the daily's tail is uncovered — an error (owner ruled: error, not warning,
+even though rotation eves print ~17 of them), and the engine rejects such
+candidates via `findAbsenceConflict_` (interval intersection over all three
+roster columns, deliberately outside `availabilityCache`). The whole invariant
+is pinned as a matrix over 7 daily flavors — including a never-seen position
+text — in `tests/apps-script-daily-exclusivity.test.ts`.
 
 Handling only the literal word `יומי` and counting the other spellings at 19–24h
 produced **184 over-8h errors and 50 overlap errors across 13 days of real data,
