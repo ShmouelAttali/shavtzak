@@ -18,8 +18,9 @@ setpriv --reuid=postgres --regid=postgres --clear-groups /usr/lib/postgresql/16/
 psql -h localhost -p 55432 -U postgres -c "alter user postgres password 'test'"
 ```
 
-Seed a test DB by running the scheduler suite once, or programmatically via
-`scheduler/tests/helpers.ts` (`freshSchema()` + `seedSoldiers()`), then
+Seed a test DB programmatically via the scheduler's own modules
+(`scheduler/tests/` was deleted 2026-08-16 — no suite or helpers remain; write a
+throwaway seed script against `scheduler/src` if needed), then
 `generate()`/`persist()` a couple of days.
 
 ## Working in a worktree (`.claude/worktrees/<name>`)

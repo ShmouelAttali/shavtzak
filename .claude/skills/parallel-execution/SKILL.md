@@ -80,11 +80,12 @@ it work in the worktree it already has. Two more consequences worth knowing:
 
 ## 4. Isolated test database per agent (critical gotcha)
 
-`scheduler/tests` run **serially against one shared `shavtzak_test` DB** — parallel
-agents running the suite at once WILL collide. The harness keys off
-`SCHEDULER_TEST_DATABASE_URL` (`tests/env.ts`), so give each agent its own DB.
-`freshSchema()` (`tests/helpers.ts`) drops/recreates the *schema* but NOT the
-database, so pre-create them first:
+(`scheduler/tests` was deleted 2026-08-16 — the scheduler is frozen and untested.
+This section now applies only to root `tests/*.test.ts` files that hit a Postgres
+test DB.) DB-backed suites run **serially against one shared `shavtzak_test` DB** —
+parallel agents running them at once WILL collide. The harness keys off
+`SCHEDULER_TEST_DATABASE_URL`, so give each agent its own DB. A fresh-schema
+helper drops/recreates the *schema* but NOT the database, so pre-create them first:
 
 ```bash
 docker start shavtzak-pg   # (create if missing per CLAUDE.md); wait for pg_isready
