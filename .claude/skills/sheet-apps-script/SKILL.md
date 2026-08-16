@@ -370,9 +370,38 @@ Three live counters sit above the task table — title in J, formula in K:
 
 | | |
 |---|---|
-| `K3` חיילים זמינים | from `מצבת החיילים`, the E1 date column: not חופש / לא מגויס, **מחלקה 1/2/3 only** |
+| `K3` חיילים זמינים | from `מצבת החיילים`, the E1 date column: not חופש / לא מגויס, **מחלקה 1/2/3 only**, **and not out for the whole 14→14 day** |
 | `K4` חיילים במגן | distinct pool soldiers currently assigned to a `*מגן*` position on this tab |
 | `K5` חיילים לסיור | `K3 − K4 − 12 סטטיות − 8 התקפי − 2 תורנים − חפק − קצין מוצב`, target 10–12 |
+
+**K3's op-day clause (2026-08-14).** The count was a *calendar-column* count, so
+someone whose day reads `יציאה מ14` and whose next day reads `יציאה עד 14` was
+counted as an available body while owning zero minutes of the operational day.
+K3 now multiplies in `(1 - outToday*outTomorrow)`, where `outToday` is
+`REGEXMATCH(…,"^יציאה\s+מ\s*(1[0-4]|[0-9])$")` and `outTomorrow` is
+`לא מגויס` or `^יציאה\s+עד\s*(1[4-9]|2[0-3])$` on the `E1+1` column.
+
+Three things that are easy to get wrong here:
+
+- **`חופש` on the tomorrow column must NOT count as "out".** With a non-`חופש`
+  today it is always a *first* vacation day, so by the v3.15 changeover rule the
+  soldier is still present until 06:00 and genuinely has hours in the day.
+- **The tomorrow column may not exist** (the last date in the sheet).
+  `IFERROR(MATCH(E1+1,…), MATCH(E1,…))` falls back to today's column, which can
+  never satisfy both halves — so it degrades to the old count instead of
+  erroring the whole cell into `אין עמודה לתאריך E1`.
+- Measured before shipping: over the whole roster this changes **2 date columns
+  out of ~110**, one soldier each. It is a correctness fix, not a big number.
+
+Rollback formula (the pre-change K3), should it ever be needed:
+
+```
+=IFERROR(SUMPRODUCT((('מצבת החיילים'!$I$4:$I$145=1)+('מצבת החיילים'!$I$4:$I$145=2)+('מצבת החיילים'!$I$4:$I$145=3))*('מצבת החיילים'!$E$4:$E$145<>"")*(INDEX('מצבת החיילים'!$O$4:$DG$145,0,MATCH($E$1,'מצבת החיילים'!$O$1:$DG$1,0))<>"")*(INDEX('מצבת החיילים'!$O$4:$DG$145,0,MATCH($E$1,'מצבת החיילים'!$O$1:$DG$1,0))<>"חופש")*(INDEX('מצבת החיילים'!$O$4:$DG$145,0,MATCH($E$1,'מצבת החיילים'!$O$1:$DG$1,0))<>"לא מגויס")),"אין עמודה לתאריך E1")
+```
+
+⚠ When A/B-ing a formula against a hardcoded date, `$E$1` is a **prefix of
+`$E$145`** — a naive `replace('$E$1', …)` corrupts the roster range into
+`$E$4:DATE(…)45` and yields a parse error that looks like the formula is wrong.
 
 ⚠ **Rows above the task table are capped by `config.tasks.headerSearchRows`.**
 `resolveScheduleLayout_` scans that many rows for the header; anything below is
@@ -437,6 +466,23 @@ Two traps, and they compose:
   So the same keyword list is safe in one file and broken in the other. When
   matching a unit or role on the Ops side, go through `normalizeUnitText_`.
 
+**The מפל"ג is no longer a blanket exclusion (engine v3.20).** It used to sit in
+`excludedPlatoonOrRoleKeywords` *and* be dropped at roster-read time by
+`includePlatoons`, so the סמ"פ who mans the first חפק seat every day could not be
+found at all and his correct assignment was reported as
+`⚠ החייל לא נמצא במצבת החיילים`. Now `commandStaffPlatoonKeywords` reads him in,
+flagged `isCommandStaff`, and `isCommandStaffSeat_` gates him: מפל"ג **only** on
+the first חפק row, and **only** מפל"ג there. `excludedPlatoonOrRoleKeywords` is
+now the חמ"ל alone. Two things to keep straight if you touch it:
+
+- The gate is **task-dependent, so it must stay outside `availabilityCache`** —
+  that cache is keyed per soldier per *day*, so a verdict cached from one slot
+  would leak onto every other slot that day. Same trap as the short exit (v3.6)
+  and the vacation changeover (v3.18).
+- Putting the keyword back into `excludedPlatoonOrRoleKeywords` would silently
+  win over the seat rule: `getAvailabilityStatus_` runs first and rejects
+  outright.
+
 The census is one API call and settles it — list every distinct
 `position || type` in `כל השבצק` with counts before adding a keyword. That is
 how the `תורנים` spelling was found, and how you'd notice a new one appearing.
@@ -446,12 +492,21 @@ Order matters too: `כונן גשש ותורן רס"פ` contains both `גשש` a
 ## Verifying an engine change before you deploy it
 
 A push is a live deploy, and the engine is ~2.5k lines of scoring where a
-one-line change can reorder every candidate list. Two committed tools:
+one-line change can reorder every candidate list. Three committed tools:
 
 ```bash
 npx tsx apps-script/tools/offline-validate.mts --last 14   # validators, per op day + blame
 npx tsx apps-script/tools/ab-recommendations.mts           # engine: HEAD vs working tree
+npx tsx apps-script/tools/ab-availability.mts              # the availability validator
 ```
+
+⚠ **`ab-availability.mts` hides the `זמין בלי משימה` rule by default** — it is
+noisy by nature and is not what an availability change is usually about. That
+means a change *to that rule* A/Bs as `0 errors gone, 0 new` no matter what you
+did: the tool is filtering out the only thing you touched. Pass `--unassigned`
+to invert the filter and measure exactly that rule. Same lesson as the "sheet
+moves under you" trap below — a green run is only evidence if it could have
+been red.
 
 `ab-recommendations.mts` runs both versions of the engine over the *same* live
 snapshot in a fake `SpreadsheetApp` and prints only the cells that differ, so

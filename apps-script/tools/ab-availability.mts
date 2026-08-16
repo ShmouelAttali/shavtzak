@@ -5,6 +5,7 @@
  *   npx tsx apps-script/tools/ab-availability.mts             # last 14 op days
  *   npx tsx apps-script/tools/ab-availability.mts --last 30
  *   npx tsx apps-script/tools/ab-availability.mts --base <ref>
+ *   npx tsx apps-script/tools/ab-availability.mts --unassigned   # only "זמין בלי משימה"
  *
  * Why this exists: offline-validate.mts covers rest / overlaps / daily hours,
  * but never ran validateAvailabilityAndMissingAssignments_ — it has no roster —
@@ -37,6 +38,7 @@ const flag = (name: string, fallback: string) => {
 };
 const BASE = flag('--base', 'HEAD');
 const LAST = Number(flag('--last', '14'));
+const UNASSIGNED = argv.indexOf('--unassigned') !== -1;
 
 for (const f of ['.env', '.env.local']) {
   const p = path.join(REPO, f);
@@ -151,9 +153,14 @@ function errorsFor(ctx: any, opDay: Date): string[] {
 
   const errors: string[] = [];
   ctx.validateAvailabilityAndMissingAssignments_(parsed, roster, errors, []);
-  // the "marked available but unassigned" alert is a different rule and is
-  // noisy by nature; it is not what an availability change is about
-  return errors.filter((e) => e.indexOf('בלי משימה') === -1);
+  // The "marked available but unassigned" alert is a different rule and is
+  // noisy by nature, so by default it is excluded — an availability change is
+  // not about it. --unassigned inverts that and measures *only* that rule,
+  // which is the only way to A/B a change to it: with the default filter the
+  // comparison silently reports "0 changed" no matter what you did.
+  return UNASSIGNED
+    ? errors.filter((e) => e.indexOf('בלי משימה') !== -1)
+    : errors.filter((e) => e.indexOf('בלי משימה') === -1);
 }
 
 console.log(`base ${BASE}  |  ${opDays.length} operational days, ${label(opDays[0])} → ${label(opDays[opDays.length - 1])}`);
