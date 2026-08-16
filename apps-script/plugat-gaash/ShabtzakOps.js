@@ -1,11 +1,30 @@
 /***************
- * שבצ"ק - ולידציה, מילוי ומצבה (קובץ מאוחד) - v3.16 שעון לחימה 14:00-14:00
+ * שבצ"ק - ולידציה, מילוי ומצבה (קובץ מאוחד) - v3.17 שעון לחימה 14:00-14:00
  *
  * Sheet names:
  * - כל השבצק
  * - מצבת החיילים
  *
- * שינויים בגרסה זו (v3.16) - "זמין" נמדד על היממה המבצעית:
+ * שינויים בגרסה זו (v3.17) - משימה יומית: בלעדיות, ושתי עמודות סטטוס:
+ * 1. ולידציה חדשה, validateDailyMissionExclusivity_: מי שמחזיק שורה
+ *    יומית אינו מחזיק שום שורה נוספת באותה יממה מבצעית. הזיהוי הוא
+ *    לפי *צורת הזמן* (isDaily) ולא לפי מילת מפתח בעברית - ב-09/08
+ *    שינה הגיליון את כתיב הכוננות ההתקפית מ"כוננות | התקפי" ל"התקפי |
+ *    התקפי", וכל כלל תלוי-מילה נפל בשקט. בכתיב הישן שורה כזאת שווה 0
+ *    שעות ופטורה מבדיקת החפיפות, ולכן כוננות במקביל לעמדה סטטית לא
+ *    הפיקה שום שגיאה. הפטורים - גשש, כרמל/כוננות, וזוג
+ *    כוננות התקפית + פעילות התקפית - מרוכזים במקום אחד.
+ * 2. שורה יומית שווה 0 שעות עבודה גם בכתיב החדש: התנאי ב-
+ *    buildParsedShifts_ הורחב מ-isAttackReadiness לכל שורת התקפי
+ *    *יומית*. בלעדיו כוננות + תגבצ ערב הפיקו "יותר מ־8 שעות ביום"
+ *    על 13 שעות, בעוד שהצמד הזה מאושר (הכוננות היא שמבצעת אותן).
+ * 3. שורה יומית נבדקת מול *שתי* עמודות הסטטוס. slotIsTomorrow דרשה
+ *    טווח שעות אמיתי, ולכן שורה יומית נבדקה מול "היום" בלבד: חייל
+ *    שיוצא לחופש מחר ב-06:00 עבר בשקט, למרות ש-06:00-14:00 של היממה
+ *    נשארות בלי איוש. שעת ההחלפה של v3.15 נשמרת, ובלי עמודת "מחר"
+ *    שתי העמודות זהות ולא מדווחים פעמיים.
+ *
+ * שינויים ב-v3.16 - "זמין" נמדד על היממה המבצעית:
  * 1. availableMinutesInOpDay_ מחשבת כמה מהיממה (14:00 עד 14:00 למחרת)
  *    החייל בכלל נוכח בה, מתוך שלושת המקורות שכבר קיימים בקובץ: חופש /
  *    לא מגויס, חלון ההחלפה של החופש (v3.15) והיציאה הקצרה (v3.12).
@@ -370,7 +389,12 @@ function buildParsedShifts_(rows, errors, warnings, contextLabel) {
       endMin: timeInfo.endMin,
       // כרמל, כוננות התקפית וכונן גשש הם כוננויות שינה -
       // לא נספרים בתקרת 8 השעות היומית.
-      hoursForDailyTotal: (isCarmel || isAttackReadiness || isTracker) ? 0 : timeInfo.hoursForDailyTotal
+      // v3.17: "כוננות התקפית" מזוהה כאן לפי צורת הזמן - כל שורת התקפי
+      // *יומית* - ולא רק לפי המילה "כוננות", שהגיליון הפסיק לכתוב.
+      // אחרת הכוננות מוסיפה 8 שעות, והצמד המאושר כוננות + תגבצ ערב
+      // מפיק "יותר מ־8 שעות ביום" על משמרת אחת בת 5 שעות.
+      hoursForDailyTotal: (isCarmel || isAttackReadiness || isTracker ||
+        (isAttackGroup && timeInfo.isDaily)) ? 0 : timeInfo.hoursForDailyTotal
     });
   });
 
@@ -656,6 +680,68 @@ function validateOverlaps_(targetShifts, errors) {
       }
     }
   });
+}
+
+/**
+ * v3.17: משימה יומית היא בלעדית - מי שמחזיק בה אינו מחזיק שום עמדה
+ * נוספת באותה יממה מבצעית.
+ *
+ * הזיהוי הוא לפי *צורת הזמן* (isDaily: "יומי", "14:00-14:00", והחצי
+ * הארוך של משימה מפוצלת) ולא לפי מילת מפתח בעברית. ב-09/08 שינה
+ * הגיליון את כתיב הכוננות ההתקפית מ"כוננות | התקפי" ל"התקפי | התקפי",
+ * וכל כלל תלוי-מילה נפל בשקט. הבדיקה הזאת היא רשת הביטחון: כתיב חדש
+ * או עמדה שאיש לא ראה עוד נופלים למסלול הבלעדי כברירת מחדל.
+ *
+ * ⚠ שורה יומית אינה נכנסת ל-validateOverlaps_ (אין לה טווח שעות
+ * אמיתי) ובכתיב הישן גם שווה 0 שעות, ולכן עד כה כוננות במקביל לעמדה
+ * סטטית לא הפיקה שום שגיאה - לא חפיפה ולא חריגת שעות.
+ */
+function validateDailyMissionExclusivity_(targetShifts, errors) {
+  const bySoldier = groupBy_(
+    targetShifts.filter(function(s){ return !shouldIgnoreSoldier_(s.soldier); }),
+    function(s){ return s.soldier; }
+  );
+
+  bySoldier.forEach(function(shifts, soldier){
+    for (let i = 0; i < shifts.length; i++) {
+      for (let j = i + 1; j < shifts.length; j++) {
+        const a = shifts[i];
+        const b = shifts[j];
+        if (!a.isDaily && !b.isDaily) continue;
+
+        const daily = a.isDaily ? a : b;
+        const other = a.isDaily ? b : a;
+        if (isExemptFromDailyExclusivity_(daily, other)) continue;
+
+        errors.push(
+          'משימה יומית במקביל למשימה נוספת: ' + soldier + ' — ' +
+          describeShift_(daily) + ' וגם ' + describeShift_(other) + '.'
+        );
+      }
+    }
+  });
+}
+
+/**
+ * v3.17: הפטורים מבלעדיות המשימה היומית - כולם, במקום אחד.
+ * מילת מפתח בעברית לא מחליטה *אם* שורה יומית בלעדית, אלא רק מעניקה
+ * פטור מפורש; כל פטור חדש נכנס לכאן ולשום מקום אחר.
+ */
+function isExemptFromDailyExclusivity_(daily, other) {
+  // כונן גשש הוא כוננות שינה על גבי משימה אמיתית, וכשהוא נכתב "יומי"
+  // הוא חוסם רק את משמרתו בפועל (אותו כלל כמו במנוע מאז v3.2).
+  if (daily.isTracker || other.isTracker) return true;
+
+  // כרמל/כוננות מוחזקים מעצם הגדרתם על גבי משימה אחרת - hoursForDailyTotal
+  // שלהם 0, והם מסוננים גם מבדיקת המנוחה.
+  if (daily.isCarmel || other.isCarmel) return true;
+
+  // הצמד המאושר (החלטת בעלים 16/08): צוות הכוננות ההתקפית הוא זה
+  // שמבצע את הפעילויות ההתקפיות (תגבצ ערב / פטרול / צ'קפוסט), ולכן
+  // כוננות התקפית יומית ופעילות התקפית באותה יממה תקינות.
+  if (daily.isAttackGroup && other.isAttackGroup) return true;
+
+  return false;
 }
 
 /**
@@ -1033,19 +1119,12 @@ function validateAvailabilityAndMissingAssignments_(targetShifts, roster, errors
     return windows;
   };
 
-  targetShifts.forEach(function(s){
-    if (shouldIgnoreSoldier_(s.soldier)) return;
-    assignedNames.add(s.soldier);
-
-    const soldier = roster.soldiers.get(s.soldier);
-    if (!soldier) return; // מטופל בהמשך
-
-    const isTomorrow = slotIsTomorrow(s);
+  // בדיקת חצי אחד של היממה מול עמודת הסטטוס שלו.
+  // מחזירה true = "טופל, אין להמשיך לשאר הבדיקות של השורה הזאת".
+  const checkStatusHalf = function(s, soldier, isTomorrow, window) {
     const unavailable = isTomorrow ? soldier.unavailableTomorrow : soldier.unavailableToday;
     const status = isTomorrow ? soldier.statusTomorrow : soldier.statusToday;
     const part = isTomorrow ? 'מחר' : 'היום';
-
-    const window = shiftWindowOnOpAxis_(s);
     const dayContext = dayContextFor(soldier, isTomorrow);
 
     if (unavailable) {
@@ -1057,7 +1136,7 @@ function validateAvailabilityAndMissingAssignments_(targetShifts, roster, errors
       if (!leavesToday) {
         conflicts.push({ name: s.soldier, status: status, part: part, shift: describeShift_(s) });
       }
-      return;
+      return true;
     }
 
     // v3.15: ביום החזרה מחופש החייל מגיע רק בשעת ההחלפה - משמרת
@@ -1069,7 +1148,32 @@ function validateAvailabilityAndMissingAssignments_(targetShifts, roster, errors
         shift: describeShift_(s),
         changeText: dayContext.changeText
       });
-      return;
+      return true;
+    }
+
+    return false;
+  };
+
+  targetShifts.forEach(function(s){
+    if (shouldIgnoreSoldier_(s.soldier)) return;
+    assignedNames.add(s.soldier);
+
+    const soldier = roster.soldiers.get(s.soldier);
+    if (!soldier) return; // מטופל בהמשך
+
+    const window = shiftWindowOnOpAxis_(s);
+
+    // v3.17: משימה יומית תופסת את שני חצאי היממה, ולכן היא נבדקת מול
+    // *שתי* עמודות הסטטוס. עד כה slotIsTomorrow דרשה טווח שעות אמיתי,
+    // ולכן שורה יומית נבדקה מול "היום" בלבד - וחייל שיוצא לחופש מחר
+    // ב-06:00 עבר בשקט, למרות ש-06:00-14:00 נשארות בלי איוש.
+    // ⚠ בלי עמודת "מחר" שתי העמודות זהות - חצי אחד, לא דיווח כפול.
+    const halves = (s.isDaily && soldier.hasTomorrowColumn)
+      ? [false, true]
+      : [slotIsTomorrow(s)];
+
+    for (let i = 0; i < halves.length; i++) {
+      if (checkStatusHalf(s, soldier, halves[i], window)) return;
     }
 
     if (!window) return;
@@ -2197,6 +2301,7 @@ function runShabzakValidation_(parsedTarget, parsedPrevious, roster, titleDate, 
 
   validateRestBetweenShifts_(parsedTarget, parsedPrevious, errors);
   validateOverlaps_(parsedTarget, errors);
+  validateDailyMissionExclusivity_(parsedTarget, errors);
   validateCarmelBasedOnDefensePosts_(parsedTarget, parsedPrevious, errors);
   validateCarmelMinimumStaff_(parsedTarget, errors);
   validateTrackerBasedOnTours_(parsedTarget, parsedPrevious, errors);
@@ -2210,6 +2315,8 @@ function runShabzakValidation_(parsedTarget, parsedPrevious, roster, titleDate, 
     'נבדקו:',
     '- מנוחה של לפחות 8 שעות בין שמירות, כולל היום הקודם',
     '- חפיפות בין משימות',
+    '- משימה יומית בלעדית: בלי עמדה נוספת באותה יממה ' +
+      '(פטורים: גשש, כרמל, ופעילות התקפית על גבי כוננות התקפית)',
     '- כרמל על בסיס יורדים מעמדות הגנה',
     '- לפחות 3 כרמל חטיבה + 1 מפקד כרמל חטיבה בכל משמרת',
     '- כונן גשש על בסיס יורדי סיור (14/22/07)',
