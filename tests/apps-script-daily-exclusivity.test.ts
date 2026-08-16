@@ -379,3 +379,57 @@ test('validation: an approved exit still collides with a daily row', () => {
 test('validation: a fully present soldier on the standby raises nothing', () => {
   assert.deepEqual(opsErrors([STANDBY]), []);
 });
+
+/* ============================================================
+ * 5. a SPLIT daily mission owns only its written range (v3.17)
+ *
+ * The sheet splits a daily mission on purpose — "14:00-09:00" plus a
+ * separate "09:00-14:00" seat — precisely to free the tail. Measured on
+ * 14 real op days: a blanket same-op-day rule flagged 4 such sequential
+ * pairs as "parallel". The owned window is what exclusivity, availability
+ * and exits must be measured against.
+ * ============================================================ */
+
+const SPLIT_LONG: Row = ['מגן + תגבצ', 'מגן השומרון', '14:00-09:00'];
+
+test('a split daily keeps its written range; a full-day range stays identical to יומי', () => {
+  const split = ctx.parseShiftTime_(
+    { rowNumber: 1, timeText: '14:00-09:00', type: 'מגן השומרון', position: 'מגן + תגבצ' }, [], 'test');
+  assert.equal(split.isDaily, true);
+  assert.equal(split.spanStartMin, 14 * 60);
+  assert.equal(split.spanEndMin, (9 + 24) * 60);
+
+  const full = ctx.parseShiftTime_(
+    { rowNumber: 1, timeText: '14:00-14:00', type: 'מגן השומרון', position: 'מגן + תגבצ' }, [], 'test');
+  assert.equal(full.spanStartMin, null);
+  assert.equal(full.spanEndMin, null);
+});
+
+test('validation: the long half plus a shift after it ends is sequential, not parallel', () => {
+  // his daily ended 09:00; a 10:00-14:00 static afterwards is the freed tail
+  const errors = opsErrors([SPLIT_LONG, ['שג', 'עמדות הגנה', '10:00-14:00']]);
+  assert.equal(hasExclusivityError(errors), false, JSON.stringify(errors));
+});
+
+test('validation: a shift inside the split range still collides', () => {
+  // 06:00-10:00 overlaps the 14:00-09:00 range at 06:00-09:00
+  const errors = opsErrors([SPLIT_LONG, ['שג', 'עמדות הגנה', '06:00-10:00']]);
+  assert.ok(hasExclusivityError(errors), JSON.stringify(errors));
+});
+
+test('validation: a 14:00-06:00 daily ending at the changeover is fine for tomorrow-חופש', () => {
+  // half-open, like every other boundary here: gone FROM 06:00, done BY 06:00
+  const errors = opsErrors([['התקפי', 'התקפי', '14:00-06:00']], { today: 'נוכח', tomorrow: 'חופש' });
+  assert.deepEqual(errors, []);
+});
+
+test('validation: a 14:00-09:00 daily with tomorrow-חופש is a real conflict — 3 uncovered hours', () => {
+  const errors = opsErrors([SPLIT_LONG], { today: 'נוכח', tomorrow: 'חופש' });
+  assert.ok(errors.some((e) => e.indexOf('חופש') !== -1), JSON.stringify(errors));
+});
+
+test('validation: an exit tomorrow morning no longer collides with a 14:00-06:00 daily', () => {
+  // the exit window 10:00-14:00 tomorrow starts after the daily's range ends
+  const errors = opsErrors([['התקפי', 'התקפי', '14:00-06:00']], { today: 'נוכח', tomorrow: 'יציאה מ10' });
+  assert.deepEqual(errors, []);
+});

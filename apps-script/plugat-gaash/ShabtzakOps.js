@@ -23,6 +23,13 @@
  *    שיוצא לחופש מחר ב-06:00 עבר בשקט, למרות ש-06:00-14:00 של היממה
  *    נשארות בלי איוש. שעת ההחלפה של v3.15 נשמרת, ובלי עמודת "מחר"
  *    שתי העמודות זהות ולא מדווחים פעמיים.
+ * 4. משימה יומית *מפוצלת* תופסת רק את הטווח שכתוב בה: הטווח נשמר
+ *    (spanStartMin/spanEndMin) ו-shiftWindowOnOpAxis_ מחזירה אותו,
+ *    כך שבלעדיות, זמינות ויציאות נמדדות מול החלון האמיתי. בלעדיו
+ *    "14:00-09:00" + עמדה ב-10:00 (הזנב שהפיצול משחרר בכוונה) נפסלה
+ *    כחפיפה, ו"14:00-06:00" אצל מי שיוצא לחופש מחר ב-06:00 דווחה
+ *    כשיבוץ בחופש. נמדד על 14 ימים אמיתיים: 4 מ-7 שגיאות הבלעדיות
+ *    ו-חלק מ-44 התראות הזמינות היו הדפוס הזה.
  *
  * שינויים ב-v3.16 - "זמין" נמדד על היממה המבצעית:
  * 1. availableMinutesInOpDay_ מחשבת כמה מהיממה (14:00 עד 14:00 למחרת)
@@ -387,6 +394,8 @@ function buildParsedShifts_(rows, errors, warnings, contextLabel) {
       isDaily: timeInfo.isDaily,
       startMin: timeInfo.startMin,
       endMin: timeInfo.endMin,
+      spanStartMin: timeInfo.spanStartMin !== undefined ? timeInfo.spanStartMin : null,
+      spanEndMin: timeInfo.spanEndMin !== undefined ? timeInfo.spanEndMin : null,
       // כרמל, כוננות התקפית וכונן גשש הם כוננויות שינה -
       // לא נספרים בתקרת 8 השעות היומית.
       // v3.17: "כוננות התקפית" מזוהה כאן לפי צורת הזמן - כל שורת התקפי
@@ -440,7 +449,16 @@ function parseShiftTime_(row, warnings, contextLabel) {
     // "יומי" - אותן עמדות, אותו תוכן. בלי זה היא נספרת לפי אורכה המלא
     // (חריגה ודאית מתקרת 8 השעות) וגם חופפת לכל שאר המשבצות של אותו
     // חייל באותו יום.
-    if (endOp - startOp >= CONFIG.DAILY_MIN_SPAN_HOURS * 60) return dailyTimeInfo_();
+    // v3.17: בטווח *חלקי* ("14:00-09:00") הטווח המפורש נשמר
+    // (spanStartMin/spanEndMin) - משימה יומית מפוצלת תופסת רק את הטווח
+    // שכתוב בה, לא את היממה כולה. בלעדיות, זמינות ויציאות נמדדות מולו;
+    // בלעדיו "14:00-09:00" + עמדה ב-10:00 (הזנב שהפיצול קיים בדיוק כדי
+    // לשחרר) הייתה נפסלת כחפיפה. טווח של יממה שלמה ("14:00-14:00") נשאר
+    // זהה ל"יומי" בכל שדה - אותה משימה בכתיב אחר (מוצמד בבדיקות).
+    if (endOp - startOp >= 24 * 60) return dailyTimeInfo_();
+    if (endOp - startOp >= CONFIG.DAILY_MIN_SPAN_HOURS * 60) {
+      return Object.assign(dailyTimeInfo_(), { spanStartMin: startOp, spanEndMin: endOp });
+    }
 
     return {
       isDaily: false,
@@ -586,10 +604,17 @@ function vacationTransitionForDay_(prevStatus, dayStatus) {
 }
 
 // חלון המשבצת על ציר היממה המבצעית (דקות מחצות של יום השבצ"ק).
-// משימה יומית תופסת את היממה כולה.
+// משימה יומית שנכתבה "יומי" תופסת את היממה כולה; משימה יומית מפוצלת
+// ("14:00-09:00") תופסת רק את הטווח שכתוב בה (v3.17) - כך "14:00-06:00"
+// אצל מי שיוצא לחופש מחר ב-06:00 אינה חפיפה, בדיוק כמו במנוע.
 function shiftWindowOnOpAxis_(shift) {
   const dayStart = CONFIG.OPERATIONAL_DAY_START_HOUR * 60;
-  if (shift.isDaily) return { start: dayStart, end: dayStart + 24 * 60 };
+  if (shift.isDaily) {
+    if (shift.spanStartMin !== null && shift.spanStartMin !== undefined) {
+      return { start: shift.spanStartMin, end: shift.spanEndMin };
+    }
+    return { start: dayStart, end: dayStart + 24 * 60 };
+  }
   if (shift.hasRealTimeRange) return { start: shift.startMin, end: shift.endMin };
   return null;
 }
@@ -597,12 +622,16 @@ function shiftWindowOnOpAxis_(shift) {
 // משימה יומית = היממה המבצעית המלאה 14:00 עד 14:00 למחרת.
 // לצורך תקרת השעות היא נספרת כ-DAILY_HOURS (8) ולא כ-24, ובלי טווח
 // שעות אמיתי - כלומר לא נכנסת לבדיקת החפיפות.
+// v3.17: spanStartMin/spanEndMin - הטווח המפורש של משימה יומית מפוצלת
+// ("14:00-09:00"), על ציר היממה. null = נכתבה "יומי" ותופסת יממה שלמה.
 function dailyTimeInfo_() {
   return {
     isDaily: true,
     hasRealTimeRange: false,
     startMin: null,
     endMin: null,
+    spanStartMin: null,
+    spanEndMin: null,
     hoursForDailyTotal: CONFIG.DAILY_HOURS
   };
 }
@@ -695,6 +724,12 @@ function validateOverlaps_(targetShifts, errors) {
  * ⚠ שורה יומית אינה נכנסת ל-validateOverlaps_ (אין לה טווח שעות
  * אמיתי) ובכתיב הישן גם שווה 0 שעות, ולכן עד כה כוננות במקביל לעמדה
  * סטטית לא הפיקה שום שגיאה - לא חפיפה ולא חריגת שעות.
+ *
+ * "במקביל" = חפיפה בזמן על החלון שהמשימה באמת תופסת (shiftWindowOnOpAxis_):
+ * "יומי" תופס יממה שלמה, אבל משימה מפוצלת ("14:00-09:00") תופסת רק את
+ * הטווח שלה - מי שסיים אותה ב-09:00 ועלה לעמדה ב-10:00 אינו במקביל.
+ * נמדד על 14 ימים אמיתיים: הכלל הגורף ("אותה יממה") ייצר 7 שגיאות
+ * ש-4 מהן היו בדיוק דפוס הפיצול-והמשלים הזה.
  */
 function validateDailyMissionExclusivity_(targetShifts, errors) {
   const bySoldier = groupBy_(
@@ -712,6 +747,11 @@ function validateDailyMissionExclusivity_(targetShifts, errors) {
         const daily = a.isDaily ? a : b;
         const other = a.isDaily ? b : a;
         if (isExemptFromDailyExclusivity_(daily, other)) continue;
+
+        const dailyWindow = shiftWindowOnOpAxis_(daily);
+        const otherWindow = shiftWindowOnOpAxis_(other);
+        if (!dailyWindow || !otherWindow) continue; // שורה לא-פריסה כבר קיבלה אזהרת פורמט
+        if (!rangesOverlap_(dailyWindow.start, dailyWindow.end, otherWindow.start, otherWindow.end)) continue;
 
         errors.push(
           'משימה יומית במקביל למשימה נוספת: ' + soldier + ' — ' +
