@@ -1,11 +1,25 @@
 /***************
- * שבצ"ק - ולידציה, מילוי ומצבה (קובץ מאוחד) - v3.15 שעון לחימה 14:00-14:00
+ * שבצ"ק - ולידציה, מילוי ומצבה (קובץ מאוחד) - v3.16 שעון לחימה 14:00-14:00
  *
  * Sheet names:
  * - כל השבצק
  * - מצבת החיילים
  *
- * שינויים בגרסה זו (v3.15) - שעת ההחלפה של החופש:
+ * שינויים בגרסה זו (v3.16) - "זמין" נמדד על היממה המבצעית:
+ * 1. availableMinutesInOpDay_ מחשבת כמה מהיממה (14:00 עד 14:00 למחרת)
+ *    החייל בכלל נוכח בה, מתוך שלושת המקורות שכבר קיימים בקובץ: חופש /
+ *    לא מגויס, חלון ההחלפה של החופש (v3.15) והיציאה הקצרה (v3.12).
+ * 2. ההתראה "מסומן כזמין אבל בלי משימה" מדלגת על מי שאין לו ולו דקה
+ *    אחת ביממה. הזמינות נמדדה עד כה ברזולוציית יום קלנדרי, ולכן חייל
+ *    שסטטוסו "יציאה מ14" ולמחרת בחופש נראה זמין - היממה שלו ריקה
+ *    לגמרי, ובכל זאת נדלקה עליו התראה.
+ * 3. ההערה בהתראה מתארת עכשיו את היממה בפועל ("זמין 6 שעות ביממה"),
+ *    ולא את עמודות הסטטוס. הנוסח הקודם אמר על אותו חייל "זמין בחלק
+ *    היום" - בדיוק החצי שבו איננו.
+ * 4. ⚠ בלי עמודת "מחר" בגיליון החצי השני נחשב נוכח: עדיף התראה
+ *    מיותרת על התראה אמיתית שנבלעת.
+ *
+ * שינויים ב-v3.15 - שעת ההחלפה של החופש:
  * 1. ההחלפה היא ב-06:00, וביום ראשון ב-09:00. לכן יום היציאה לחופש ויום
  *    החזרה ממנו הם ימים *חלקיים*, ולא ימים חסומים:
  *      - ביום החופש הראשון אפשר לשבץ משמרת שנגמרת עד שעת ההחלפה
@@ -872,6 +886,79 @@ function isDefensePostShift_(shift) {
   return CONFIG.DEFENSE_POSTS.indexOf(normalize_(shift.position)) !== -1;
 }
 
+/**
+ * v3.16: כמה דקות מהיממה המבצעית (14:00 עד 14:00 למחרת) החייל בכלל
+ * נוכח בהן. 0 = הוא אינו חלק מהיממה הזאת.
+ *
+ * עד כה הזמינות נמדדה ברזולוציית יום קלנדרי, ולכן חייל שסטטוסו
+ * "יציאה מ14" והוא בחופש למחרת נראה זמין - היממה שלו ריקה לגמרי,
+ * ובכל זאת נדלקה עליו "מסומן כזמין אבל בלי משימה". כאן שני חצאי
+ * היממה נחתכים מול שלושת המקורות שכבר קיימים בקובץ: חופש / לא מגויס,
+ * חלון ההחלפה של החופש (v3.15) והיציאה הקצרה המאושרת (v3.12).
+ *
+ * ⚠ בלי עמודת "מחר" בגיליון אי אפשר לדעת מה קורה בחצי השני, ולכן הוא
+ * נחשב נוכח: עדיף התראה מיותרת על התראה אמיתית שנבלעת.
+ */
+function availableMinutesInOpDay_(soldier, roster) {
+  const dayStart = CONFIG.OPERATIONAL_DAY_START_HOUR * 60;
+  const dayEnd = dayStart + 24 * 60;
+  const blocked = [];
+
+  const block = function(start, end) {
+    const s = Math.max(start, dayStart);
+    const e = Math.min(end, dayEnd);
+    if (e > s) blocked.push({ start: s, end: e });
+  };
+
+  const halves = [
+    {
+      offset: 0,
+      status: soldier.statusToday,
+      prev: soldier.statusYesterday,
+      unavailable: soldier.unavailableToday,
+      known: true
+    },
+    {
+      offset: 24 * 60,
+      status: soldier.statusTomorrow,
+      prev: soldier.statusToday,
+      unavailable: soldier.unavailableTomorrow,
+      known: !!soldier.hasTomorrowColumn
+    }
+  ];
+
+  halves.forEach(function(half){
+    if (!half.known) return;
+
+    const dayDate = roster.targetDate ? addDays_(roster.targetDate, half.offset ? 1 : 0) : null;
+    const changeMin = vacationChangeMinutesForDate_(dayDate);
+    const transition = vacationTransitionForDay_(half.prev, half.status);
+
+    if (half.unavailable) {
+      // יום החופש הראשון: נוכח עד שעת ההחלפה בלבד. שעת ההחלפה תמיד
+      // לפני 14:00, ולכן בחצי "היום" החיתוך מבטל אותה ממילא.
+      if (transition === 'start') block(half.offset + changeMin, half.offset + 24 * 60);
+      else block(half.offset, half.offset + 24 * 60);
+    } else if (transition === 'end') {
+      // יום החזרה מחופש: מגיע רק בשעת ההחלפה.
+      block(half.offset, half.offset + changeMin);
+    }
+
+    const exit = parseExitStatus_(half.status);
+    if (exit) block(half.offset + exit.startMin, half.offset + exit.endMin);
+  });
+
+  blocked.sort(function(a, b){ return a.start - b.start; });
+
+  let free = 0;
+  let cursor = dayStart;
+  blocked.forEach(function(b){
+    if (b.start > cursor) free += b.start - cursor;
+    cursor = Math.max(cursor, b.end);
+  });
+  return free + Math.max(0, dayEnd - cursor);
+}
+
 function validateAvailabilityAndMissingAssignments_(targetShifts, roster, errors, warnings) {
   // v3.7: זמינות נבדקת לפי היום הקלנדרי של כל משבצת.
   // משבצת שמתחילה לפני שעת תחילת היממה (למשל 06:00, 08:00) נופלת
@@ -1046,15 +1133,24 @@ function validateAvailabilityAndMissingAssignments_(targetShifts, roster, errors
     if (assignedNames.has(soldier.name)) return;
     // v3.13: המפל"ג אינו משובץ בשבצ"ק הפלוגתי - לא התראה.
     if (isExemptFromUnassignedAlert_(soldier)) return;
+    // v3.16: הסטטוס נקרא מעמודות היום הקלנדרי, אבל ההתראה היא על
+    // היממה המבצעית. מי שאין לו בה ולו דקה אחת אינו "זמין בלי משימה".
+    const availableMinutes = availableMinutesInOpDay_(soldier, roster);
+    if (availableMinutes <= 0) return;
 
-    // אם זמין רק בחלק אחד של היום, מציינים זאת כדי שההודעה תהיה מדויקת.
+    // v3.16: ההערה מתארת את היממה המבצעית בפועל. הנוסח הקודם נגזר
+    // מעמודות הסטטוס בלבד, ולכן אמר את ההפך מהאמת על מי שיצא ב-14:00
+    // ויוצא לחופש למחרת: "זמין בחלק היום" - בדיוק החצי שבו איננו.
+    // ⚠ בכוונה בלי formatHours_: היא מוגדרת בשני הקבצים, וההגדרה של
+    // מנוע ההמלצות (הנטען אחרון) גוברת - כלומר הטקסט כאן היה משתנה
+    // בין הרצה אמיתית לבין כלי בדיקה שטוען רק את הקובץ הזה.
+    const hoursText = String(Math.round(availableMinutes / 6) / 10);
     let note;
-    if (!soldier.unavailableToday && !soldier.unavailableTomorrow) {
+    if (availableMinutes >= 24 * 60) {
       note = 'סטטוס: "' + soldier.statusToday + '"';
-    } else if (!soldier.unavailableToday) {
-      note = 'זמין בחלק "היום" (סטטוס מחר: "' + soldier.statusTomorrow + '")';
     } else {
-      note = 'זמין בחלק "מחר" (סטטוס היום: "' + soldier.statusToday + '")';
+      note = 'זמין ' + hoursText + ' שעות ביממה (היום: "' +
+        soldier.statusToday + '", מחר: "' + soldier.statusTomorrow + '")';
     }
 
     errors.push('חייל מסומן כזמין אבל בלי משימה: ' + soldier.name + ' — ' + note + '.');
