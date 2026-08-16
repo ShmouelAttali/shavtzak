@@ -34,12 +34,21 @@ export const STATUS_COLORS: Record<string, { bg: string; text: string; label: st
   'שחרור': { bg: 'bg-purple-100', text: 'text-purple-800', label: 'שחרור' },
   'שחרר': { bg: 'bg-purple-100', text: 'text-purple-800', label: 'שחרר' },
   'לא מגיע': { bg: 'bg-red-100', text: 'text-red-800', label: 'לא מגיע' },
-  'יציאה בערב': { bg: 'bg-orange-100', text: 'text-orange-800', label: 'יציאה בערב' },
   'שחרור שבועי': { bg: 'bg-indigo-100', text: 'text-indigo-800', label: 'שחרור שבועי' },
 };
 
+/** Any free-text יציאה status (e.g. "יציאה מ14 עד 18", "יציאה בערב") shares one
+ *  color — the exact wording still comes from the sheet cell verbatim, this
+ *  only decides the color bucket. */
+export const EXIT_STATUS_STYLE = { bg: 'bg-orange-100', text: 'text-orange-800' };
+
+export function isExitStatus(status: string): boolean {
+  return status.startsWith('יציאה');
+}
+
 export function getStatusStyle(status: string) {
   if (!status) return { bg: 'bg-gray-50', text: 'text-gray-400', label: '' };
+  if (isExitStatus(status)) return { ...EXIT_STATUS_STYLE, label: status };
   for (const [key, val] of Object.entries(STATUS_COLORS)) {
     if (status.includes(key)) return val;
   }

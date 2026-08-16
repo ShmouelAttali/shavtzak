@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import type { SheetData } from '../types';
 import { ScheduleGrid } from './ScheduleGrid';
+import { ScheduleLegend } from './ScheduleLegend';
 
 interface Props {
   data: SheetData;
@@ -121,12 +122,15 @@ export function UnitSchedule({ data }: Props) {
 
       {/* Grid */}
       {selectedUnit && unitSoldiers.length > 0 && filteredDates.length > 0 ? (
-        <ScheduleGrid
-          soldiers={unitSoldiers}
-          dates={filteredDates}
-          dayNames={dayNames}
-          showName
-        />
+        <>
+          <ScheduleGrid
+            soldiers={unitSoldiers}
+            dates={filteredDates}
+            dayNames={dayNames}
+            showName
+          />
+          <ScheduleLegend soldiers={unitSoldiers} dates={filteredDates} />
+        </>
       ) : selectedUnit && filteredDates.length === 0 ? (
         <p className="text-center text-gray-500">אין תאריכים בטווח שנבחר</p>
       ) : (
