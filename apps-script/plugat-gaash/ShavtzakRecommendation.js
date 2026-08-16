@@ -1,6 +1,29 @@
 /** @OnlyCurrentDoc */
 /**
- * Shabtzak Recommendations Engine v3.22 - שעון לחימה 14:00-14:00
+ * Shabtzak Recommendations Engine v3.23 - שעון לחימה 14:00-14:00
+ *
+ * שינויים ב-v3.23 - הכוננות ההתקפית אחרי שינוי הכתיב בגיליון:
+ * 1. ב-09/08 עבר הגיליון מ"כוננות | התקפי" ל"התקפי | התקפי", והקטגוריה
+ *    שהטקסט מייצר קפצה מ-carmel ל-attack. כל כלל שנשען על המילה
+ *    "כוננות" חדל לחול, בשקט מוחלט. isDailyAttackAssignment_ מזהה
+ *    עכשיו את הכוננות לפי *צורת הזמן* בלבד - "יומי" או טווח של 24
+ *    שעות ("14:00-14:00") - ולכן שינוי כתיב נוסף לא יפיל אותה שוב.
+ *    ⚠ עיקרון: מילת מפתח בעברית לא מחליטה *אם* משימה יומית חוסמת,
+ *    אלא רק מעניקה פטור מפורש. הפטורים מרוכזים בבלוק אחד למטה.
+ * 2. הזוג המותר חזר: מי שמחזיק בכוננות ההתקפית היומית מומלץ לפעילויות
+ *    התקפיות (תגבצ ערב / פטרול / צ'קפוסט) ולהפך - בדיוק מה שכללי v2.8
+ *    נתנו לכרמל ("צוות הכוננות הוא זה שמבצע אותן"), ומה שלא חל על אף
+ *    שורה מאז שינוי הכתיב. שאר הצמדים ממשיכים להיחסם בשני הכיוונים.
+ * 3. השלמת v3.19: הכוננות היומית נספרת ככוננות (0 שעות עבודה) בשני
+ *    מוני השעות גם בכתיב החדש. עד כה היא הוסיפה 8 שעות ליממה, ולכן
+ *    הורידה את אנשיה ל"בדוחק" בכל פעילות התקפית שהם עצמם מבצעים.
+ * 4. היעדרות *מחר* חוסמת משימה יומית. הבדיקה היא עכשיו חיתוך בין חלון
+ *    המשבצת לחלונות ההיעדרות של שלוש עמודות המצבה, במקום מעבר החופש
+ *    של יום ההתחלה בלבד: חייל שיוצא לחופש מחר ב-06:00 שובץ עד היום
+ *    לכוננות 14:00-14:00 והשאיר את 06:00-14:00 בלי איוש. גם "לא מגויס"
+ *    נכלל, בלי חלון החלפה - הוא אינו חופש (v3.15).
+ *    ⚠ הבדיקה נשארת *מחוץ* ל-availabilityCache: המפתח שם ברזולוציית
+ *    יום, והתשובה תלויה בשעות המשבצת - אותה מלכודת של v3.6/v3.18.
  *
  * שינויים ב-v3.22 - משבצת החפ"ק הראשונה, ומקור המנוחה בעמודה:
  * 1. משבצת החפ"ק הראשונה שמורה לצוות המפל"ג, ורק לו. הכלל דו-כיווני:
@@ -66,7 +89,7 @@
  * 1. יום היציאה לחופש ויום החזרה ממנו הם ימים חלקיים: ביום הראשון
  *    ממליצים על משמרת שנגמרת עד שעת ההחלפה, וביום החזרה רק על משמרת
  *    שמתחילה ממנה ואילך. משמרת 02:00 ביום חזרה נדחית, 06:00 מומלצת.
- * 2. הבדיקה יושבת *מחוץ* ל-availabilityCache (findVacationChangeConflict_),
+ * 2. הבדיקה יושבת *מחוץ* ל-availabilityCache (findAbsenceConflict_ מ-v3.23),
  *    כי הקאש ממופתח ברזולוציית יום והתשובה כאן תלויה בשעות המשבצת -
  *    בדיוק כמו יציאה קצרה מאושרת ב-v3.6.
  * 3. getStatusForSlot_ מחזיר גם את סטטוס היום שלפני המשבצת, שהוא מה
@@ -1539,11 +1562,46 @@ function isRestRelevantAssignment_(assignment) {
  * ההתקפי היומי חוסם 14:00-14:00 אבל רובו המתנה (בוולידציה הוא נספר
  * כ-8 שעות בלבד), ולכן ב-14:00 החייל נחשב כמי שכבר נח את הזיכוי.
  * התקפי עם טווח שעות מפורש הוא משמרת רגילה - בלי זיכוי.
+ *
+ * v3.23: זו גם ההגדרה היחידה של "הכוננות ההתקפית היומית" בכל הקובץ,
+ * והיא נקבעת לפי *צורת הזמן* בלבד. הגיליון כותב את אותו בלוק בשני
+ * ניסוחים - "יומי" ו-"14:00-14:00" - ובוולידציה השניים זהים מאז v3.11
+ * (מפוענח ב-tests/apps-script-daily-mission.test.ts). הצורה המפוצלת
+ * ("14:00-09:00", 19 שעות) נשארת משמרת רגילה במנוע, כמו עד היום.
  */
 function isDailyAttackAssignment_(taskOrAssignment) {
+  if (!taskOrAssignment || taskOrAssignment.category !== 'attack') return false;
+  if (taskOrAssignment.isFullDayByTime) return true;
+  return Number(taskOrAssignment.durationHours || 0) >= 24 - 1e-6;
+}
+
+/* ------------------------------------------------------------
+ * v3.23: הפטורים מבלעדיות המשימה היומית - במקום אחד.
+ *
+ * העיקרון: משימה יומית בלעדית כברירת מחדל, והחסימה נקבעת לפי צורת
+ * הזמן (isFullDayBlockingAssignment_) ולא לפי מילת מפתח בעברית.
+ * מילות מפתח רשאיות רק *להתיר* צמד מסוים, וכל היתר כזה יושב כאן:
+ *   - כוננות (כרמל) מול פעילות התקפית - v2.8, למטה ב-hasOperationalConflict_.
+ *   - כונן גשש - חוסם רק את משמרתו בפועל (v3.2).
+ *   - כוננות התקפית יומית מול פעילות התקפית - v3.23, כאן.
+ * ------------------------------------------------------------ */
+
+/** פעילות התקפית: תגבצ ערב / פטרול / צ'קפוסט - התקפי עם שעות אמיתיות. */
+function isAttackActivityAssignment_(taskOrAssignment) {
   return !!taskOrAssignment &&
     taskOrAssignment.category === 'attack' &&
-    !!taskOrAssignment.isFullDayByTime;
+    !isDailyAttackAssignment_(taskOrAssignment);
+}
+
+/**
+ * v3.23: הצמד המאושר (החלטת בעלים 16/08) - צוות הכוננות ההתקפית הוא
+ * זה שמבצע את הפעילויות ההתקפיות, ולכן כוננות יומית ופעילות התקפית
+ * אינן חוסמות זו את זו. בכוונה *לא* סימטרי לכוננות מול כוננות: שתי
+ * כוננויות יומיות באותה יממה נשארות חסומות.
+ */
+function isAttackStandbyActivityPair_(a, b) {
+  return (isDailyAttackAssignment_(a) && isAttackActivityAssignment_(b)) ||
+    (isDailyAttackAssignment_(b) && isAttackActivityAssignment_(a));
 }
 
 /**
@@ -2200,8 +2258,10 @@ function evaluateCandidateForTask_(soldier, task, context) {
 
   // v3.18: יום היציאה לחופש / החזרה ממנו חוסם רק את חלק היום שאחרי או
   // לפני שעת ההחלפה. גם זה מחוץ ל-availabilityCache, מאותה סיבה.
-  const vacationConflict = findVacationChangeConflict_(soldier, task, context.baseDate);
-  if (vacationConflict) return reject_(result, vacationConflict);
+  // v3.23: וגם היעדרות ביום *אחר* שהמשבצת גולשת אליו - חלונות משלוש
+  // עמודות המצבה, בדיוק כמו ביציאה הקצרה.
+  const absenceConflict = findAbsenceConflict_(soldier, task, context.baseDate);
+  if (absenceConflict) return reject_(result, absenceConflict);
 
   if (task.category === 'static' && config.scoring.seniorCommanderStaticBlock && soldier.isSeniorCommander) {
     return reject_(result, 'מ״מ/סמל לא עולים עמדות הגנה');
@@ -2259,8 +2319,10 @@ function evaluateCandidateForTask_(soldier, task, context) {
   }
 
   // --- חסימת "משימה יומית" (יומי רגיל / קצין מוצב) ---
+  // v3.23: הפטור היחיד הוא הצמד כוננות התקפית <-> פעילות התקפית.
   const currentDayBlock = currentAssignmentsForSoldier.find(function(a) {
-    return isFullDayBlockingAssignment_(a, config);
+    if (!isFullDayBlockingAssignment_(a, config)) return false;
+    return !isAttackStandbyActivityPair_(a, task);
   });
   if (currentDayBlock) {
     return reject_(result, 'כבר משובץ למשימה יומית: ' + shortAssignmentText_(currentDayBlock));
@@ -2268,7 +2330,10 @@ function evaluateCandidateForTask_(soldier, task, context) {
 
   if (isFullDayBlockingAssignment_(task, config)) {
     const otherCurrentTask = currentAssignmentsForSoldier.find(function(a) {
-      return !!a && a.category !== 'ignored' && !isKonenutAssignment_(a);
+      if (!a || a.category === 'ignored' || isKonenutAssignment_(a)) return false;
+      // v3.23: הצד הסימטרי - כשהמשבצת עצמה היא הכוננות ההתקפית היומית,
+      // פעילות התקפית שכבר יש לו באותה יממה אינה פוסלת אותה.
+      return !isAttackStandbyActivityPair_(task, a);
     });
     if (otherCurrentTask) {
       return reject_(result, 'כבר משובץ ביום של משימה יומית: ' + shortAssignmentText_(otherCurrentTask));
@@ -2802,9 +2867,55 @@ function vacationWindowsForSoldier_(soldier, baseDate) {
 
     windows.push({
       start: new Date(day.getTime() + startMin * 60000),
-      end: new Date(day.getTime() + endMin * 60000)
+      end: new Date(day.getTime() + endMin * 60000),
+      // v3.23: סוג המעבר ושעתו, כדי ש-findAbsenceConflict_ תוכל לנסח
+      // את הסיבה. previousAwayLabelForSlot_ מתעלם מהם.
+      kind: transition,
+      changeLabel: minutesToTimeLabel_(changeMin)
     });
   });
+  return windows;
+}
+
+/**
+ * v3.23: כל חלונות ההיעדרות של החייל סביב היממה - חופש על שלושת
+ * שלביו (vacationWindowsForSoldier_) וגם "לא מגויס", שאינו חופש ולכן
+ * אינו מקבל שעת החלפה (v3.15) אלא חוסם יום קלנדרי שלם.
+ *
+ * ⚠ "לא מגויס" נבנה כאן ולא ב-vacationWindowsForSoldier_ בכוונה: שם
+ * החלונות מתויגים "חופש" בעמודת "משימה קודמת", ותיוג שגוי שם היה
+ * אומר לקצין דבר שלא קרה.
+ */
+function absenceWindowsForSoldier_(soldier, baseDate, config) {
+  if (!soldier || !baseDate) return [];
+  const cfg = config || SHABTZAK_REC_CONFIG;
+
+  const windows = vacationWindowsForSoldier_(soldier, baseDate).map(function(w) {
+    let reason = 'בחופש';
+    if (w.kind === 'start') reason = 'יוצא לחופש ב־' + w.changeLabel;
+    else if (w.kind === 'end') reason = 'חוזר מחופש ב־' + w.changeLabel;
+    return { start: w.start, end: w.end, reason: reason };
+  });
+
+  const base = dateOnly_(baseDate);
+  [
+    { status: soldier.statusYesterday, offset: -1, label: 'אתמול' },
+    { status: soldier.statusToday, offset: 0, label: 'היום' },
+    { status: soldier.statusTomorrow, offset: 1, label: 'מחר' }
+  ].forEach(function(d) {
+    const text = cleanText_(d.status);
+    if (!text) return;
+    if (isVacationStatusText_(text)) return; // כבר יש לו חלון למעלה
+    if (!containsAny_(text, cfg.unavailableStatusKeywords || [])) return;
+
+    const day = addDays_(base, d.offset);
+    windows.push({
+      start: day,
+      end: addDays_(day, 1),
+      reason: 'סטטוס לא זמין (' + d.label + '): ' + text
+    });
+  });
+
   return windows;
 }
 
@@ -2878,7 +2989,7 @@ function getAvailabilityStatus_(soldier, task, config, scheduleBaseDate) {
 
   // v3.18: ביום היציאה לחופש וביום החזרה ממנו החייל זמין בחלק מהיום,
   // ולכן ברזולוציית יום התשובה היא "זמין" - השעות עצמן נבדקות מחוץ
-  // לקאש הזה, ב-findVacationChangeConflict_.
+  // לקאש הזה, ב-findAbsenceConflict_.
   if (isVacationTransitionDay_(soldier, task, scheduleBaseDate)) {
     return { available: true, reason: '' };
   }
@@ -2890,19 +3001,6 @@ function getAvailabilityStatus_(soldier, task, config, scheduleBaseDate) {
     };
   }
   return { available: true, reason: '' };
-}
-
-/**
- * v3.18: שעות המשבצת בדקות מחצות היום הקלנדרי שבו היא *מתחילה*.
- * משבצת שגולשת אחרי חצות (או משימה יומית 14:00-14:00) מקבלת end מעל
- * 24 שעות, וכך "מסתיימת עד 06:00" נכשל אצלה כמצופה.
- */
-function slotMinutesOnItsOwnDay_(task) {
-  const dayStart = dateOnly_(task.start).getTime();
-  return {
-    start: Math.round((task.start.getTime() - dayStart) / 60000),
-    end: Math.round((task.end.getTime() - dayStart) / 60000)
-  };
 }
 
 /**
@@ -2926,24 +3024,21 @@ function isVacationTransitionDay_(soldier, task, scheduleBaseDate) {
  * המפתח שם הוא ברזולוציית יום, ואילו התשובה כאן תלויה בשעות המשבצת,
  * בדיוק כמו ביציאה קצרה מאושרת.
  * חצי-פתוח: משמרת שנגמרת ב-06:00 ומשמרת שמתחילה ב-06:00 שתיהן תקינות.
+ *
+ * v3.23: נמדד כחיתוך בין חלון המשבצת לחלונות ההיעדרות של שלוש עמודות
+ * המצבה, במקום מעבר החופש של יום ההתחלה בלבד. משימה שגולשת ליום
+ * הקלנדרי הבא - וכל משימה יומית 14:00-14:00 גולשת - לא נבדקה מולו
+ * כלל: חייל שיוצא לחופש מחר ב-06:00 עלה לכוננות ההתקפית והשאיר את
+ * 06:00-14:00 בלי איוש. אותה מכניקה בדיוק כמו findExitConflict_.
  */
-function findVacationChangeConflict_(soldier, task, scheduleBaseDate) {
+function findAbsenceConflict_(soldier, task, scheduleBaseDate) {
   if (!task || !task.start || !task.end) return '';
 
-  const transition = vacationTransitionForSlot_(soldier, task, scheduleBaseDate);
-  if (transition !== 'start' && transition !== 'end') return '';
-
-  const changeMin = vacationChangeMinutesForDate_(dateOnly_(task.start));
-  const slot = slotMinutesOnItsOwnDay_(task);
-  const changeLabel = minutesToTimeLabel_(changeMin);
-
-  if (transition === 'start') {
-    if (slot.end <= changeMin) return '';
-    return 'יוצא לחופש ב־' + changeLabel;
+  const windows = absenceWindowsForSoldier_(soldier, scheduleBaseDate);
+  for (let i = 0; i < windows.length; i++) {
+    if (task.start < windows[i].end && windows[i].start < task.end) return windows[i].reason;
   }
-
-  if (slot.start >= changeMin) return '';
-  return 'חוזר מחופש ב־' + changeLabel;
+  return '';
 }
 
 /**
@@ -2976,6 +3071,11 @@ function hasOperationalConflict_(targetTask, assignment, config) {
   // צוות הכוננות הוא זה שמבצע אותן.
   if (isKonenutAssignment_(assignment) && targetTask.category === 'attack') return false;
   if (targetTask.category && isKonenutCategory_(targetTask.category) && assignment.category === 'attack') return false;
+
+  // v3.23: אותו כלל בדיוק לכוננות ההתקפית היומית, שמאז שינוי הכתיב
+  // בגיליון היא category 'attack' ולא 'carmel' - ולכן שתי השורות
+  // שמעל חדלו לחול עליה. שני הכיוונים, ורק מול פעילות התקפית.
+  if (isAttackStandbyActivityPair_(targetTask, assignment)) return false;
 
   // v2.8: משימות התקפיות חוסמות רק את הזמן האמיתי שלהן.
   // כמה פעילויות התקפי שלא חופפות בזמן - לגיטימי לאותו חייל
@@ -3206,7 +3306,10 @@ function calculateStats_(assignmentsForSoldier, beforeTime, config) {
     // לא שעות.
     // v3.19: כוננות התקפית מצטרפת לגשש - 0 שעות עבודה, ככוננות, בדיוק
     // כמו שהוולידציה סופרת אותה מאז ומתמיד.
-    const countsAsKonenut = a.category === 'tracker' || isAttackReadinessAssignment_(a);
+    // v3.23: והיא מזוהה גם לפי צורת הזמן, לא רק לפי המילה "כוננות" -
+    // הכתיב החי בגיליון ("התקפי | התקפי | יומי") לא הכיל אותה מעולם.
+    const countsAsKonenut = a.category === 'tracker' ||
+      isAttackReadinessAssignment_(a) || isDailyAttackAssignment_(a);
     const isDailyBlock = isFullDayBlockingAssignment_(a, config);
     if (countsAsKonenut) {
       stats.konenutHours += hours;
@@ -3248,10 +3351,12 @@ function calculateSameOperationalDayHours_(assignmentsForSoldier, task, config) 
     const end = a.end > day.end ? day.end : a.end;
     const hours = Math.max(0, hoursBetween_(start, end));
 
-    if (isKonenutAssignment_(a) || a.category === 'tracker' || isAttackReadinessAssignment_(a)) {
+    if (isKonenutAssignment_(a) || a.category === 'tracker' ||
+        isAttackReadinessAssignment_(a) || isDailyAttackAssignment_(a)) {
       // v3.16: הגשש נספר ככוננות, לא כשעות משימה - ראה calculateStats_.
       // v3.19: וכך גם כוננות התקפית, בדיוק כמו בוולידציה
       // (hoursForDailyTotal = 0 ב-ShabtzakOps).
+      // v3.23: לפי צורת הזמן, כדי שהכתיב החדש בגיליון ייספר גם הוא.
       result.konenutHours += hours;
     } else if (isFullDayBlockingAssignment_(a, config)) {
       // v3.19: משימה יומית - עומס אפקטיבי כמו בוולידציה (8), לא 16.
