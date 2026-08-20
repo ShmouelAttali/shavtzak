@@ -237,6 +237,44 @@ export function spansToNextDay(time: string): boolean {
     return endMin <= startMin;
 }
 
+// A "daily" seat is manned right across the 14:00 rotation boundary, so for the
+// first part of any calendar day it is still held by the PREVIOUS date's crew,
+// who appear nowhere in that day's own rows. True for the rows that are such a
+// seat:
+//   - `יומי`, or a blank time — the sheet's own label for a 14:00→14:00 seat
+//   - any range whose end lands on the next calendar day AND spans at least
+//     DAILY_MIN_SPAN_MIN: 14:00-14:00, 14:00-09:00, 20:00-14:00, 22:00-14:00…
+// A short overnight block (22:00-06:00, כרמל חטיבה's night shift; 19:30-06:00,
+// אבטחת קבר יוסף) is a shift of its own literal day, not a daily seat, and is
+// left alone — otherwise every night guard would show up on two days. Same 12h
+// threshold the sheet's own Apps Script uses (CONFIG.DAILY_MIN_SPAN_HOURS).
+const DAILY_MIN_SPAN_MIN = 12 * 60;
+
+export function isDailySeat(time: string): boolean {
+    const t = time.trim();
+    if (!t || t === 'יומי') return true;
+    const range = /^(\d{1,2}):(\d{2})-(\d{1,2}):(\d{2})$/.exec(t);
+    if (!range) return false;
+    const startMin = parseInt(range[1]) * 60 + parseInt(range[2]);
+    const endMin = parseInt(range[3]) * 60 + parseInt(range[4]);
+    if (endMin > startMin) return false; // a same-day range, over before midnight
+    // endMin === startMin is a full 24h seat (14:00-14:00), not a zero-length one
+    return endMin + 24 * 60 - startMin >= DAILY_MIN_SPAN_MIN;
+}
+
+// True for a slot whose label carries no hours at all — the only case where
+// yesterday's and today's rows are literally indistinguishable on screen.
+function isHourlessLabel(time: string): boolean {
+    const t = time.trim();
+    return !t || t === 'יומי';
+}
+
+// Order-insensitive, trimmed identity of a crew: the sheet's row order within a
+// slot is not meaningful, so ['א','ב'] and ['ב','א'] are the same list.
+function crewKey(soldiers: string[]): string {
+    return soldiers.map(n => n.trim()).sort().join('|');
+}
+
 // For a spansToNextDay slot, the calendar date its end actually falls on —
 // one day after `startDateStr` (the date the slot's own start hour lands
 // on). Owner preference: spell out the real date next to the end hour
@@ -305,8 +343,10 @@ function TimeLabel({time, gray, dateLabel, startDateLabel, endDateLabel, activeC
 //   - buildSheetDisplayGroups: the live tab's שבצק sheet has no such
 //     concept — its own תאריך is always the literal, correct day for every
 //     row — so today's own slots are just sorted by literal hour, never
-//     gray. A bounded look-ahead into tomorrow's own record (its shifts
-//     starting before 14:00) is appended, grayed and dated, as a preview.
+//     gray. Around them, two grayed-and-dated merges make the page read as
+//     the whole calendar date: a bounded look-ahead into tomorrow's own
+//     record (its shifts starting before 14:00), and yesterday's daily seats
+//     (isDailySeat), which run past 14:00 and so man this morning.
 interface DisplaySlot {
     time: string;
     gray: boolean;
@@ -510,21 +550,32 @@ const TOMORROW_OFFSET = 10_000;
 // yesterday sorts ahead of all of today.
 const YESTERDAY_OFFSET = -10_000;
 
-// כוננות התקפי is seated 14:00→14:00 — a full 24h — so for the first half of
-// any day the position is actually manned by the PREVIOUS day's crew, who
-// appear nowhere in today's own rows. Surface them as one extra slot taken
-// from yesterday's record, grayed and dated like the tomorrow look-ahead.
+// Yesterday's rows that are still on duty during the day being viewed: its
+// daily seats (see isDailySeat), which run across the 14:00 rotation boundary
+// and so man the position through this morning. Surfaced as extra slots,
+// grayed and dated like the tomorrow look-ahead. Applies to every group — the
+// owner reads the tab to know who is on each position at every hour of the
+// calendar date.
 //
-// Deliberately scoped to התקפי by name, per the owner. The split-day forms
-// that also appear in the sheet (14:00-09:00, 09:00-14:00) are excluded by
-// the exact time match: on those days the sheet already spells the morning
-// shift out as its own row. To generalise later, swap the name test for
-// "a range whose end equals its start".
-const CARRY_OVER_GROUP = 'התקפי';
-const CARRY_OVER_TIME = '14:00-14:00';
-
-function carriedOverSlot(group: StationGroup | undefined, sug: string): TimeSlot | undefined {
-    return group?.subTypes.find(s => s.sug === sug)?.times.find(t => t.time === CARRY_OVER_TIME);
+// One exception, per the owner: a seat labelled `יומי` whose crew did not
+// change overnight (the usual case for מגן השומרון and חפק) is not carried.
+// Both rows would read plain "יומי" with the same names — the same list
+// printed twice, no hour information gained, and the compact YomiGrid layout
+// lost for nothing. An explicitly-ranged seat is different: yesterday's
+// "14:00-14:00" covers this morning and today's covers this afternoon, so the
+// two rows carry DIFFERENT hours even when the names match, and both show.
+function carriedSlots(
+    prevGroup: StationGroup | undefined,
+    curGroup: StationGroup | undefined,
+    sug: string,
+): TimeSlot[] {
+    const prevTimes = prevGroup?.subTypes.find(s => s.sug === sug)?.times ?? [];
+    const daily = prevTimes.filter(t => t.soldiers.length > 0 && isDailySeat(t.time));
+    if (daily.length === 0) return [];
+    const todayCrews = new Set(
+        (curGroup?.subTypes.find(s => s.sug === sug)?.times ?? []).map(t => crewKey(t.soldiers))
+    );
+    return daily.filter(t => !(isHourlessLabel(t.time) && todayCrews.has(crewKey(t.soldiers))));
 }
 
 // The שבצק sheet's own תאריך is always the literal, correct calendar day for
@@ -536,8 +587,10 @@ function carriedOverSlot(group: StationGroup | undefined, sug: string): TimeSlot
 // grayed and dated — only its shifts starting before 14:00, per the owner —
 // as a preview of what's coming, without reinterpreting any of today's own
 // rows. Symmetrically, `prevDaySource` (yesterday's own record) contributes
-// only the התקפי carry-over described at CARRY_OVER_GROUP — the one shift
-// long enough that yesterday's crew is still on duty for half of today.
+// its daily seats — see carriedSlots — the shifts long enough that yesterday's
+// crew still mans the position through this morning. Between the two, the page
+// reads as the whole CALENDAR date: who is on each position at every hour of
+// it, not just from 14:00 on.
 export function buildSheetDisplayGroups(
     current: StationGroup[],
     nextDaySource: StationGroup[] | null,
@@ -555,6 +608,13 @@ export function buildSheetDisplayGroups(
         seenNames.add(g.name);
         names.push(g.name);
     }
+    // A position that ran yesterday and isn't in today's own rows at all is
+    // still manned this morning by yesterday's crew. Anything it contributes
+    // nothing to falls out at the empty-box filter below.
+    if (prevDaySource) for (const g of prevDaySource) if (!seenNames.has(g.name)) {
+        seenNames.add(g.name);
+        names.push(g.name);
+    }
 
     const curByName = new Map(current.map(g => [g.name, g]));
     const nextByName = new Map((nextDaySource ?? []).map(g => [g.name, g]));
@@ -563,8 +623,7 @@ export function buildSheetDisplayGroups(
     return names.map(name => {
         const curGroup = curByName.get(name);
         const nextGroup = nextByName.get(name);
-        const carryOver = name.includes(CARRY_OVER_GROUP);
-        const prevGroup = carryOver ? prevByName.get(name) : undefined;
+        const prevGroup = prevByName.get(name);
 
         const sugs: string[] = [];
         const seenSugs = new Set<string>();
@@ -578,7 +637,7 @@ export function buildSheetDisplayGroups(
         }
         // A carrying sub-type that today's own sheet doesn't mention at all
         // still has yesterday's crew on it until 14:00 — keep the column.
-        for (const s of prevGroup?.subTypes ?? []) if (!seenSugs.has(s.sug) && carriedOverSlot(prevGroup, s.sug)) {
+        for (const s of prevGroup?.subTypes ?? []) if (!seenSugs.has(s.sug) && carriedSlots(prevGroup, curGroup, s.sug).length > 0) {
             seenSugs.add(s.sug);
             sugs.push(s.sug);
         }
@@ -587,12 +646,20 @@ export function buildSheetDisplayGroups(
             const curSub = curGroup?.subTypes.find(s => s.sug === sug);
             const nextSub = nextGroup?.subTypes.find(s => s.sug === sug);
             const times: DisplaySlot[] = [];
-            const carried = carryOver ? carriedOverSlot(prevGroup, sug) : undefined;
-            if (carried && carried.soldiers.length > 0) {
+            for (const t of carriedSlots(prevGroup, curGroup, sug)) {
+                // A range renders as "HH:MM עד HH:MM", so its date belongs next
+                // to the start hour (the end hour is the day being viewed);
+                // `יומי` renders as plain text and takes the trailing tag.
+                const ranged = parseRangeHours(t.time) !== null;
+                const start = parseSlotStart(t.time);
                 times.push({
-                    time: CARRY_OVER_TIME, gray: true, dateLabel: '',
-                    startDateLabel: prevDateShort, endDateLabel: '',
-                    soldiers: carried.soldiers, ms: YESTERDAY_OFFSET,
+                    time: t.time, gray: true,
+                    dateLabel: ranged ? '' : prevDateShort,
+                    startDateLabel: ranged ? prevDateShort : '', endDateLabel: '',
+                    soldiers: t.soldiers,
+                    // YESTERDAY_OFFSET puts every carry-over ahead of all of
+                    // today; the start hour only orders them among themselves.
+                    ms: YESTERDAY_OFFSET + (start ? start.h * 60 + start.m : 0),
                 });
             }
             for (const t of curSub?.times ?? []) {
@@ -615,7 +682,7 @@ export function buildSheetDisplayGroups(
             return {sug, times};
         });
 
-        const tier = getTier(rawSlotsOnly((curGroup ?? nextGroup)?.subTypes ?? []), name);
+        const tier = getTier(rawSlotsOnly((curGroup ?? nextGroup ?? prevGroup)?.subTypes ?? []), name);
         return {name, subTypes, tier};
     })
         // A position with nobody assigned at all today or in tomorrow's
