@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState } from 'react';
 import type { SheetData } from '../types';
 import type { ShavtzakAllData } from '../../api/_handlers/shavtzak';
 import { useExits } from '../hooks/useExits';
+import type { ShortExit } from '../hooks/useExits';
+import { exitState, fmtExitDateTime, countCurrentlyOut } from '../lib/shortExits';
 import { SoldierPopup } from './SoldierPopup';
 import type { PopupState } from './SoldierPopup';
 
@@ -62,26 +64,6 @@ function localPlusHours(h: number): string {
   d.setHours(d.getHours() + h);
   const p = (n: number) => String(n).padStart(2, '0');
   return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
-}
-// Parses the sheet's "dd/mm/yy HH:mm" format — not reliably parseable by `new Date()`
-function parseSheetDateTime(s: string): Date | null {
-  const m = s.trim().match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})\s+(\d{1,2}):(\d{2})$/);
-  if (!m) return null;
-  const [, dd, mm, yy, hh, min] = m;
-  const year = yy.length === 2 ? 2000 + parseInt(yy, 10) : parseInt(yy, 10);
-  const d = new Date(year, parseInt(mm, 10) - 1, parseInt(dd, 10), parseInt(hh, 10), parseInt(min, 10));
-  return isNaN(d.getTime()) ? null : d;
-}
-function fmtDateTime(sheetStr: string): string {
-  if (!sheetStr) return '—';
-  const d = parseSheetDateTime(sheetStr);
-  if (!d) return sheetStr;
-  const p = (n: number) => String(n).padStart(2, '0');
-  const today = new Date();
-  const isToday = d.toDateString() === today.toDateString();
-  const time = `${p(d.getHours())}:${p(d.getMinutes())}`;
-  if (isToday) return time;
-  return `${time} • ${p(d.getDate())}/${p(d.getMonth()+1)}`;
 }
 function isoToSheet(iso: string): string {
   if (!iso) return '';
@@ -199,20 +181,20 @@ export function CompanySummary({ data, shavtzakAll }: { data: SheetData; shavtza
   const [includeMaflag, setIncludeMaflag] = useState(false);
   const [includeHamal, setIncludeHamal]   = useState(false);
 
-  // The hour the user is currently browsing (defaults to current hour)
-  const [currentHour, setCurrentHour] = useState(() => new Date().getHours());
+  // Wall clock, re-read every minute — drives the browsed hour and the short-exit states
+  const [now, setNow] = useState(() => new Date());
+  const currentHour = now.getHours();
   const [viewHour, setViewHour] = useState(() => new Date().getHours());
 
-  // Auto-tick: once per minute, update currentHour; if viewHour was tracking live, advance it too
+  // Auto-tick: once per minute; if viewHour was tracking live, advance it with the clock
   useEffect(() => {
     const id = setInterval(() => {
-      const h = new Date().getHours();
-      setCurrentHour(prev => {
-        if (prev !== h) {
-          setViewHour(v => (v === prev ? h : v));
-          return h;
+      setNow(prev => {
+        const next = new Date();
+        if (next.getHours() !== prev.getHours()) {
+          setViewHour(v => (v === prev.getHours() ? next.getHours() : v));
         }
-        return prev;
+        return next;
       });
     }, 60_000);
     return () => clearInterval(id);
@@ -226,6 +208,10 @@ export function CompanySummary({ data, shavtzakAll }: { data: SheetData; shavtza
   const [formName, setFormName] = useState('');
   const [formExit, setFormExit] = useState(nowLocal);
   const [formReturn, setFormReturn] = useState(() => localPlusHours(2));
+
+  // Last "חזר לבסיס" click, kept client-side so a mistaken click can be re-added
+  const [lastReturned, setLastReturned] = useState<ShortExit | null>(null);
+  const [showExitsHelp, setShowExitsHelp] = useState(false);
 
   const phoneOf = useMemo(() => {
     const m = new Map<string, string>();
@@ -349,6 +335,20 @@ export function CompanySummary({ data, shavtzakAll }: { data: SheetData; shavtza
     setFormName('');
     setFormExit(nowLocal());
     setFormReturn(localPlusHours(2));
+  }
+
+  // The sheet has no "returned" flag — marking a soldier back deletes his row.
+  // We keep the deleted row in memory so a mistaken click can re-append it.
+  async function handleReturned(exit: ShortExit) {
+    setLastReturned(exit);
+    await removeExit(exit.rowIndex);
+  }
+
+  async function handleUndoReturn() {
+    const exit = lastReturned;
+    if (!exit) return;
+    setLastReturned(null);
+    await addExit(exit.name, exit.exitTime, exit.returnTime);
   }
 
   if (!dates.length) return (
@@ -476,21 +476,51 @@ export function CompanySummary({ data, shavtzakAll }: { data: SheetData; shavtza
 
       {/* Short exits */}
       <div className="rounded-xl border border-gray-200 overflow-hidden">
-        <div className="flex items-center justify-between px-4 py-2.5 bg-gray-50 border-b border-gray-200">
+        <div className="flex items-center justify-between px-4 py-2.5 bg-gray-50 border-b border-gray-200 gap-2 flex-wrap">
           <div className="flex items-center gap-2">
             <span className="font-semibold text-gray-700 text-sm">כרגע ביציאה קצרה</span>
-            {!exitsLoading && (
-              <span className="rounded-full bg-amber-100 text-amber-800 px-2 py-0.5 text-xs font-bold">{exits.length}</span>
-            )}
-            {exitsLoading && <span className="text-xs text-gray-400 animate-pulse">טוען...</span>}
+            {exitsLoading
+              ? <span className="text-xs text-gray-400 animate-pulse">טוען...</span>
+              : <span className="rounded-full bg-amber-100 text-amber-800 px-2 py-0.5 text-xs font-bold">{countCurrentlyOut(exits, now)}</span>}
+            <button
+              onClick={() => setShowExitsHelp(v => !v)}
+              aria-label="הסבר על הרשימה"
+              className="w-5 h-5 rounded-full border border-gray-300 bg-white text-gray-500 hover:bg-gray-100 text-[11px] font-bold leading-none flex items-center justify-center"
+            >
+              i
+            </button>
           </div>
-          <button
-            onClick={() => { setShowAddForm(v => !v); setFormExit(nowLocal()); setFormReturn(localPlusHours(2)); }}
-            className="rounded-lg bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 text-xs font-semibold transition-colors"
-          >
-            + הוסף יציאה קצרה
-          </button>
+          <div className="flex items-center gap-2 flex-wrap">
+            {lastReturned && (
+              <button
+                onClick={handleUndoReturn}
+                disabled={saving}
+                className="rounded-lg border border-amber-300 bg-amber-50 hover:bg-amber-100 disabled:opacity-50 text-amber-800 px-3 py-1.5 text-xs font-semibold transition-colors"
+              >
+                ↩ בטל לחיצה — החזר את {lastReturned.name}
+              </button>
+            )}
+            <button
+              onClick={() => { setShowAddForm(v => !v); setFormExit(nowLocal()); setFormReturn(localPlusHours(2)); }}
+              className="rounded-lg bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 text-xs font-semibold transition-colors"
+            >
+              + הוסף יציאה קצרה
+            </button>
+          </div>
         </div>
+
+        {showExitsHelp && (
+          <div className="px-4 py-2.5 bg-amber-50 border-b border-amber-100 text-xs text-amber-900 leading-relaxed space-y-1">
+            <p>
+              <span className="font-semibold">חזר לבסיס ✓</span> מוחק את השורה מגיליון היציאות — אין סימון "חזר",
+              השורה קיימת רק כל זמן שהחייל בחוץ. לחיצה בטעות ניתנת לביטול מיד לאחריה.
+            </p>
+            <p>
+              המספר למעלה מונה את מי שנמצא <span className="font-semibold">כרגע</span> מחוץ לבסיס:
+              יציאות שטרם התחילו לא נספרות, ומי שזמן החזרה שלו עבר והוא טרם סומן כחוזר — כן.
+            </p>
+          </div>
+        )}
 
         {/* Add form */}
         {showAddForm && (
@@ -538,27 +568,48 @@ export function CompanySummary({ data, shavtzakAll }: { data: SheetData; shavtza
           <div className="px-4 py-4 text-sm text-gray-400 text-center">אין יציאות קצרות כרגע</div>
         ) : (
           <div className="divide-y divide-gray-100">
-            {exits.map(exit => (
-              <div key={exit.rowIndex} className="flex items-center justify-between px-4 py-2.5 bg-white hover:bg-gray-50/50 gap-3 flex-wrap">
-                <button
-                  onClick={() => setPopup({ name: exit.name, phone: phoneOf.get(exit.name) ?? '' })}
-                  className="font-semibold text-gray-800 text-sm hover:text-blue-600 text-right"
+            {exits.map(exit => {
+              const state = exitState(exit, now);
+              const late = state === 'late';
+              return (
+                <div
+                  key={exit.rowIndex}
+                  className={`flex items-center px-4 py-2.5 gap-3 flex-wrap ${
+                    late ? 'bg-orange-50' : 'bg-white hover:bg-gray-50/50'
+                  }`}
                 >
-                  {exit.name}
-                </button>
-                <div className="flex items-center gap-3 text-xs text-gray-500 flex-wrap">
-                  {exit.exitTime && <span>יצא: <span className="font-medium text-gray-700">{fmtDateTime(exit.exitTime)}</span></span>}
-                  {exit.returnTime && <span>חוזר: <span className="font-medium text-gray-700">{fmtDateTime(exit.returnTime)}</span></span>}
+                  <div className="flex-1 min-w-0 flex items-center gap-2 flex-wrap">
+                    <button
+                      onClick={() => setPopup({ name: exit.name, phone: phoneOf.get(exit.name) ?? '' })}
+                      className={`font-semibold text-sm hover:text-blue-600 text-right ${late ? 'text-orange-900' : 'text-gray-800'}`}
+                    >
+                      {exit.name}
+                    </button>
+                    {late && (
+                      <span className="rounded-full bg-orange-200 text-orange-900 px-2 py-0.5 text-[11px] font-bold">⚠ טרם חזר</span>
+                    )}
+                    {state === 'planned' && (
+                      <span className="rounded-full bg-gray-100 text-gray-500 px-2 py-0.5 text-[11px] font-semibold">מתוכנן</span>
+                    )}
+                  </div>
+                  <div className="grid grid-cols-[auto_auto] gap-x-1.5 text-xs text-gray-500">
+                    <span>יציאה:</span>
+                    <span className="font-medium text-gray-700">{fmtExitDateTime(exit.exitTime, now)}</span>
+                    <span>חזרה:</span>
+                    <span className={`font-medium ${late ? 'font-bold text-orange-800' : 'text-gray-700'}`}>
+                      {fmtExitDateTime(exit.returnTime, now)}
+                    </span>
+                  </div>
                   <button
-                    onClick={() => removeExit(exit.rowIndex)}
+                    onClick={() => handleReturned(exit)}
                     disabled={saving}
-                    className="rounded-lg bg-green-500 hover:bg-green-600 disabled:opacity-50 text-white px-3 py-1 text-xs font-semibold transition-colors"
+                    className="shrink-0 rounded-lg bg-green-500 hover:bg-green-600 disabled:opacity-50 text-white px-3 py-1.5 text-xs font-semibold transition-colors"
                   >
                     חזר לבסיס ✓
                   </button>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>
