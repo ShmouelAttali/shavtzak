@@ -1189,6 +1189,7 @@ export function Shavtzak({soldiers, shavtzakAll: data, loading, error, mySoldier
 }) {
     const [selectedDate, setSelectedDate] = useState<string>('');
     const [popup, setPopup] = useState<PopupState | null>(null);
+    const [exporting, setExporting] = useState(false);
     const initializedRef = useRef(false);
 
     // On first load, default to today (or nearest past date). On later reloads
@@ -1279,19 +1280,22 @@ export function Shavtzak({soldiers, shavtzakAll: data, loading, error, mySoldier
         if (sorted[0]) setSelectedDate(sorted[0]);
     }
 
-    // Native print → the dialog's "Save as PDF". The layout is all CSS
-    // (@media print in index.css + print: classes here), so this only has to
-    // give the browser a sensible title for its header line and PDF filename.
-    function handlePrint() {
-        const prev = document.title;
-        const restore = () => {
-            document.title = prev;
-            window.removeEventListener('afterprint', restore);
-        };
-        document.title = printDocTitle(selectedDate);
-        window.addEventListener('afterprint', restore);
-        window.print();
-        restore(); // afterprint is not reliable outside Chrome
+    // In-app PDF export (landscape A4) — window.print() honored the landscape
+    // @page rule on desktop but not on phones, so the PDF is built directly
+    // instead. Ctrl+P still works via the untouched print CSS. The module is
+    // imported lazily to keep jspdf/html-to-image out of the main bundle.
+    async function handleExportPdf() {
+        if (exporting) return;
+        setExporting(true);
+        try {
+            const {exportShavtzakPdf} = await import('../lib/exportShavtzakPdf');
+            await exportShavtzakPdf(printDocTitle(selectedDate));
+        } catch (e) {
+            console.error('PDF export failed', e);
+            alert('יצוא ה-PDF נכשל');
+        } finally {
+            setExporting(false);
+        }
     }
 
     return (
@@ -1335,14 +1339,14 @@ export function Shavtzak({soldiers, shavtzakAll: data, loading, error, mySoldier
           </span>
 
                             <button
-                                onClick={handlePrint}
-                                disabled={!dayData}
+                                onClick={handleExportPdf}
+                                disabled={!dayData || exporting}
                                 dir="rtl"
-                                title="הדפס / שמור כ-PDF"
+                                title="שמור את היום כקובץ PDF"
                                 className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-40 flex items-center gap-1.5"
                             >
-                                <span>🖨</span>
-                                הדפס
+                                <span>📄</span>
+                                {exporting ? 'מכין…' : 'יצא ל-PDF'}
                             </button>
 
                             {loading && (
@@ -1364,7 +1368,7 @@ export function Shavtzak({soldiers, shavtzakAll: data, loading, error, mySoldier
                                 <thead className="hidden print:table-header-group">
                                 <tr>
                                     <th className="p-0 pb-2 font-normal">
-                                        <div className="flex items-baseline gap-3 border-b-2 border-slate-300 pb-1.5">
+                                        <div className="pdf-header flex items-baseline gap-3 border-b-2 border-slate-300 pb-1.5">
                                             <span className="text-lg font-bold text-slate-900">שבצק</span>
                                             <span className="text-base font-semibold text-slate-700">
                                                 {printDayTitle(selectedDate)}
