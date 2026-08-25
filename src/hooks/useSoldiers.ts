@@ -5,9 +5,12 @@ export function useSoldiers() {
   const [data, setData] = useState<SheetData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [rev, setRev] = useState(0);
 
   useEffect(() => {
-    fetch('/api/soldiers')
+    setLoading(true);
+    setError(null);
+    fetch('/api/soldiers', { cache: 'no-store' })
       .then((r) => {
         if (!r.ok) return r.json().then((e) => Promise.reject(e.error || 'שגיאה בטעינת נתונים'));
         return r.json() as Promise<SheetData>;
@@ -20,7 +23,9 @@ export function useSoldiers() {
         setError(typeof e === 'string' ? e : 'שגיאה בטעינת נתונים');
         setLoading(false);
       });
-  }, []);
+  }, [rev]);
 
-  return { data, loading, error };
+  const reload = () => setRev(v => v + 1);
+
+  return { data, loading, error, reload };
 }

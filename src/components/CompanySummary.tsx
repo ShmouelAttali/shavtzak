@@ -10,26 +10,27 @@ function classifyStatus(status: string): string {
   if (!status) return 'לא ידוע';
   if (status.includes('לא מגוייס') || status.includes('לא מגויס')) return 'לא מגוייס';
   if (status.includes('לא מגיע')) return 'לא מגיע';
-  if (status.includes('יציאה בערב')) return 'יציאה בערב';
+  // Any יציאה-prefixed status (e.g. "יציאה בערב", "יציאה מ14 עד 18"), and
+  // גיוס / שחרור, all mean the soldier is still counted as present.
+  if (status.startsWith('יציאה')) return 'נוכח';
+  if (status.includes('גיוס')) return 'נוכח';
+  if (status.includes('שחרור') || status.includes('שחרר')) return 'נוכח';
   if (status.includes('נוכח')) return 'נוכח';
-  if (status.includes('שחרור') || status.includes('שחרר')) return 'שחרור';
   if (status.includes('חופש')) return 'חופש';
   return status;
 }
 
-const PRESENT_KEYS = new Set(['נוכח', 'יציאה בערב']);
+const PRESENT_KEYS = new Set(['נוכח']);
 
 const CAT_STYLE: Record<string, { bg: string; text: string; border: string; headerBg: string }> = {
   'נוכח':       { bg: 'bg-green-50',  text: 'text-green-800',  border: 'border-green-200',  headerBg: 'bg-green-100' },
-  'יציאה בערב': { bg: 'bg-orange-50', text: 'text-orange-800', border: 'border-orange-200', headerBg: 'bg-orange-100' },
   'חופש':       { bg: 'bg-blue-50',   text: 'text-blue-800',   border: 'border-blue-200',   headerBg: 'bg-blue-100' },
-  'שחרור':      { bg: 'bg-purple-50', text: 'text-purple-800', border: 'border-purple-200', headerBg: 'bg-purple-100' },
   'לא מגיע':    { bg: 'bg-red-50',    text: 'text-red-800',    border: 'border-red-200',    headerBg: 'bg-red-100' },
   'לא ידוע':    { bg: 'bg-gray-50',   text: 'text-gray-500',   border: 'border-gray-200',   headerBg: 'bg-gray-100' },
 };
 
 const fallbackStyle = CAT_STYLE['לא ידוע'];
-const DISPLAY_CATS = ['נוכח', 'יציאה בערב', 'חופש', 'שחרור', 'לא מגיע', 'לא ידוע'];
+const DISPLAY_CATS = ['נוכח', 'חופש', 'לא מגיע', 'לא ידוע'];
 
 // ── Date helpers ──────────────────────────────────────────────────────────
 function parseSheetDate(d: string): Date {
@@ -273,7 +274,7 @@ export function CompanySummary({ data, shavtzakAll }: { data: SheetData; shavtza
     return c;
   }, [active]);
 
-  const effectiveCount = (statusCounts['נוכח'] ?? 0) + (statusCounts['יציאה בערב'] ?? 0);
+  const effectiveCount = statusCounts['נוכח'] ?? 0;
   const activeCats = DISPLAY_CATS.filter(c => (statusCounts[c] ?? 0) > 0);
 
   const unitCounts = useMemo(() => {

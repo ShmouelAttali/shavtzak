@@ -98,7 +98,7 @@ function LeaveGuardPopup({ onSave, onDiscard, onCancel, saving }: {
   );
 }
 
-function AppContent({ data }: { data: SheetData }) {
+function AppContent({ data, reloadSoldiers, soldiersLoading }: { data: SheetData; reloadSoldiers: () => void; soldiersLoading: boolean }) {
   const [activeTab, setActiveTab] = useState<TabId>(initialTab);
   const [showAbout, setShowAbout] = useState(false);
   // Leave guard: a tab may register {isDirty, save}; switching away while dirty
@@ -137,6 +137,8 @@ function AppContent({ data }: { data: SheetData }) {
   // render, so a bare URL gets the query param written for sharing).
   useEffect(() => { persistTab(activeTab); }, [activeTab]);
   const { data: shavtzakAll, loading: shavtzakLoading, error: shavtzakError, reload: reloadShavtzak } = useShavtzak();
+  const reloading = shavtzakLoading || soldiersLoading;
+  const reloadAll = () => { reloadShavtzak(); reloadSoldiers(); };
 
   // Switch tabs, but if the current tab has unsaved edits open the leave guard.
   const requestTab = (id: TabId) => {
@@ -166,12 +168,12 @@ function AppContent({ data }: { data: SheetData }) {
           >מערכת שבצק - פלוגת הגמר גע"ש</h1>
           <div className="flex items-center gap-3" dir="ltr">
             <button
-              onClick={reloadShavtzak}
-              disabled={shavtzakLoading}
+              onClick={reloadAll}
+              disabled={reloading}
               title="טען מחדש"
               className="rounded-lg border border-white/30 bg-white/10 hover:bg-white/20 px-3 py-1.5 text-sm font-medium text-white transition-colors disabled:opacity-50 flex items-center gap-1.5"
             >
-              <span className={shavtzakLoading ? 'animate-spin inline-block' : ''}>↺</span>
+              <span className={reloading ? 'animate-spin inline-block' : ''}>↺</span>
               טען מחדש
             </button>
             <a
@@ -265,19 +267,22 @@ function AccessDenied() {
 
 function AuthGate() {
   const { user } = useUser();
-  const { data, loading } = useSoldiers();
+  const { data, loading, reload } = useSoldiers();
 
-  if (loading || !data) return (
+  // Only the first-ever load blanks the screen — data stays populated across
+  // a later reload() (it's only replaced on success), so a "טען מחדש" click
+  // just refreshes in place instead of unmounting the whole app.
+  if (!data) return (
     <div className="min-h-screen flex items-center justify-center">
       <div className="h-8 w-8 animate-spin rounded-full border-4 border-blue-500 border-t-transparent" />
     </div>
   );
 
   // If no emails configured in the sheet — allow everyone
-  if (data.allowedEmails.length === 0) return <AppContent data={data} />;
+  if (data.allowedEmails.length === 0) return <AppContent data={data} reloadSoldiers={reload} soldiersLoading={loading} />;
 
   const email = user?.primaryEmailAddress?.emailAddress?.toLowerCase() ?? '';
-  if (data.allowedEmails.includes(email)) return <AppContent data={data} />;
+  if (data.allowedEmails.includes(email)) return <AppContent data={data} reloadSoldiers={reload} soldiersLoading={loading} />;
 
   return <AccessDenied />;
 }
