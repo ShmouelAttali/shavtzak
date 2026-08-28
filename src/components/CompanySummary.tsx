@@ -19,6 +19,7 @@ function classifyStatus(status: string): string {
   if (status.includes('שחרור') || status.includes('שחרר')) return 'נוכח';
   if (status.includes('נוכח')) return 'נוכח';
   if (status.includes('חופש')) return 'חופש';
+  if (status.includes('מחלה')) return 'מחלה';
   return status;
 }
 
@@ -27,12 +28,13 @@ const PRESENT_KEYS = new Set(['נוכח']);
 const CAT_STYLE: Record<string, { bg: string; text: string; border: string; headerBg: string }> = {
   'נוכח':       { bg: 'bg-green-50',  text: 'text-green-800',  border: 'border-green-200',  headerBg: 'bg-green-100' },
   'חופש':       { bg: 'bg-blue-50',   text: 'text-blue-800',   border: 'border-blue-200',   headerBg: 'bg-blue-100' },
+  'מחלה':       { bg: 'bg-rose-50',   text: 'text-rose-800',   border: 'border-rose-200',   headerBg: 'bg-rose-100' },
   'לא מגיע':    { bg: 'bg-red-50',    text: 'text-red-800',    border: 'border-red-200',    headerBg: 'bg-red-100' },
   'לא ידוע':    { bg: 'bg-gray-50',   text: 'text-gray-500',   border: 'border-gray-200',   headerBg: 'bg-gray-100' },
 };
 
 const fallbackStyle = CAT_STYLE['לא ידוע'];
-const DISPLAY_CATS = ['נוכח', 'חופש', 'לא מגיע', 'לא ידוע'];
+const DISPLAY_CATS = ['נוכח', 'חופש', 'מחלה', 'לא מגיע', 'לא ידוע'];
 
 // ── Date helpers ──────────────────────────────────────────────────────────
 function parseSheetDate(d: string): Date {
