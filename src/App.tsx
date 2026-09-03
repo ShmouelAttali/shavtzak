@@ -4,6 +4,7 @@ import type { TabId, SheetData, TabLeaveGuard } from './types';
 import { useSoldiers } from './hooks/useSoldiers';
 import { useShavtzak } from './hooks/useShavtzak';
 import { useShavtzakAccess } from './hooks/useIsShavtzakAdmin';
+import { useIdleReload } from './hooks/useIdleReload';
 import { PersonalSchedule } from './components/PersonalSchedule';
 import { UnitSchedule } from './components/UnitSchedule';
 import { CompanySummary } from './components/CompanySummary';
@@ -132,6 +133,10 @@ function AppContent({ data, reloadSoldiers, soldiersLoading }: { data: SheetData
     if (!accessLoaded) return;
     if (!tabAllowed(activeTab)) setActiveTab('personal');
   }, [activeTab, accessLoaded, canSeeCompany, canSeeScheduler, canSeeHamal]);
+
+  // A screen left untouched for 15 minutes reloads itself, so nobody reads a
+  // stale sheet — unless a tab is holding unsaved edits.
+  useIdleReload(15, () => !tabLeaveGuardRef.current?.isDirty());
 
   // Keep ?tab= and the remembered tab in sync with the selection (also on first
   // render, so a bare URL gets the query param written for sharing).

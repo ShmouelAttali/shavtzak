@@ -6,6 +6,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   parseSheetDateTime, relativeDayLabel, fmtExitDateTime, exitState, countCurrentlyOut,
+  sortExitsByStart, exitWindowError,
 } from '../src/lib/shortExits';
 
 const NOW = new Date(2026, 7, 19, 12, 0); // 19/08/26 12:00
@@ -60,4 +61,67 @@ test('countCurrentlyOut skips planned exits and keeps overdue ones', () => {
   ];
   assert.equal(countCurrentlyOut(exits, NOW), 2);
   assert.equal(countCurrentlyOut([], NOW), 0);
+});
+
+test('sortExitsByStart orders by זמן יציאה, unparseable rows last in sheet order', () => {
+  const rows = [
+    { name: 'ג', exitTime: '19/08/26 14:00', returnTime: '19/08/26 16:00' },
+    { name: 'ב', exitTime: '', returnTime: '19/08/26 16:00' },
+    { name: 'א', exitTime: '18/08/26 22:00', returnTime: '19/08/26 02:00' },
+    { name: 'ד', exitTime: '19/08/26 08:30', returnTime: '19/08/26 09:30' },
+    { name: 'ה', exitTime: 'לא תאריך', returnTime: '' },
+  ];
+  assert.deepEqual(sortExitsByStart(rows).map(r => r.name), ['א', 'ד', 'ג', 'ב', 'ה']);
+});
+
+test('sortExitsByStart does not mutate its input', () => {
+  const rows = [
+    { name: 'ב', exitTime: '19/08/26 14:00', returnTime: '' },
+    { name: 'א', exitTime: '19/08/26 08:00', returnTime: '' },
+  ];
+  sortExitsByStart(rows);
+  assert.deepEqual(rows.map(r => r.name), ['ב', 'א']);
+});
+
+test('exitWindowError rejects a return that is not after the exit', () => {
+  assert.equal(exitWindowError('2026-08-19T14:00', '2026-08-19T16:00'), null);
+  assert.equal(exitWindowError('2026-08-19T22:00', '2026-08-20T02:00'), null);
+  assert.equal(
+    exitWindowError('2026-08-19T16:00', '2026-08-19T14:00'),
+    'זמן החזרה חייב להיות אחרי זמן היציאה');
+  assert.equal(
+    exitWindowError('2026-08-19T16:00', '2026-08-19T16:00'),
+    'זמן החזרה חייב להיות אחרי זמן היציאה');
+  assert.equal(exitWindowError('', '2026-08-19T16:00'), 'יש למלא זמן יציאה וזמן חזרה');
+  assert.equal(exitWindowError('2026-08-19T16:00', ''), 'יש למלא זמן יציאה וזמן חזרה');
+});
+
+test('sortExitsByStart is stable for identical times and handles trivial inputs', () => {
+  const same = [
+    { name: 'ג', exitTime: '19/08/26 14:00', returnTime: '' },
+    { name: 'א', exitTime: '19/08/26 14:00', returnTime: '' },
+    { name: 'ב', exitTime: '19/08/26 14:00', returnTime: '' },
+  ];
+  assert.deepEqual(sortExitsByStart(same).map(r => r.name), ['ג', 'א', 'ב']);
+  assert.deepEqual(sortExitsByStart([]), []);
+});
+
+test('sortExitsByStart sorts across midnight and across year formats, not lexically', () => {
+  const rows = [
+    { name: 'למחרת', exitTime: '20/08/26 01:00', returnTime: '' },
+    { name: 'הערב',  exitTime: '19/08/2026 23:30', returnTime: '' },
+    { name: 'הבוקר', exitTime: '19/08/26 07:00', returnTime: '' },
+  ];
+  assert.deepEqual(sortExitsByStart(rows).map(r => r.name), ['הבוקר', 'הערב', 'למחרת']);
+});
+
+test('sorted order puts everyone already out before the planned exits', () => {
+  const rows = [
+    { name: 'מתוכנן', exitTime: '19/08/26 18:00', returnTime: '19/08/26 20:00' },
+    { name: 'איחר',   exitTime: '19/08/26 08:00', returnTime: '19/08/26 10:00' },
+    { name: 'בחוץ',   exitTime: '19/08/26 11:00', returnTime: '19/08/26 15:00' },
+  ];
+  const sorted = sortExitsByStart(rows);
+  assert.deepEqual(sorted.map(r => r.name), ['איחר', 'בחוץ', 'מתוכנן']);
+  assert.deepEqual(sorted.map(r => exitState(r, NOW)), ['late', 'out', 'planned']);
 });
