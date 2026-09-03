@@ -3,7 +3,7 @@ import type { SheetData } from '../types';
 import type { ShavtzakAllData } from '../../api/_handlers/shavtzak';
 import { useExits } from '../hooks/useExits';
 import type { ShortExit } from '../hooks/useExits';
-import { exitState, fmtExitDateTime, countCurrentlyOut } from '../lib/shortExits';
+import { exitState, fmtExitDateTime, countCurrentlyOut, sortExitsByStart, exitWindowError } from '../lib/shortExits';
 import { SoldierPopup } from './SoldierPopup';
 import type { PopupState } from './SoldierPopup';
 
@@ -212,6 +212,10 @@ export function CompanySummary({ data, shavtzakAll }: { data: SheetData; shavtza
   const [formExit, setFormExit] = useState(nowLocal);
   const [formReturn, setFormReturn] = useState(() => localPlusHours(2));
 
+  // The sheet returns rows in its own order; the pane reads chronologically.
+  const sortedExits = useMemo(() => sortExitsByStart(exits), [exits]);
+  const formError = exitWindowError(formExit, formReturn);
+
   // Last "חזר לבסיס" click, kept client-side so a mistaken click can be re-added
   const [lastReturned, setLastReturned] = useState<ShortExit | null>(null);
   const [showExitsHelp, setShowExitsHelp] = useState(false);
@@ -332,7 +336,7 @@ export function CompanySummary({ data, shavtzakAll }: { data: SheetData; shavtza
   );
 
   async function handleAddExit() {
-    if (!formName.trim()) return;
+    if (!formName.trim() || formError) return;
     await addExit(formName.trim(), isoToSheet(formExit), isoToSheet(formReturn));
     setShowAddForm(false);
     setFormName('');
@@ -553,12 +557,15 @@ export function CompanySummary({ data, shavtzakAll }: { data: SheetData; shavtza
                   className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:border-blue-500 focus:outline-none" />
               </div>
             </div>
+            {formError && (
+              <div className="rounded-lg bg-red-50 px-3 py-1.5 text-xs font-medium text-red-700">{formError}</div>
+            )}
             <div className="flex gap-2 justify-end">
               <button onClick={() => setShowAddForm(false)}
                 className="rounded-lg border border-gray-300 bg-white px-4 py-1.5 text-sm text-gray-600 hover:bg-gray-50">
                 ביטול
               </button>
-              <button onClick={handleAddExit} disabled={!formName.trim() || saving}
+              <button onClick={handleAddExit} disabled={!formName.trim() || !!formError || saving}
                 className="rounded-lg bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white px-4 py-1.5 text-sm font-semibold">
                 {saving ? 'שומר...' : 'הוסף יציאה'}
               </button>
@@ -571,7 +578,7 @@ export function CompanySummary({ data, shavtzakAll }: { data: SheetData; shavtza
           <div className="px-4 py-4 text-sm text-gray-400 text-center">אין יציאות קצרות כרגע</div>
         ) : (
           <div className="divide-y divide-gray-100">
-            {exits.map(exit => {
+            {sortedExits.map(exit => {
               const state = exitState(exit, now);
               const late = state === 'late';
               return (

@@ -62,3 +62,30 @@ export function exitState(exit: ShortExitTimes, now: Date): ExitState {
 export function countCurrentlyOut(exits: ShortExitTimes[], now: Date): number {
   return exits.filter(e => exitState(e, now) !== 'planned').length;
 }
+
+/**
+ * Chronological order for the list: earliest זמן יציאה first, so an upcoming
+ * (planned) exit sorts after the ones already out. Rows with an unparseable /
+ * empty זמן יציאה keep their sheet order at the end — they are the "already
+ * out, nobody wrote when" case.
+ */
+export function sortExitsByStart<T extends ShortExitTimes>(exits: T[]): T[] {
+  return exits
+    .map((e, i) => ({ e, i, t: parseSheetDateTime(e.exitTime)?.getTime() ?? null }))
+    .sort((a, b) => {
+      if (a.t === null || b.t === null) return (a.t === null ? 1 : 0) - (b.t === null ? 1 : 0) || a.i - b.i;
+      return a.t - b.t || a.i - b.i;
+    })
+    .map(x => x.e);
+}
+
+/**
+ * Validates the add-exit form's two `datetime-local` values ('YYYY-MM-DDTHH:MM',
+ * which compare correctly as strings). Returns a Hebrew message, or null when
+ * the window is fine.
+ */
+export function exitWindowError(exitLocal: string, returnLocal: string): string | null {
+  if (!exitLocal || !returnLocal) return 'יש למלא זמן יציאה וזמן חזרה';
+  if (returnLocal <= exitLocal) return 'זמן החזרה חייב להיות אחרי זמן היציאה';
+  return null;
+}
